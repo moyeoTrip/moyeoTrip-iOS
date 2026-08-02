@@ -1,0 +1,22 @@
+{
+  "images" : [
+    {
+      "filename" : "weather-snow-buseoksa.png",
+      "idiom" : "universal"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "weather-snow-buseoksa-night.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

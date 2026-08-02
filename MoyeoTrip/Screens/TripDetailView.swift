@@ -1,0 +1,448 @@
+//
+//  TripDetailView.swift
+//  MoyeoTrip
+//
+
+import SwiftUI
+
+struct TripDetailView: View {
+    let trip: TripRecruitment
+    var isApplied = false
+    var threadProvider: (TripRecruitment) -> ChatThread? = { MockData.chatThread(forTripID: $0.id) }
+    var onApplied: (TripRecruitment) -> Void = { _ in }
+    var onSendChatMessage: (ChatThread, ChatMessage) -> Void = { _, _ in }
+    @Environment(\.dismiss) private var dismiss
+    @State private var isApplicationPresented = false
+    @State private var selectedThread: ChatThread?
+    @State private var isFavorite = false
+    @State private var didApplyInSession = false
+    @State private var feedbackMessage: String?
+
+    private var appliedState: Bool {
+        isApplied || didApplyInSession
+    }
+
+    var body: some View {
+        ZStack {
+            GeometryReader { proxy in
+                ZStack(alignment: .bottom) {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            TripDetailHero(
+                                trip: trip,
+                                onBack: {
+                                    dismiss()
+                                },
+                                onOpenChat: {
+                                    selectedThread = threadProvider(trip)
+                                }
+                            )
+                            if let feedbackMessage {
+                                TripDetailFeedbackBanner(message: feedbackMessage)
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 12)
+                            }
+                            TripDetailPanel(trip: trip)
+                                .padding(.top, feedbackMessage == nil ? -28 : 12)
+                        }
+                        .frame(width: proxy.size.width)
+                        .padding(.bottom, 128)
+                    }
+
+                    TripDetailBottomBar(
+                        canJoin: trip.canJoin,
+                        actionTitle: trip.applicationActionTitle,
+                        isApplied: appliedState,
+                        isFavorite: isFavorite,
+                        onToggleFavorite: {
+                            isFavorite.toggle()
+                            feedbackMessage = isFavorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
+                        },
+                        onApply: {
+                            if appliedState {
+                                selectedThread = threadProvider(trip)
+                            } else if trip.status == .cancelled {
+                                feedbackMessage = "모집이 취소되어 신청할 수 없어요."
+                            } else {
+                                isApplicationPresented = true
+                            }
+                        }
+                    )
+                    .frame(width: proxy.size.width)
+                }
+            }
+
+            if isApplicationPresented {
+                ApplicationSheet(
+                    trip: trip,
+                    onDismiss: {
+                        isApplicationPresented = false
+                    },
+                    onSubmitted: {
+                        didApplyInSession = true
+                        onApplied(trip)
+                        feedbackMessage = "신청이 완료됐어요."
+                    },
+                    onSubmit: {
+                        isApplicationPresented = false
+                        selectedThread = threadProvider(trip)
+                    }
+                )
+                .transition(.opacity)
+            }
+        }
+        .background(MoyeoTheme.background.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(item: $selectedThread) { thread in
+            ChatRoomView(thread: thread) { message in
+                onSendChatMessage(thread, message)
+            }
+        }
+    }
+}
+
+private struct TripDetailFeedbackBanner: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "checkmark.circle.fill")
+            .font(.caption.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.forest)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .background(MoyeoTheme.leaf)
+            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+}
+
+private struct TripDetailHero: View {
+    let trip: TripRecruitment
+    let onBack: () -> Void
+    let onOpenChat: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .bottomLeading) {
+                Image(trip.heroImageAssetName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: 284)
+                    .clipped()
+                    .overlay {
+                        LinearGradient(
+                            colors: [
+                                .black.opacity(0.08),
+                                .black.opacity(0.18),
+                                .black.opacity(0.54)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+                    .accessibilityLabel("\(trip.title) 대표 이미지")
+
+                HStack {
+                    HeroIconButton(systemImage: "chevron.left", label: "뒤로", action: onBack)
+                    Spacer()
+                    Text("모집 상세")
+                        .font(.headline.weight(.heavy))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    HeroIconButton(systemImage: "bubble.left.fill", label: "채팅", action: onOpenChat)
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 56)
+                .frame(maxHeight: .infinity, alignment: .top)
+
+                Text(trip.status.rawValue)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.42))
+                    .clipShape(Capsule())
+                    .padding(.leading, 20)
+                    .padding(.bottom, 48)
+            }
+            .frame(width: proxy.size.width, height: 284)
+        }
+        .frame(height: 284)
+    }
+}
+
+private struct HeroIconButton: View {
+    let systemImage: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 42, height: 42)
+                .background(.black.opacity(0.26))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+private struct TripDetailPanel: View {
+    let trip: TripRecruitment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(trip.title)
+                    .font(.title3.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(trip.detailMetaText)
+                    .font(.subheadline)
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
+
+            HStack(alignment: .center) {
+                ParticipantStack(participants: trip.participants, limit: 3, size: 32)
+                Spacer()
+                Text("최소 \(trip.minimumParticipants)명 이상")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Text("\(trip.joined) / \(trip.capacity)명")
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Text(trip.canJoin ? "신청 가능" : "대기 가능")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(trip.status.tint)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(trip.status.tint.opacity(0.14))
+                        .clipShape(Capsule())
+                    Spacer()
+                }
+                ProgressBar(value: trip.progress, tint: trip.status.tint, marker: trip.minimumProgress)
+            }
+
+            VStack(spacing: 12) {
+                DetailInfoRow(icon: "calendar", title: "일정", value: trip.detailDateText)
+                DetailInfoRow(icon: "clock", title: "시간", value: trip.detailTimeText)
+                DetailInfoRow(icon: "mappin.and.ellipse", title: "모이는 곳", value: trip.meetupPoint)
+            }
+            .padding(14)
+            .background(MoyeoTheme.subtleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+
+            HStack(spacing: 12) {
+                MascotAvatar(mascot: trip.hostAvatar, size: 44, background: MoyeoTheme.leaf)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("호스트")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                    Text(trip.hostName)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Text("매너 점수 \(trip.hostScoreText)")
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("모임 소개")
+                    .font(.headline)
+                    .foregroundStyle(MoyeoTheme.ink)
+                Text(trip.summary)
+                    .font(.subheadline)
+                    .foregroundStyle(MoyeoTheme.text700)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            TripRoutePreview(stops: trip.route)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 24)
+        .padding(.bottom, 24)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(MoyeoTheme.softLine, lineWidth: 1)
+        }
+        .padding(.horizontal, 16)
+    }
+}
+
+private struct DetailInfoRow: View {
+    let icon: String
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.muted)
+                .frame(width: 22)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.muted)
+                .frame(width: 54, alignment: .leading)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct TripRoutePreview: View {
+    let stops: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("코스 미리보기")
+                .font(.headline)
+                .foregroundStyle(MoyeoTheme.ink)
+
+            HStack(spacing: 8) {
+                ForEach(Array(stops.prefix(4).enumerated()), id: \.offset) { index, stop in
+                    VStack(spacing: 6) {
+                        Text("\(index + 1)")
+                            .font(.caption2.weight(.heavy))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(index == 0 ? MoyeoTheme.coral : MoyeoTheme.forest)
+                            .clipShape(Circle())
+                        Text(stop)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.muted)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(12)
+            .background(MoyeoTheme.subtleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+        }
+    }
+}
+
+private struct TripDetailBottomBar: View {
+    let canJoin: Bool
+    let actionTitle: String
+    let isApplied: Bool
+    let isFavorite: Bool
+    let onToggleFavorite: () -> Void
+    let onApply: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onToggleFavorite) {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.ink)
+                    .frame(width: 52, height: 48)
+                    .background(MoyeoTheme.card)
+                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                            .stroke(MoyeoTheme.softLine, lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
+
+            Button(action: onApply) {
+                Text(isApplied ? "모임 채팅으로 이동" : (canJoin ? "함께 가기 신청" : actionTitle))
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(MoyeoTheme.forest)
+                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("trip.detail.apply")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .background(MoyeoTheme.card)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(MoyeoTheme.softLine)
+                .frame(height: 1)
+        }
+    }
+}
+
+extension TripRecruitment {
+    var heroImageAssetName: String {
+        switch id {
+        case "trip-cheongsong-juwangsan":
+            return "weather_fog_seokguram"
+        case "trip-andong-hahoe":
+            return "weather_rain_hahoe"
+        case "trip-gyeongju-history":
+            return "weather_sunny_cheomseongdae"
+        case "trip-pohang-drive",
+             "trip-ulleung-island":
+            return "weather_wind_homigot"
+        case "trip-mungyeong-saejae":
+            return "weather_cloudy_bulguksa"
+        case "trip-yeongju-buseoksa":
+            return "weather_snow_buseoksa"
+        case "trip-andong-dosan":
+            return "weather_heatwave_dosan"
+        default:
+            return "weather_sunny_cheomseongdae"
+        }
+    }
+
+    var detailMetaText: String {
+        let values = ([region] + tags.prefix(2)).joined(separator: " · ")
+        return values
+    }
+
+    var detailDateText: String {
+        parsedSchedule.dateText
+    }
+
+    var detailTimeText: String {
+        parsedSchedule.timeText
+    }
+
+    var hostScoreText: String {
+        switch id {
+        case "trip-cheongsong-juwangsan":
+            return "4.8점"
+        case "trip-andong-hahoe",
+             "trip-gyeongju-history":
+            return "4.7점"
+        default:
+            return "4.6점"
+        }
+    }
+
+    private var parsedSchedule: (dateText: String, timeText: String) {
+        let parts = schedule.split(separator: " ").map(String.init)
+        guard let time = parts.last, time.contains(":") else {
+            return (schedule, "시간 미정")
+        }
+
+        let date = parts.dropLast().joined(separator: " ")
+        return (date.isEmpty ? schedule : date, time)
+    }
+}
