@@ -293,13 +293,19 @@ final class MoyeoTripUITests: XCTestCase {
         tapElement("home.authFlowEntry", timeout: 5)
 
         assertStaticTextContaining("고민 없이 고르는 경북 코스", timeout: 5)
+        XCTAssertEqual(element("auth.header.label").label, "온보딩")
+        XCTAssertEqual(element("auth.header.step").label, "1/7")
         tapButton("다음", timeout: 5)
         assertStaticTextContaining("3명이 모이면 채팅방이 열려요")
+        XCTAssertEqual(element("auth.header.step").label, "2/7")
         tapButton("다음")
         assertStaticTextContaining("여행 뒤엔 자연스럽게 친구로")
+        XCTAssertEqual(element("auth.header.step").label, "3/7")
         tapButton("로그인 시작")
 
         XCTAssertTrue(app.staticTexts["모여트립에 오신 걸 환영해요"].waitForExistence(timeout: 3))
+        XCTAssertEqual(element("auth.header.label").label, "로그인")
+        XCTAssertEqual(element("auth.header.step").label, "4/7")
         XCTAssertTrue(element("auth.login.email").exists)
         XCTAssertTrue(element("auth.login.google").exists)
         XCTAssertTrue(element("auth.login.apple").exists)
@@ -310,6 +316,8 @@ final class MoyeoTripUITests: XCTestCase {
         tapElement("auth.login.kakao")
 
         XCTAssertTrue(app.staticTexts["어떤 친구로 시작할까요?"].waitForExistence(timeout: 3))
+        XCTAssertEqual(element("auth.header.label").label, "프로필 설정")
+        XCTAssertEqual(element("auth.header.step").label, "5/7")
         XCTAssertTrue(element("auth.nickname.option.deer").exists)
         XCTAssertTrue(app.staticTexts["함께 천천히 경북을 둘러보는 여행자예요"].exists)
         XCTAssertFalse(element("auth.nickname.continue").isEnabled)
@@ -318,11 +326,13 @@ final class MoyeoTripUITests: XCTestCase {
         tapElement("auth.nickname.continue")
 
         XCTAssertTrue(app.staticTexts["기본 정보"].waitForExistence(timeout: 3))
+        XCTAssertEqual(element("auth.header.step").label, "6/7")
         XCTAssertTrue(element("auth.basic.birthdate").waitForExistence(timeout: 3))
         tapElement("auth.basic.gender.female")
         tapElement("auth.basic.continue")
 
-        XCTAssertTrue(app.staticTexts["나를 닮은 여행 친구"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["여행 친구를 만들어볼까요?"].waitForExistence(timeout: 3))
+        XCTAssertEqual(element("auth.header.step").label, "7/7")
         XCTAssertFalse(app.staticTexts["약관 동의"].exists)
         tapElement("auth.profile.generate")
         let generatingCard = element("auth.profile.generating")
@@ -331,6 +341,9 @@ final class MoyeoTripUITests: XCTestCase {
         let profileOption = element("auth.profile.option.1")
         XCTAssertTrue(profileOption.waitForExistence(timeout: 3))
         tapElement("auth.profile.option.1")
+        XCTAssertFalse(app.staticTexts["모여트립 in 경북"].exists)
+        XCTAssertTrue(element("auth.profile.confirm").isEnabled)
+        tapElement("auth.profile.confirm")
 
         XCTAssertTrue(app.staticTexts["모여트립 in 경북"].waitForExistence(timeout: 3))
     }
@@ -655,6 +668,29 @@ final class MoyeoTripUITests: XCTestCase {
         logoutAction.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.staticTexts["로그아웃 안내"].waitForExistence(timeout: 3))
         tapButton("취소")
+    }
+
+    @MainActor
+    func testProviderManagementUsesStableOrderAndRevealsNewEmailFormOnDemand() {
+        relaunch(startTab: "my")
+        tapButton("설정", timeout: 5)
+        tapElement("settings.action.loginMethod")
+
+        let providerNames = ["카카오", "Google", "이메일", "Apple"]
+        let providers = providerNames.map { app.staticTexts[$0].firstMatch }
+        providers.forEach {
+            XCTAssertTrue($0.waitForExistence(timeout: 3))
+        }
+        for pair in zip(providers, providers.dropFirst()) {
+            XCTAssertLessThan(pair.0.frame.minY, pair.1.frame.minY)
+        }
+
+        XCTAssertFalse(element("providers.email.email").exists)
+        XCTAssertFalse(element("providers.email.password").exists)
+        tapElement("providers.email.link")
+        XCTAssertTrue(element("providers.email.email").waitForExistence(timeout: 3))
+        XCTAssertTrue(element("providers.email.password").waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["기존 이메일"].exists)
     }
 
     @MainActor

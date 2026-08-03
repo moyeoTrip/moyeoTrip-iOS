@@ -70,6 +70,47 @@ enum AuthSessionStoreError: Error {
     case keychain(OSStatus)
 }
 
+protocol AuthDisplayProfileStoring {
+    func load() -> AuthDisplayProfile?
+    func save(_ profile: AuthDisplayProfile)
+    func clear()
+}
+
+final class UserDefaultsAuthDisplayProfileStore: AuthDisplayProfileStoring {
+    private let defaults: UserDefaults
+    private let key: String
+
+    init(
+        defaults: UserDefaults = .standard,
+        key: String = "authenticated-display-profile"
+    ) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    func load() -> AuthDisplayProfile? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(AuthDisplayProfile.self, from: data)
+    }
+
+    func save(_ profile: AuthDisplayProfile) {
+        guard let data = try? JSONEncoder().encode(profile) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    func clear() {
+        defaults.removeObject(forKey: key)
+    }
+}
+
+final class InMemoryAuthDisplayProfileStore: AuthDisplayProfileStoring {
+    private(set) var profile: AuthDisplayProfile?
+
+    func load() -> AuthDisplayProfile? { profile }
+    func save(_ profile: AuthDisplayProfile) { self.profile = profile }
+    func clear() { profile = nil }
+}
+
 final class InMemoryAuthSessionStore: AuthSessionStoring {
     private(set) var tokens: AuthTokens?
 

@@ -184,7 +184,7 @@ private struct MyProfileSummaryCard: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            MascotAvatar(mascot: profile.avatar, size: 58, background: MoyeoTheme.leaf)
+            AuthenticatedProfileAvatar(profile: profile, size: 58)
             VStack(alignment: .leading, spacing: 4) {
                 Text(profile.name)
                     .font(MoyeoTypography.cardTitle)
@@ -506,7 +506,7 @@ private struct ProfileEditView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 14) {
-                        MascotAvatar(mascot: profile.avatar, size: 66, background: MoyeoTheme.leaf)
+                        AuthenticatedProfileAvatar(profile: profile, size: 66)
                         VStack(alignment: .leading, spacing: 5) {
                             Text(profile.handle)
                                 .font(.subheadline.weight(.heavy))
@@ -528,10 +528,14 @@ private struct ProfileEditView: View {
                     ProfileEditFieldCard(title: "닉네임") {
                         TextField("닉네임", text: $displayName)
                             .textInputAutocapitalization(.never)
+                            .disabled(true)
                             .padding(13)
                             .background(MoyeoTheme.subtleBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .accessibilityIdentifier("profile.edit.name")
+                        Text("닉네임 변경 API가 아직 제공되지 않아요.")
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.muted)
                     }
 
                     ProfileEditFieldCard(title: "한 줄 소개") {
@@ -1251,14 +1255,18 @@ private struct SettingsView: View {
     @State private var selectedAction: SettingsMockAction?
     @State private var isPerformingAccountAction = false
     @State private var accountErrorMessage: String?
+    @State private var isShowingProviderManagement = false
+    @StateObject private var providerService: AuthProviderLinkService
     private let accountService: AuthAccountService
     private let onAuthenticationRequired: () -> Void
 
     init(
         accountService: AuthAccountService = AuthAccountService(),
+        providerService: AuthProviderLinkService? = nil,
         onAuthenticationRequired: @escaping () -> Void = {}
     ) {
         self.accountService = accountService
+        _providerService = StateObject(wrappedValue: providerService ?? .current)
         self.onAuthenticationRequired = onAuthenticationRequired
     }
 
@@ -1285,7 +1293,9 @@ private struct SettingsView: View {
                         .id("settings.middle")
 
                         SettingsSectionGroup("계정") {
-                            SettingsValueRow(action: .loginMethod) { selectedAction = $0 }
+                            SettingsValueRow(action: .loginMethod) { _ in
+                                isShowingProviderManagement = true
+                            }
                             SettingsValueRow(action: .blockedUsers) { selectedAction = $0 }
                             SettingsValueRow(action: .privacyPolicy) { selectedAction = $0 }
                             SettingsValueRow(action: .terms) { selectedAction = $0 }
@@ -1336,6 +1346,9 @@ private struct SettingsView: View {
             Button("확인", role: .cancel) {}
         } message: {
             Text(accountErrorMessage ?? "잠시 후 다시 시도해주세요.")
+        }
+        .sheet(isPresented: $isShowingProviderManagement) {
+            ProviderManagementView(service: providerService)
         }
         .accessibilityIdentifier("screen.settings")
     }
@@ -1395,6 +1408,258 @@ private struct SettingsView: View {
             }
             isPerformingAccountAction = false
         }
+    }
+}
+
+private struct ProviderManagementView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var service: AuthProviderLinkService
+    @State private var email = ""
+    @State private var password = ""
+    @State private var isEmailFormExpanded = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("연결된 로그인 수단으로 같은 계정을 안전하게 이용할 수 있어요.")
+                        .font(MoyeoTypography.cardBody)
+                        .foregroundStyle(MoyeoTheme.muted)
+
+                    ForEach(AuthServiceProvider.connectionOrder) { provider in
+                        providerCard(provider)
+                    }
+
+                    if let errorMessage = service.errorMessage {
+                        Text(errorMessage)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.coral)
+                            .accessibilityIdentifier("providers.error")
+                    }
+                }
+                .padding(18)
+            }
+            .background(MoyeoTheme.background.ignoresSafeArea())
+            .navigationTitle("로그인 방식")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("완료") { dismiss() }
+                }
+            }
+            .task { await service.load() }
+        }
+        .presentationDetents([.large])
+        .accessibilityIdentifier("screen.providerManagement")
+    }
+
+    @ViewBuilder
+    private func providerCard(_ provider: AuthServiceProvider) -> some View {
+        let isConnected = service.providers.contains(provider)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                ProviderManagementMark(provider: provider)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(provider.providerName)
+                        .font(MoyeoTypography.cardTitle)
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Text(isConnected ? "연결됨" : provider.providerConnectionHint)
+                        .font(MoyeoTypography.cardMeta)
+                        .foregroundStyle(isConnected ? MoyeoTheme.forest : MoyeoTheme.muted)
+                }
+                Spacer()
+                if isConnected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(MoyeoTheme.forest)
+                }
+            }
+
+            providerAction(provider, isConnected: isConnected)
+        }
+        .padding(16)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                .stroke(MoyeoTheme.softLine, lineWidth: 1)
+        }
+        .disabled(service.isLoading || service.linkingProvider != nil)
+    }
+
+    @ViewBuilder
+    private func providerAction(_ provider: AuthServiceProvider, isConnected: Bool) -> some View {
+        if provider == .email, !isConnected {
+            if isEmailFormExpanded {
+                emailConnectionForm
+            } else {
+                AuthProviderButton(
+                    provider: .email,
+                    isDisabled: service.isLoading || service.linkingProvider != nil,
+                    showsMark: false,
+                    titleOverride: "이메일 연결",
+                    accessibilityIdentifierOverride: "providers.email.link"
+                ) {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isEmailFormExpanded = true
+                    }
+                }
+            }
+        } else if !isConnected {
+            AuthProviderButton(
+                provider: provider,
+                isLoading: service.linkingProvider == provider,
+                isDisabled: service.isLoading || service.linkingProvider != nil,
+                showsMark: false,
+                titleOverride: "\(provider.providerName) 연결",
+                accessibilityIdentifierOverride: "providers.\(provider.pathComponent).link"
+            ) {
+                Task { await service.link(provider) }
+            }
+        }
+    }
+
+    private var emailConnectionForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("아직 가입되지 않은 이메일을 새 로그인 수단으로 추가해요.")
+                .font(MoyeoTypography.cardMeta)
+                .foregroundStyle(MoyeoTheme.muted)
+            TextField("새 이메일", text: $email)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+                .autocorrectionDisabled()
+                .moyeoInput()
+                .accessibilityIdentifier("providers.email.email")
+            SecureField("비밀번호", text: $password)
+                .textContentType(.newPassword)
+                .moyeoInput()
+                .accessibilityIdentifier("providers.email.password")
+            emailSubmitButton
+            Button("입력 닫기") {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isEmailFormExpanded = false
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(MoyeoTheme.muted)
+            .frame(maxWidth: .infinity)
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var emailSubmitButton: some View {
+        Button {
+            Task { await service.linkEmail(email: email, password: password) }
+        } label: {
+            HStack(spacing: 8) {
+                if service.linkingProvider == .email {
+                    ProgressView().tint(.white)
+                }
+                Text(service.linkingProvider == .email ? "연결하고 있어요" : "새 이메일 연결")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(MoyeoPrimaryButtonStyle())
+        .disabled(
+            email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || password.isEmpty
+                || service.linkingProvider != nil
+        )
+        .accessibilityIdentifier("providers.email.submit")
+    }
+}
+
+private extension AuthServiceProvider {
+    static let connectionOrder: [AuthServiceProvider] = [.kakao, .google, .email, .apple]
+
+    var providerName: String {
+        switch self {
+        case .kakao: "카카오"
+        case .google: "Google"
+        case .email: "이메일"
+        case .apple: "Apple"
+        }
+    }
+
+    var providerConnectionHint: String {
+        self == .email ? "이메일과 비밀번호가 필요해요" : "추가로 연결할 수 있어요"
+    }
+}
+
+private struct ProviderManagementMark: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let provider: AuthServiceProvider
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(backgroundColor)
+            mark
+        }
+        .frame(width: 38, height: 38)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var mark: some View {
+        switch provider {
+        case .kakao:
+            Image("KakaoSymbolOfficial")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 30, height: 30)
+        case .google:
+            Image("GoogleG")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+        case .email:
+            Text("@")
+                .font(.system(size: 18, weight: .heavy))
+                .foregroundStyle(MoyeoTheme.forest)
+        case .apple:
+            Image("AppleSymbolOfficial")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch provider {
+        case .kakao:
+            Color(hex: "#FEE500")
+        case .google:
+            colorScheme == .dark ? Color(hex: "#131314") : .white
+        case .email:
+            MoyeoTheme.leaf
+        case .apple:
+            colorScheme == .dark ? .white : .black
+        }
+    }
+}
+
+private struct MoyeoPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .heavy))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(MoyeoTheme.forest.opacity(configuration.isPressed ? 0.78 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private extension View {
+    func moyeoInput() -> some View {
+        padding(.horizontal, 12)
+            .frame(minHeight: 48)
+            .background(MoyeoTheme.background)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
+            }
     }
 }
 
@@ -1616,7 +1881,7 @@ private enum SettingsMockAction: Identifiable {
         case .language:
             return "한국어"
         case .loginMethod:
-            return "카카오"
+            return "관리"
         case .blockedUsers:
             return "2명"
         case .version:
@@ -1967,7 +2232,7 @@ private struct ProfileHeader: View {
     var body: some View {
         VStack(spacing: 18) {
             HStack(spacing: 16) {
-                MascotAvatar(mascot: profile.avatar, size: 82, background: MoyeoTheme.leaf)
+                AuthenticatedProfileAvatar(profile: profile, size: 82)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(profile.name)
                         .font(.title2.weight(.heavy))
@@ -2000,6 +2265,38 @@ private struct ProfileHeader: View {
 
     private var dynamicBadges: [String] {
         ["여행 \(profile.joinedTrips)", "매너 4.7", "경북 친구"]
+    }
+}
+
+private struct AuthenticatedProfileAvatar: View {
+    let profile: ProfileSummary
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let url = profile.profileImageURL {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        fallback
+                    }
+                }
+            } else {
+                fallback
+            }
+        }
+        .frame(width: size, height: size)
+        .background(MoyeoTheme.leaf)
+        .clipShape(Circle())
+        .accessibilityLabel("\(profile.name) 프로필 이미지")
+    }
+
+    private var fallback: some View {
+        Text(profile.avatar)
+            .font(.system(size: size * 0.48))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

@@ -719,7 +719,7 @@ extension MoyeoTripTests {
         configuration.protocolClasses = [AuthURLProtocolStub.self]
         let session = URLSession(configuration: configuration)
         AuthURLProtocolStub.handler = { request in
-            #expect(request.url?.path == "/api/v1/auth/signup/apple")
+            #expect(request.url?.path == "/api/v1/auth/signup")
             #expect(request.httpMethod == "POST")
             let data = try #require(request.authTestBodyData)
             let payload = try JSONSerialization.jsonObject(with: data) as? [String: String]
@@ -739,7 +739,6 @@ extension MoyeoTripTests {
         )
 
         let response = try await client.signup(
-            provider: .apple,
             request: AuthSignupRequest(
                 idToken: "firebase-id",
                 nicknameSelectionToken: "selection-token",
@@ -751,6 +750,159 @@ extension MoyeoTripTests {
         )
 
         #expect(response.signupState == .profileImageRequired)
+    }
+
+    @Test func httpClientUsesUnifiedLoginPathWithoutProviderInURL() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AuthURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        AuthURLProtocolStub.handler = { request in
+            #expect(request.url?.path == "/api/v1/auth/login")
+            #expect(request.httpMethod == "POST")
+            let data = try #require(request.authTestBodyData)
+            let payload = try JSONSerialization.jsonObject(with: data) as? [String: String]
+            #expect(payload?["idToken"] == "firebase-google-id")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(
+                    #"""
+                    {
+                      "accessToken": "access",
+                      "refreshToken": "refresh",
+                      "isNewUser": false,
+                      "signupState": "SIGNUP_COMPLETE",
+                      "providerType": "GOOGLE"
+                    }
+                    """#.utf8
+                )
+            )
+        }
+        let client = AuthAPIClient(
+            configuration: AuthAPIConfiguration(baseURL: URL(string: "https://api.example.com")!),
+            session: session
+        )
+
+        let response = try await client.login(
+            request: AuthLoginRequest(idToken: "firebase-google-id", fcmToken: nil)
+        )
+
+        #expect(response.providerType == .google)
+        #expect(response.signupState == .signupComplete)
+    }
+
+    @Test func providerEndpointsUseBearerTokenAndFirebaseIDToken() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AuthURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        var requestCount = 0
+        AuthURLProtocolStub.handler = { request in
+            requestCount += 1
+            #expect(request.url?.path == "/api/v1/auth/providers")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer service-access")
+            if request.httpMethod == "POST" {
+                let data = try #require(request.authTestBodyData)
+                let payload = try JSONSerialization.jsonObject(with: data) as? [String: String]
+                #expect(payload?["idToken"] == "firebase-apple-id")
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(#"{"providers":["KAKAO","APPLE"]}"#.utf8)
+                )
+            }
+            #expect(request.httpMethod == "GET")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"providers":["KAKAO"]}"#.utf8)
+            )
+        }
+        let client = AuthAPIClient(
+            configuration: AuthAPIConfiguration(baseURL: URL(string: "https://api.example.com")!),
+            session: session
+        )
+
+        #expect(try await client.linkedProviders(accessToken: "service-access").providers == [.kakao])
+        #expect(
+            try await client.linkProvider(
+                idToken: "firebase-apple-id",
+                fcmToken: nil,
+                accessToken: "service-access"
+            ).providers == [.kakao, .apple]
+        )
+        #expect(requestCount == 2)
+    }
+
+    @Test func displayProfileReadsCapitalizedNicknameClaimOnlyFromJWTBody() {
+        let token = makeAuthTestJWT(nickname: "푸른 고래 2048")
+
+        #expect(AuthDisplayProfile.nickname(fromAccessToken: token) == "푸른 고래 2048")
+        #expect(AuthDisplayProfile.nickname(fromAccessToken: "not-a-jwt") == nil)
+    }
+
+    @Test func currentUserServiceUsesJWTNicknameAndSelectedServerImage() async throws {
+        let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
+        apiClient.profileResponse = AuthProfileImagesResponse(
+            candidates: [
+                AuthFlowTestAPIClient.profileCandidate(id: 11),
+                AuthFlowTestAPIClient.profileCandidate(id: 12, selected: true)
+            ],
+            generationCount: 2,
+            remainingGenerationCount: 1,
+            signupState: .signupComplete
+        )
+        let sessionStore = InMemoryAuthSessionStore()
+        try sessionStore.save(
+            AuthTokens(accessToken: makeAuthTestJWT(nickname: "잔잔한 거북이 9032"), refreshToken: "refresh")
+        )
+        let profileStore = InMemoryAuthDisplayProfileStore()
+        let service = AuthCurrentUserService(
+            apiClient: apiClient,
+            sessionStore: sessionStore,
+            profileStore: profileStore
+        )
+
+        let profile = try await service.refreshProfile()
+
+        #expect(profile.nickname == "잔잔한 거북이 9032")
+        #expect(profile.profileImageURL == URL(string: "https://example.com/profile-12.png"))
+        #expect(profileStore.profile == profile)
+    }
+
+    @MainActor
+    @Test func providerLookupRefreshesExpiredAccessAndPersistsRotatedTokens() async throws {
+        let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
+        apiClient.linkedProviderErrors = [AuthClientError.server(statusCode: 401, message: "expired")]
+        let sessionStore = InMemoryAuthSessionStore()
+        try sessionStore.save(AuthTokens(accessToken: "old-access", refreshToken: "old-refresh"))
+        let service = AuthProviderLinkService(
+            apiClient: apiClient,
+            identityProvider: AuthIdentityTestProvider(),
+            sessionStore: sessionStore
+        )
+
+        await service.load()
+
+        #expect(apiClient.capturedLinkedProviderAccessTokens == ["old-access", "access-refreshed"])
+        #expect(sessionStore.tokens == AuthTokens(
+            accessToken: "access-refreshed",
+            refreshToken: "refresh-refreshed"
+        ))
+        #expect(service.providers == [.kakao])
+    }
+
+    @MainActor
+    @Test func providerLinkCanCreateAndAttachNewEmailIdentity() async throws {
+        let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
+        let sessionStore = InMemoryAuthSessionStore()
+        try sessionStore.save(AuthTokens(accessToken: "access", refreshToken: "refresh"))
+        let service = AuthProviderLinkService(
+            apiClient: apiClient,
+            identityProvider: AuthIdentityTestProvider(),
+            sessionStore: sessionStore
+        )
+
+        await service.linkEmail(email: "new@example.com", password: "password")
+
+        #expect(apiClient.capturedLinkedProviderIDTokens == ["firebase-id-email-signup"])
+        #expect(service.providers.contains(.email))
     }
 
     @Test func httpClientUsesKakaoCustomTokenAndSignupContracts() async throws {
@@ -767,7 +919,7 @@ extension MoyeoTripTests {
                     HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     Data(#"{"customToken":"firebase-custom"}"#.utf8)
                 )
-            case "/api/v1/auth/user/kakao":
+            case "/api/v1/auth/signup":
                 #expect(payload?["idToken"] as? String == "firebase-id")
                 return (
                     HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
@@ -787,7 +939,6 @@ extension MoyeoTripTests {
 
         #expect(try await client.kakaoFirebaseCustomToken(accessToken: "kakao-access") == "firebase-custom")
         let response = try await client.signup(
-            provider: .kakao,
             request: AuthSignupRequest(
                 idToken: "firebase-id",
                 nicknameSelectionToken: "selection-token",
@@ -901,15 +1052,19 @@ extension MoyeoTripTests {
     @MainActor
     @Test func logoutClearsStoredServiceSession() async throws {
         let sessionStore = InMemoryAuthSessionStore()
+        let profileStore = InMemoryAuthDisplayProfileStore()
         try sessionStore.save(AuthTokens(accessToken: "access", refreshToken: "refresh"))
+        profileStore.save(AuthDisplayProfile(nickname: "서버 닉네임", profileImageURL: nil))
         let service = AuthAccountService(
             apiClient: AuthFlowTestAPIClient(loginState: .signupComplete),
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            profileStore: profileStore
         )
 
         try await service.logout()
 
         #expect(sessionStore.tokens == nil)
+        #expect(profileStore.load() == nil)
     }
 
     @Test func androidStyleMockIdentifiersResolveToIOSRecords() {
@@ -1001,6 +1156,9 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
     var capturedRefreshToken: String?
     var capturedSelectedProfileImageID: Int64?
     var capturedWithdrawAccessTokens: [String] = []
+    var capturedLinkedProviderAccessTokens: [String] = []
+    var capturedLinkedProviderIDTokens: [String] = []
+    var linkedProviderErrors: [Error] = []
     var withdrawErrors: [Error] = []
     var refreshError: Error?
     var selectionResponseCandidate = profileCandidate
@@ -1021,10 +1179,8 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
         self.loginState = loginState
     }
 
-    func login(
-        provider: AuthServiceProvider,
-        request: AuthLoginRequest
-    ) async throws -> AuthLoginResponse {
+    func login(request: AuthLoginRequest) async throws -> AuthLoginResponse {
+        let provider = provider(from: request.idToken)
         capturedLoginProvider = provider
         capturedLoginRequest = request
         let includesTokens = loginState != .userInfoRequired
@@ -1037,11 +1193,8 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
         )
     }
 
-    func signup(
-        provider: AuthServiceProvider,
-        request: AuthSignupRequest
-    ) async throws -> AuthSignupResponse {
-        capturedSignupProvider = provider
+    func signup(request: AuthSignupRequest) async throws -> AuthSignupResponse {
+        capturedSignupProvider = provider(from: request.idToken)
         capturedSignupRequest = request
         return AuthSignupResponse(
             accessToken: "access-test",
@@ -1062,6 +1215,23 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
             refreshToken: "refresh-refreshed",
             signupState: loginState
         )
+    }
+
+    func linkedProviders(accessToken: String) async throws -> AuthLinkedProvidersResponse {
+        capturedLinkedProviderAccessTokens.append(accessToken)
+        if !linkedProviderErrors.isEmpty {
+            throw linkedProviderErrors.removeFirst()
+        }
+        return AuthLinkedProvidersResponse(providers: [.kakao])
+    }
+
+    func linkProvider(
+        idToken: String,
+        fcmToken: String?,
+        accessToken: String
+    ) async throws -> AuthLinkedProvidersResponse {
+        capturedLinkedProviderIDTokens.append(idToken)
+        return AuthLinkedProvidersResponse(providers: [.kakao, provider(from: idToken)])
     }
 
     func withdraw(accessToken: String) async throws {
@@ -1096,6 +1266,21 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
             signupState: .signupComplete
         )
     }
+
+    private func provider(from idToken: String) -> AuthServiceProvider {
+        AuthServiceProvider.allCases.first { idToken.contains($0.pathComponent) } ?? .kakao
+    }
+}
+
+private func makeAuthTestJWT(nickname: String) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: ["userId": 42, "nickName": nickname]) else {
+        return ""
+    }
+    let payload = data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    return "header.\(payload).signature"
 }
 
 private final class AuthURLProtocolStub: URLProtocol {

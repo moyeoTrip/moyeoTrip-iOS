@@ -1,0 +1,45 @@
+# macOS
+.DS_Store
+
+# Xcode user state and build output
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+build/
+*.xcarchive
+*.xcresult
+*.xccovarchive
+*.xccovreport
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Local service and signing configuration
+MoyeoTrip/GoogleService-Info.plist
+*.mobileprovision
+*.p12
+*.p8
+*.cer
+*.pem
+*.key
+*.xcconfig.local
+Secrets.xcconfig
+
+# Tool output
+.swiftlint.cache
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+*.log
+
+# Local environment files
+.env
+.env.*
+!.env.example

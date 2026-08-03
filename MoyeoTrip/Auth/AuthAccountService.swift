@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 #if canImport(FirebaseAuth)
 import FirebaseAuth
@@ -12,17 +13,21 @@ import KakaoSDKUser
 final class AuthAccountService {
     private let apiClient: AuthAPIClientProtocol
     private let sessionStore: AuthSessionStoring
+    private let profileStore: AuthDisplayProfileStoring
 
     init(
         apiClient: AuthAPIClientProtocol = AuthAPIClient(),
-        sessionStore: AuthSessionStoring = KeychainAuthSessionStore()
+        sessionStore: AuthSessionStoring = KeychainAuthSessionStore(),
+        profileStore: AuthDisplayProfileStoring = UserDefaultsAuthDisplayProfileStore()
     ) {
         self.apiClient = apiClient
         self.sessionStore = sessionStore
+        self.profileStore = profileStore
     }
 
     func logout() async throws {
         try sessionStore.clear()
+        profileStore.clear()
         await clearProviderSessions()
     }
 
@@ -40,11 +45,13 @@ final class AuthAccountService {
             try await apiClient.withdraw(accessToken: tokens.accessToken)
         } catch AuthClientError.server(let statusCode, _) where statusCode == 404 {
             try sessionStore.clear()
+            profileStore.clear()
             await clearProviderSessions()
             return
         }
 
         try sessionStore.clear()
+        profileStore.clear()
         await clearProviderSessions()
     }
 
@@ -63,5 +70,170 @@ final class AuthAccountService {
             }
         }
         #endif
+    }
+}
+
+final class AuthCurrentUserService {
+    private let apiClient: AuthAPIClientProtocol
+    private let sessionStore: AuthSessionStoring
+    private let profileStore: AuthDisplayProfileStoring
+
+    init(
+        apiClient: AuthAPIClientProtocol = AuthAPIClient(),
+        sessionStore: AuthSessionStoring = KeychainAuthSessionStore(),
+        profileStore: AuthDisplayProfileStoring = UserDefaultsAuthDisplayProfileStore()
+    ) {
+        self.apiClient = apiClient
+        self.sessionStore = sessionStore
+        self.profileStore = profileStore
+    }
+
+    func cachedProfile() -> AuthDisplayProfile? {
+        if let profile = profileStore.load() { return profile }
+        guard let tokens = (try? sessionStore.load()) ?? nil,
+              let nickname = AuthDisplayProfile.nickname(fromAccessToken: tokens.accessToken) else {
+            return nil
+        }
+        return AuthDisplayProfile(nickname: nickname, profileImageURL: nil)
+    }
+
+    func refreshProfile() async throws -> AuthDisplayProfile {
+        var tokens = try requireTokens()
+        let response: AuthProfileImagesResponse
+        do {
+            response = try await apiClient.profileImages(accessToken: tokens.accessToken)
+        } catch AuthClientError.server(let statusCode, _) where statusCode == 401 {
+            let refreshed = try await apiClient.refreshSession(refreshToken: tokens.refreshToken)
+            tokens = refreshed.tokens
+            try sessionStore.save(tokens)
+            response = try await apiClient.profileImages(accessToken: tokens.accessToken)
+        }
+
+        let cached = profileStore.load()
+        let nickname = AuthDisplayProfile.nickname(fromAccessToken: tokens.accessToken) ?? cached?.nickname
+        guard let nickname else { throw AuthClientError.invalidResponse }
+        let profile = AuthDisplayProfile(
+            nickname: nickname,
+            profileImageURL: response.candidates.first(where: \.selected)?.profileImageUrl
+        )
+        profileStore.save(profile)
+        return profile
+    }
+
+    private func requireTokens() throws -> AuthTokens {
+        guard let tokens = try sessionStore.load() else { throw AuthClientError.missingTokens }
+        return tokens
+    }
+}
+
+@MainActor
+final class AuthProviderLinkService: ObservableObject {
+    @Published private(set) var providers: Set<AuthServiceProvider> = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var linkingProvider: AuthServiceProvider?
+    @Published private(set) var errorMessage: String?
+
+    private let apiClient: AuthAPIClientProtocol
+    private let identityProvider: AuthIdentityProviding
+    private let sessionStore: AuthSessionStoring
+    private let fcmTokenProvider: AuthFCMTokenProviding
+
+    static var current: AuthProviderLinkService {
+        if ProcessInfo.processInfo.arguments.contains("UITEST_MODE") {
+            let sessionStore = InMemoryAuthSessionStore()
+            try? sessionStore.save(AuthTokens(accessToken: "mock-access", refreshToken: "mock-refresh"))
+            return AuthProviderLinkService(
+                apiClient: MockAuthAPIClient(arguments: ProcessInfo.processInfo.arguments),
+                identityProvider: MockAuthIdentityProvider(delayNanoseconds: 50_000_000),
+                sessionStore: sessionStore
+            )
+        }
+        return AuthProviderLinkService()
+    }
+
+    init(
+        apiClient: AuthAPIClientProtocol? = nil,
+        identityProvider: AuthIdentityProviding? = nil,
+        sessionStore: AuthSessionStoring? = nil,
+        fcmTokenProvider: AuthFCMTokenProviding? = nil
+    ) {
+        self.apiClient = apiClient ?? AuthAPIClient()
+        self.identityProvider = identityProvider ?? AuthFlowDependencies.current.identityProvider
+        self.sessionStore = sessionStore ?? KeychainAuthSessionStore()
+        self.fcmTokenProvider = fcmTokenProvider ?? UnsupportedAuthFCMTokenProvider()
+    }
+
+    func load() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            providers = try await withValidAccessToken { accessToken in
+                try await apiClient.linkedProviders(accessToken: accessToken).providers
+            }
+        } catch {
+            errorMessage = message(for: error)
+        }
+    }
+
+    func link(_ provider: AuthServiceProvider) async {
+        guard provider != .email, !providers.contains(provider), linkingProvider == nil else { return }
+        linkingProvider = provider
+        errorMessage = nil
+        defer { linkingProvider = nil }
+        do {
+            let idToken = try await identityProvider.socialIDToken(for: provider)
+            try await submitLink(idToken: idToken)
+        } catch {
+            errorMessage = message(for: error)
+        }
+    }
+
+    func linkEmail(email: String, password: String) async {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty, !password.isEmpty, !providers.contains(.email), linkingProvider == nil else { return }
+        linkingProvider = .email
+        errorMessage = nil
+        defer { linkingProvider = nil }
+        do {
+            let idToken = try await identityProvider.createEmailAccount(trimmedEmail, password: password)
+            try await submitLink(idToken: idToken)
+        } catch {
+            errorMessage = message(for: error)
+        }
+    }
+
+    func clearError() {
+        errorMessage = nil
+    }
+
+    private func submitLink(idToken: String) async throws {
+        let fcmToken = await fcmTokenProvider.currentToken()
+        providers = try await withValidAccessToken { accessToken in
+            try await apiClient.linkProvider(
+                idToken: idToken,
+                fcmToken: fcmToken,
+                accessToken: accessToken
+            ).providers
+        }
+    }
+
+    private func withValidAccessToken<Value>(
+        operation: (String) async throws -> Value
+    ) async throws -> Value {
+        guard var tokens = try sessionStore.load() else { throw AuthClientError.missingTokens }
+        do {
+            return try await operation(tokens.accessToken)
+        } catch AuthClientError.server(let statusCode, _) where statusCode == 401 {
+            let refreshed = try await apiClient.refreshSession(refreshToken: tokens.refreshToken)
+            tokens = refreshed.tokens
+            try sessionStore.save(tokens)
+            return try await operation(tokens.accessToken)
+        }
+    }
+
+    private func message(for error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? "요청을 완료하지 못했어요. 다시 시도해주세요."
     }
 }

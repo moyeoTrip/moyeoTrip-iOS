@@ -59,6 +59,9 @@ struct AuthProviderButton: View {
     let provider: AuthProvider
     var isLoading = false
     var isDisabled = false
+    var showsMark = true
+    var titleOverride: String?
+    var accessibilityIdentifierOverride: String?
     let action: () -> Void
 
     var body: some View {
@@ -80,8 +83,8 @@ struct AuthProviderButton: View {
         .disabled(isDisabled)
         .opacity(isDisabled && !isLoading ? 0.48 : 1)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(provider.title)
-        .accessibilityIdentifier(provider.accessibilityIdentifier)
+        .accessibilityLabel(buttonTitle)
+        .accessibilityIdentifier(accessibilityIdentifierOverride ?? provider.accessibilityIdentifier)
     }
 
     @ViewBuilder
@@ -89,7 +92,7 @@ struct AuthProviderButton: View {
         if provider == .kakao {
             ZStack {
                 Color(hex: "#FEE500")
-                Text(provider.title)
+                Text(buttonTitle)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.black.opacity(0.85))
 
@@ -98,11 +101,11 @@ struct AuthProviderButton: View {
                         ProgressView()
                             .tint(Color.black.opacity(0.85))
                             .frame(width: 26, height: 26)
-                    } else {
+                    } else if showsMark {
                         Image("KakaoSymbolOfficial")
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 24, height: 24)
+                            .frame(width: 25, height: 25)
                             .frame(width: 26, height: 26)
                             .accessibilityHidden(true)
                     }
@@ -112,7 +115,7 @@ struct AuthProviderButton: View {
             }
         } else {
             ZStack {
-                Text(provider.title)
+                Text(buttonTitle)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(foregroundColor)
 
@@ -121,7 +124,7 @@ struct AuthProviderButton: View {
                         ProgressView()
                             .tint(foregroundColor)
                             .frame(width: 26, height: 26)
-                    } else {
+                    } else if showsMark {
                         AuthProviderMark(provider: provider)
                     }
                     Spacer(minLength: 0)
@@ -129,6 +132,10 @@ struct AuthProviderButton: View {
                 .padding(.horizontal, 16)
             }
         }
+    }
+
+    private var buttonTitle: String {
+        titleOverride ?? provider.title
     }
 
     private var backgroundColor: Color {
@@ -182,7 +189,7 @@ struct AuthProviderButton: View {
     }
 }
 
-private struct AuthProviderMark: View {
+struct AuthProviderMark: View {
     let provider: AuthProvider
 
     var body: some View {
@@ -195,7 +202,7 @@ private struct AuthProviderMark: View {
             Image("GoogleG")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 20, height: 20)
+                .frame(width: 19, height: 19)
                 .frame(width: 26, height: 26)
                 .accessibilityHidden(true)
         case .kakao:

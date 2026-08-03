@@ -807,6 +807,7 @@ extension MockData {
         name: "다정한 곰 1001",
         handle: "@moyeo_trip",
         avatar: "🐻",
+        profileImageURL: nil,
         region: "경북 구미",
         badges: ["여행 12", "매너 4.7", "경북 친구"],
         joinedTrips: 12,

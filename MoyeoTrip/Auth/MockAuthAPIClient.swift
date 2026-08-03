@@ -9,10 +9,7 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
         self.arguments = arguments
     }
 
-    func login(
-        provider: AuthServiceProvider,
-        request: AuthLoginRequest
-    ) async throws -> AuthLoginResponse {
+    func login(request: AuthLoginRequest) async throws -> AuthLoginResponse {
         try await pause()
         if arguments.contains("UITEST_AUTH_LOGIN_FAIL") {
             throw AuthClientError.server(statusCode: 401, message: "로그인에 실패했어요. 다시 시도해주세요.")
@@ -23,7 +20,7 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
                 refreshToken: "mock-refresh",
                 isNewUser: false,
                 signupState: .signupComplete,
-                providerType: provider
+                providerType: .kakao
             )
         }
         if arguments.contains("UITEST_AUTH_PROFILE_REQUIRED") {
@@ -32,7 +29,7 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
                 refreshToken: "mock-refresh",
                 isNewUser: false,
                 signupState: .profileImageRequired,
-                providerType: provider
+                providerType: .kakao
             )
         }
         return AuthLoginResponse(
@@ -40,14 +37,11 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
             refreshToken: nil,
             isNewUser: true,
             signupState: .userInfoRequired,
-            providerType: provider
+            providerType: .kakao
         )
     }
 
-    func signup(
-        provider: AuthServiceProvider,
-        request: AuthSignupRequest
-    ) async throws -> AuthSignupResponse {
+    func signup(request: AuthSignupRequest) async throws -> AuthSignupResponse {
         try await pause()
         if arguments.contains("UITEST_AUTH_SIGNUP_FAIL") {
             throw AuthClientError.server(statusCode: 409, message: "선택한 이름을 사용할 수 없어요. 새 이름을 받아주세요.")
@@ -72,6 +66,18 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
             refreshToken: "mock-refresh-refreshed",
             signupState: signupState
         )
+    }
+
+    func linkedProviders(accessToken: String) async throws -> AuthLinkedProvidersResponse {
+        AuthLinkedProvidersResponse(providers: [.kakao])
+    }
+
+    func linkProvider(
+        idToken: String,
+        fcmToken: String?,
+        accessToken: String
+    ) async throws -> AuthLinkedProvidersResponse {
+        AuthLinkedProvidersResponse(providers: [.kakao, .google])
     }
 
     func withdraw(accessToken: String) async throws {

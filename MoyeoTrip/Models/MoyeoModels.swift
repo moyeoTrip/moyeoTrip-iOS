@@ -228,6 +228,7 @@ struct ProfileSummary: Hashable {
     let name: String
     let handle: String
     let avatar: String
+    let profileImageURL: URL?
     let region: String
     let badges: [String]
     let joinedTrips: Int

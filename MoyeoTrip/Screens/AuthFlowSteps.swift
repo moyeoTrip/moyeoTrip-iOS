@@ -49,26 +49,13 @@ struct AuthOnboardingView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 14) {
                     AuthOnboardingPageView(page: currentPage)
                         .id(currentPage.id)
                         .accessibilityIdentifier("auth.onboarding.page.\(currentPage.id)")
-
-                    HStack(spacing: 8) {
-                        ForEach(AuthOnboardingPage.pages) { page in
-                            Circle()
-                                .fill(page.id == currentPage.id ? MoyeoTheme.forest : MoyeoTheme.softLine)
-                                .frame(
-                                    width: page.id == currentPage.id ? 9 : 7,
-                                    height: page.id == currentPage.id ? 9 : 7
-                                )
-                        }
-                    }
-                    .accessibilityHidden(true)
                 }
-                .frame(minHeight: 430)
                 .padding(.horizontal, 18)
-                .padding(.top, 22)
+                .padding(.top, 18)
                 .padding(.bottom, 24)
             }
 
@@ -439,31 +426,52 @@ private struct AuthOnboardingPageView: View {
     let page: AuthOnboardingPage
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer(minLength: 16)
+        VStack(spacing: 14) {
+            VStack(spacing: 16) {
+                Image(systemName: page.systemImage)
+                    .font(.system(size: 48, weight: .semibold))
+                    .foregroundStyle(page.tint)
+                    .frame(width: 104, height: 104)
+                    .background(page.tint.opacity(0.14))
+                    .clipShape(Circle())
 
-            Image(systemName: page.systemImage)
-                .font(.system(size: 62, weight: .semibold))
-                .foregroundStyle(page.tint)
-                .frame(width: 132, height: 132)
-                .background(page.tint.opacity(0.13))
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                VStack(spacing: 6) {
+                    Text(page.title)
+                        .font(.title2.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                        .multilineTextAlignment(.center)
+                    Text(page.subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(MoyeoTheme.line, lineWidth: 1)
+            }
 
-            VStack(spacing: 10) {
-                Text(page.title)
-                    .font(.title2.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .multilineTextAlignment(.center)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("\(page.id + 1)/\(AuthOnboardingPage.pages.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.coral)
                 Text(page.body)
                     .font(.subheadline)
                     .foregroundStyle(MoyeoTheme.muted)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer(minLength: 28)
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                    .stroke(MoyeoTheme.line, lineWidth: 1)
+            }
         }
-        .padding(.horizontal, 20)
     }
 }

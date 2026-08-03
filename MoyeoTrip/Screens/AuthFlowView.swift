@@ -10,6 +10,7 @@ struct AuthFlowView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var passwordConfirmation = ""
+    @State private var selectedProfileImageID: Int64?
 
     private let onComplete: () -> Void
     private let allowsDismissal: Bool
@@ -37,7 +38,9 @@ struct AuthFlowView: View {
         VStack(spacing: 0) {
             if viewModel.stage != .splash {
                 AuthFlowHeader(
-                    progress: viewModel.stage.progress,
+                    label: headerProgress.label,
+                    currentStep: headerProgress.current,
+                    totalSteps: headerProgress.total,
                     showsBackButton: showsBackButton,
                     showsCloseButton: allowsDismissal,
                     backAction: moveBack,
@@ -155,7 +158,9 @@ struct AuthFlowView: View {
         case .profileImage:
             AuthProfileImageView(
                 nickname: viewModel.selectedNicknameForProfile,
+                nicknameCandidate: viewModel.selectedNicknameCandidateForProfile,
                 candidates: viewModel.profileImages,
+                selectedCandidateID: $selectedProfileImageID,
                 remainingGenerationCount: viewModel.remainingProfileGenerations,
                 isLoading: viewModel.isLoadingProfileImages,
                 isGenerating: viewModel.isGeneratingProfileImage,
@@ -163,7 +168,11 @@ struct AuthFlowView: View {
                 errorMessage: viewModel.errorMessage,
                 retryAction: { Task { await viewModel.loadProfileImages() } },
                 generateAction: { Task { await viewModel.generateProfileImage() } },
-                selectAction: { candidate in
+                confirmAction: {
+                    guard let selectedProfileImageID,
+                          let candidate = viewModel.profileImages.first(where: { $0.id == selectedProfileImageID }) else {
+                        return
+                    }
                     Task {
                         if await viewModel.selectProfileImage(candidate) {
                             completeFlow()
@@ -231,17 +240,44 @@ struct AuthFlowView: View {
         guard allowsDismissal else { return }
         dismiss()
     }
+
+    private var headerProgress: AuthHeaderProgress {
+        switch viewModel.stage {
+        case .splash:
+            return AuthHeaderProgress(label: "", current: 0, total: 7)
+        case .onboarding:
+            return AuthHeaderProgress(label: "온보딩", current: onboardingIndex + 1, total: 7)
+        case .login:
+            return AuthHeaderProgress(label: "로그인", current: 4, total: 7)
+        case .emailLogin, .emailRegistration, .passwordReset:
+            return AuthHeaderProgress(label: "이메일 로그인", current: 4, total: 7)
+        case .nickname:
+            return AuthHeaderProgress(label: "프로필 설정", current: 5, total: 7)
+        case .basics:
+            return AuthHeaderProgress(label: "프로필 설정", current: 6, total: 7)
+        case .profileImage:
+            return AuthHeaderProgress(label: "프로필 설정", current: 7, total: 7)
+        }
+    }
+}
+
+private struct AuthHeaderProgress {
+    let label: String
+    let current: Int
+    let total: Int
 }
 
 private struct AuthFlowHeader: View {
-    let progress: Double
+    let label: String
+    let currentStep: Int
+    let totalSteps: Int
     let showsBackButton: Bool
     let showsCloseButton: Bool
     let backAction: () -> Void
     let closeAction: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 9) {
             HStack {
                 if showsBackButton {
                     Button(action: backAction) {
@@ -276,12 +312,26 @@ private struct AuthFlowHeader: View {
                 }
             }
 
-            ProgressBar(value: progress)
+            HStack {
+                Text(label)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.forest)
+                    .accessibilityIdentifier("auth.header.label")
+
+                Spacer()
+
+                Text("\(currentStep)/\(totalSteps)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .accessibilityIdentifier("auth.header.step")
+            }
+
+            ProgressBar(value: Double(currentStep) / Double(totalSteps))
                 .accessibilityIdentifier("auth.progress")
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
+        .padding(.bottom, 12)
         .background(MoyeoTheme.background)
     }
 }

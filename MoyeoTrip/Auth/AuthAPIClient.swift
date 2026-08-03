@@ -1,19 +1,15 @@
 import Foundation
 
 protocol AuthAPIClientProtocol: AuthNicknameCandidateProviding {
-    func login(
-        provider: AuthServiceProvider,
-        request: AuthLoginRequest
-    ) async throws -> AuthLoginResponse
+    func login(request: AuthLoginRequest) async throws -> AuthLoginResponse
 
-    func signup(
-        provider: AuthServiceProvider,
-        request: AuthSignupRequest
-    ) async throws -> AuthSignupResponse
+    func signup(request: AuthSignupRequest) async throws -> AuthSignupResponse
 
     func kakaoFirebaseCustomToken(accessToken: String) async throws -> String
 
     func refreshSession(refreshToken: String) async throws -> AuthSignupResponse
+    func linkedProviders(accessToken: String) async throws -> AuthLinkedProvidersResponse
+    func linkProvider(idToken: String, fcmToken: String?, accessToken: String) async throws -> AuthLinkedProvidersResponse
 
     func withdraw(accessToken: String) async throws
 
@@ -58,23 +54,17 @@ final class AuthAPIClient: AuthAPIClientProtocol {
         decoder = JSONDecoder()
     }
 
-    func login(
-        provider: AuthServiceProvider,
-        request: AuthLoginRequest
-    ) async throws -> AuthLoginResponse {
+    func login(request: AuthLoginRequest) async throws -> AuthLoginResponse {
         try await send(
-            path: "/api/v1/auth/login/\(provider.pathComponent)",
+            path: "/api/v1/auth/login",
             method: "POST",
             body: request
         )
     }
 
-    func signup(
-        provider: AuthServiceProvider,
-        request: AuthSignupRequest
-    ) async throws -> AuthSignupResponse {
+    func signup(request: AuthSignupRequest) async throws -> AuthSignupResponse {
         try await send(
-            path: provider.signupPath,
+            path: "/api/v1/auth/signup",
             method: "POST",
             body: request
         )
@@ -94,6 +84,27 @@ final class AuthAPIClient: AuthAPIClientProtocol {
             path: "/api/v1/auth/refresh",
             method: "POST",
             body: AuthSessionRefreshRequest(refreshToken: refreshToken)
+        )
+    }
+
+    func linkedProviders(accessToken: String) async throws -> AuthLinkedProvidersResponse {
+        try await send(
+            path: "/api/v1/auth/providers",
+            method: "GET",
+            accessToken: accessToken
+        )
+    }
+
+    func linkProvider(
+        idToken: String,
+        fcmToken: String?,
+        accessToken: String
+    ) async throws -> AuthLinkedProvidersResponse {
+        try await send(
+            path: "/api/v1/auth/providers",
+            method: "POST",
+            body: AuthLoginRequest(idToken: idToken, fcmToken: fcmToken),
+            accessToken: accessToken
         )
     }
 
@@ -262,17 +273,6 @@ final class AuthAPIClient: AuthAPIClientProtocol {
             return try decoder.decode(Response.self, from: data)
         } catch {
             throw AuthClientError.invalidResponse
-        }
-    }
-}
-
-private extension AuthServiceProvider {
-    var signupPath: String {
-        switch self {
-        case .kakao:
-            return "/api/v1/auth/user/kakao"
-        case .google, .email, .apple:
-            return "/api/v1/auth/signup/\(pathComponent)"
         }
     }
 }

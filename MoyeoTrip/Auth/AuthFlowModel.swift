@@ -97,6 +97,10 @@ final class AuthFlowViewModel: ObservableObject {
         return nickname.isEmpty ? nil : nickname
     }
 
+    var selectedNicknameCandidateForProfile: AuthNicknameCandidate? {
+        nicknameResponse.candidates.first { $0.nickname == selectedNickname }
+    }
+
     var isBusy: Bool {
         loadingProvider != nil || isSubmittingEmail || isSubmittingSignup || isRestoringSession || isLoadingProfileImages
             || isGeneratingProfileImage || selectingProfileImageID != nil
@@ -219,7 +223,7 @@ final class AuthFlowViewModel: ObservableObject {
     }
 
     func submitSignup(gender: AuthGender, birthdate: AuthBirthdate) async {
-        guard !isBusy, let provider, let idToken else { return }
+        guard !isBusy, provider != nil, let idToken else { return }
         isSubmittingSignup = true
         errorMessage = nil
         defer { isSubmittingSignup = false }
@@ -227,7 +231,6 @@ final class AuthFlowViewModel: ObservableObject {
         do {
             let fcmToken = await dependencies.fcmTokenProvider.currentToken()
             let response = try await dependencies.apiClient.signup(
-                provider: provider,
                 request: AuthSignupRequest(
                     idToken: idToken,
                     nicknameSelectionToken: nicknameSelectionToken,
@@ -254,7 +257,7 @@ final class AuthFlowViewModel: ObservableObject {
     }
 
     func loadProfileImages() async {
-        guard !isLoadingProfileImages, let accessToken = tokens?.accessToken else {
+        guard !isLoadingProfileImages, tokens != nil else {
             if tokens == nil { errorMessage = AuthClientError.missingTokens.localizedDescription }
             return
         }
@@ -263,7 +266,9 @@ final class AuthFlowViewModel: ObservableObject {
         defer { isLoadingProfileImages = false }
 
         do {
-            let response = try await dependencies.apiClient.profileImages(accessToken: accessToken)
+            let response = try await withValidAccessToken { accessToken in
+                try await dependencies.apiClient.profileImages(accessToken: accessToken)
+            }
             profileImages = response.candidates
             remainingProfileGenerations = response.remainingGenerationCount
         } catch {
@@ -272,13 +277,15 @@ final class AuthFlowViewModel: ObservableObject {
     }
 
     func generateProfileImage() async {
-        guard !isBusy, remainingProfileGenerations > 0, let accessToken = tokens?.accessToken else { return }
+        guard !isBusy, remainingProfileGenerations > 0, tokens != nil else { return }
         isGeneratingProfileImage = true
         errorMessage = nil
         defer { isGeneratingProfileImage = false }
 
         do {
-            let response = try await dependencies.apiClient.generateProfileImage(accessToken: accessToken)
+            let response = try await withValidAccessToken { accessToken in
+                try await dependencies.apiClient.generateProfileImage(accessToken: accessToken)
+            }
             mergeProfileCandidate(response.candidate)
             remainingProfileGenerations = response.remainingGenerationCount
         } catch {
@@ -287,16 +294,18 @@ final class AuthFlowViewModel: ObservableObject {
     }
 
     func selectProfileImage(_ candidate: AuthProfileImageCandidate) async -> Bool {
-        guard !isBusy, let accessToken = tokens?.accessToken else { return false }
+        guard !isBusy, tokens != nil else { return false }
         selectingProfileImageID = candidate.id
         errorMessage = nil
         defer { selectingProfileImageID = nil }
 
         do {
-            let response = try await dependencies.apiClient.selectProfileImage(
-                id: candidate.id,
-                accessToken: accessToken
-            )
+            let response = try await withValidAccessToken { accessToken in
+                try await dependencies.apiClient.selectProfileImage(
+                    id: candidate.id,
+                    accessToken: accessToken
+                )
+            }
             guard response.signupState == .signupComplete else {
                 throw AuthClientError.invalidResponse
             }
@@ -322,7 +331,6 @@ final class AuthFlowViewModel: ObservableObject {
     private func routeAfterBackendLogin(provider: AuthServiceProvider, idToken: String) async throws -> Bool {
         let fcmToken = await dependencies.fcmTokenProvider.currentToken()
         let response = try await dependencies.apiClient.login(
-            provider: provider,
             request: AuthLoginRequest(idToken: idToken, fcmToken: fcmToken)
         )
         self.provider = response.providerType
@@ -352,6 +360,23 @@ final class AuthFlowViewModel: ObservableObject {
             profileImages[index] = candidate
         } else {
             profileImages.append(candidate)
+        }
+    }
+
+    private func withValidAccessToken<Value>(
+        operation: (String) async throws -> Value
+    ) async throws -> Value {
+        guard var currentTokens = tokens else { throw AuthClientError.missingTokens }
+        do {
+            return try await operation(currentTokens.accessToken)
+        } catch AuthClientError.server(let statusCode, _) where statusCode == 401 {
+            let refreshed = try await dependencies.apiClient.refreshSession(
+                refreshToken: currentTokens.refreshToken
+            )
+            currentTokens = refreshed.tokens
+            try dependencies.sessionStore.save(currentTokens)
+            tokens = currentTokens
+            return try await operation(currentTokens.accessToken)
         }
     }
 

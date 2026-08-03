@@ -113,6 +113,7 @@ struct ContentView: View {
     @State private var profile = MockData.profile
     @State private var appliedTripIDs: Set<String> = []
     @State private var isAuthenticated: Bool
+    private let currentUserService: AuthCurrentUserService
     private let initialFeedPostID: String?
     private let initialFeedStartsWriting: Bool
     private let exploreStartsInMap: Bool
@@ -123,9 +124,14 @@ struct ContentView: View {
     init() {
         let arguments = ProcessInfo.processInfo.arguments
         let launchState = UITestInitialState(arguments: arguments)
+        let currentUserService = AuthCurrentUserService()
+        self.currentUserService = currentUserService
 
         _selectedTab = State(initialValue: launchState.selectedTab)
         _isShowingSplash = State(initialValue: !arguments.contains("UITEST_MODE"))
+        _profile = State(
+            initialValue: currentUserService.cachedProfile().map(MockData.profile.applying) ?? MockData.profile
+        )
         _isAuthenticated = State(
             initialValue: arguments.contains("UITEST_MODE") && !arguments.contains("UITEST_REQUIRE_AUTH")
         )
@@ -171,6 +177,15 @@ struct ContentView: View {
         .onChange(of: selectedTab) { _, newTab in
             if newTab != .home {
                 isBottomNavigationSuppressed = false
+            }
+        }
+        .task(id: isAuthenticated) {
+            guard isAuthenticated, !ProcessInfo.processInfo.arguments.contains("UITEST_MODE") else { return }
+            if let cachedProfile = currentUserService.cachedProfile() {
+                profile = profile.applying(cachedProfile)
+            }
+            if let authenticatedProfile = try? await currentUserService.refreshProfile() {
+                profile = profile.applying(authenticatedProfile)
             }
         }
     }

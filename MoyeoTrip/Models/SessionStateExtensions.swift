@@ -4,6 +4,22 @@
 //
 
 extension ProfileSummary {
+    func applying(_ authenticatedProfile: AuthDisplayProfile) -> ProfileSummary {
+        ProfileSummary(
+            name: authenticatedProfile.nickname,
+            handle: handle,
+            avatar: avatar,
+            profileImageURL: authenticatedProfile.profileImageURL,
+            region: region,
+            badges: badges,
+            joinedTrips: joinedTrips,
+            hostedTrips: hostedTrips,
+            feedCount: feedCount,
+            points: points,
+            favoriteRegions: favoriteRegions
+        )
+    }
+
     func incrementingJoinedTrips() -> ProfileSummary {
         replacingCounts(joinedTrips: joinedTrips + 1, hostedTrips: hostedTrips, feedCount: feedCount)
     }
@@ -21,6 +37,7 @@ extension ProfileSummary {
             name: name,
             handle: handle,
             avatar: avatar,
+            profileImageURL: profileImageURL,
             region: region,
             badges: badges,
             joinedTrips: joinedTrips,

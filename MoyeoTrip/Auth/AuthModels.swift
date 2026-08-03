@@ -70,6 +70,31 @@ struct AuthSignupResponse: Decodable, Equatable {
     }
 }
 
+struct AuthLinkedProvidersResponse: Decodable, Equatable {
+    let providers: Set<AuthServiceProvider>
+}
+
+struct AuthDisplayProfile: Codable, Equatable {
+    let nickname: String
+    let profileImageURL: URL?
+
+    static func nickname(fromAccessToken accessToken: String) -> String? {
+        let parts = accessToken.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        payload.append(String(repeating: "=", count: (4 - payload.count % 4) % 4))
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let nickname = json["nickName"] as? String else {
+            return nil
+        }
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 struct AuthProfileImageCandidate: Codable, Equatable, Identifiable {
     let profileImageId: Int64
     let profileImageUrl: URL

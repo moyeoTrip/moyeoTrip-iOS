@@ -8,6 +8,7 @@ import SwiftUI
 struct AuthOnboardingPage: Identifiable {
     let id: Int
     let title: String
+    let subtitle: String
     let body: String
     let systemImage: String
     let tint: Color
@@ -20,22 +21,25 @@ struct AuthOnboardingPage: Identifiable {
         AuthOnboardingPage(
             id: 0,
             title: "고민 없이 고르는 경북 코스",
+            subtitle: "날씨와 취향에 맞춰 추천해요",
             body: "날씨와 취향에 맞춰 오늘 떠나기 좋은 코스를 추천해요.",
-            systemImage: "map.circle.fill",
-            tint: MoyeoTheme.forest
+            systemImage: "heart.fill",
+            tint: MoyeoTheme.coral
         ),
         AuthOnboardingPage(
             id: 1,
             title: "3명이 모이면 채팅방이 열려요",
+            subtitle: "모집 확정 후 바로 대화해요",
             body: "모집이 확정되면 바로 대화가 시작돼요.",
-            systemImage: "person.3.sequence.fill",
+            systemImage: "calendar",
             tint: MoyeoTheme.river
         ),
         AuthOnboardingPage(
             id: 2,
             title: "여행 뒤엔 자연스럽게 친구로",
+            subtitle: "경로 피드와 도감으로 남겨요",
             body: "경로 피드와 도감으로 함께한 순간을 남겨요.",
-            systemImage: "sparkles.rectangle.stack.fill",
+            systemImage: "star.fill",
             tint: MoyeoTheme.coral
         )
     ]
