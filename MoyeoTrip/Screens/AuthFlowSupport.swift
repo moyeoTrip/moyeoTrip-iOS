@@ -10,8 +10,7 @@ struct AuthOnboardingPage: Identifiable {
     let title: String
     let subtitle: String
     let body: String
-    let systemImage: String
-    let tint: Color
+    let imageName: String
 
     var isLast: Bool {
         id == Self.pages.count - 1
@@ -23,24 +22,21 @@ struct AuthOnboardingPage: Identifiable {
             title: "고민 없이 고르는 경북 코스",
             subtitle: "날씨와 취향에 맞춰 추천해요",
             body: "날씨와 취향에 맞춰 오늘 떠나기 좋은 코스를 추천해요.",
-            systemImage: "heart.fill",
-            tint: MoyeoTheme.coral
+            imageName: "Onboarding1"
         ),
         AuthOnboardingPage(
             id: 1,
             title: "3명이 모이면 채팅방이 열려요",
             subtitle: "모집 확정 후 바로 대화해요",
             body: "모집이 확정되면 바로 대화가 시작돼요.",
-            systemImage: "calendar",
-            tint: MoyeoTheme.river
+            imageName: "Onboarding2"
         ),
         AuthOnboardingPage(
             id: 2,
             title: "여행 뒤엔 자연스럽게 친구로",
             subtitle: "경로 피드와 도감으로 남겨요",
             body: "경로 피드와 도감으로 함께한 순간을 남겨요.",
-            systemImage: "star.fill",
-            tint: MoyeoTheme.coral
+            imageName: "Onboarding3"
         )
     ]
 }
@@ -53,7 +49,7 @@ extension AuthServiceProvider {
         case .kakao:
             return "카카오 로그인"
         case .email:
-            return "이메일로 계속하기"
+            return "이메일로 시작하기"
         case .google:
             return "Google로 계속하기"
         case .apple:
@@ -66,7 +62,7 @@ extension AuthServiceProvider {
         case .kakao:
             return ""
         case .email:
-            return "envelope.fill"
+            return "at"
         case .google:
             return ""
         case .apple:

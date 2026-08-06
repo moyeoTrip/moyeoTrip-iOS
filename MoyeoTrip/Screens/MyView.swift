@@ -2275,13 +2275,10 @@ private struct AuthenticatedProfileAvatar: View {
     var body: some View {
         Group {
             if let url = profile.profileImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        fallback
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    fallback
                 }
             } else {
                 fallback

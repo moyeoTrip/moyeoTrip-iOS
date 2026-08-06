@@ -143,17 +143,15 @@ struct AuthProfileImageView: View {
             selectedCandidateID = candidate.id
         } label: {
             HStack(spacing: 14) {
-                AsyncImage(url: candidate.profileImageUrl) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        Text("🧭")
-                            .font(.system(size: 34))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(MoyeoTheme.leaf)
-                    }
+                CachedRemoteImage(url: candidate.profileImageUrl) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    Text("🧭")
+                        .font(.system(size: 34))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(MoyeoTheme.leaf)
                 }
                 .frame(width: 66, height: 66)
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))

@@ -304,6 +304,7 @@ final class MoyeoTripUITests: XCTestCase {
         tapButton("로그인 시작")
 
         XCTAssertTrue(app.staticTexts["모여트립에 오신 걸 환영해요"].waitForExistence(timeout: 3))
+        XCTAssertTrue(element("auth.login.welcomeImage").waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.label").label, "로그인")
         XCTAssertEqual(element("auth.header.step").label, "4/7")
         XCTAssertTrue(element("auth.login.email").exists)

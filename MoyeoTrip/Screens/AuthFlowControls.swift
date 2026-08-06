@@ -195,8 +195,9 @@ struct AuthProviderMark: View {
     var body: some View {
         switch provider {
         case .email:
-            Image(systemName: provider.systemImage)
+            Text("@")
                 .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(MoyeoTheme.forest)
                 .frame(width: 26, height: 26)
         case .google:
             Image("GoogleG")
@@ -490,7 +491,6 @@ struct AuthAnimalPreview: View {
 
 struct AuthSectionTitle: View {
     let title: String
-
     var body: some View {
         Text(title)
             .font(.subheadline.weight(.heavy))

@@ -93,33 +93,54 @@ struct AuthOnboardingView: View {
 }
 
 struct AuthLoginView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let loadingProvider: AuthProvider?
     let errorMessage: String?
     let selectProvider: (AuthProvider) -> Void
 
     var body: some View {
-        AuthStepContainer(
-            title: "모여트립에 오신 걸 환영해요",
-            subtitle: "30초 안에 시작할 수 있어요",
-            showsFooterInset: false
-        ) {
-            VStack(spacing: 12) {
-                ForEach(AuthProvider.allCases) { provider in
-                    AuthProviderButton(
-                        provider: provider,
-                        isLoading: loadingProvider == provider,
-                        isDisabled: loadingProvider != nil
-                    ) {
-                        selectProvider(provider)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Image(colorScheme == .dark ? "LoginWelcomeNight" : "LoginWelcome")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                    .accessibilityLabel("첨성대 앞에서 여행을 시작하는 모여트립 친구들")
+                    .accessibilityIdentifier("auth.login.welcomeImage")
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("모여트립에 오신 걸 환영해요")
+                        .font(.title2.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Text("30초 안에 시작할 수 있어요")
+                        .font(.subheadline)
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
+                .padding(.top, 22)
+
+                VStack(spacing: 12) {
+                    ForEach(AuthProvider.allCases) { provider in
+                        AuthProviderButton(
+                            provider: provider,
+                            isLoading: loadingProvider == provider,
+                            isDisabled: loadingProvider != nil
+                        ) {
+                            selectProvider(provider)
+                        }
+                    }
+
+                    if let errorMessage {
+                        AuthInlineError(message: errorMessage, accessibilityIdentifier: "auth.login.error")
                     }
                 }
-
-                if let errorMessage {
-                    AuthInlineError(message: errorMessage, accessibilityIdentifier: "auth.login.error")
-                }
+                .padding(.top, 24)
             }
-        } footer: {
-            EmptyView()
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 36)
         }
     }
 }
@@ -428,12 +449,13 @@ private struct AuthOnboardingPageView: View {
     var body: some View {
         VStack(spacing: 14) {
             VStack(spacing: 16) {
-                Image(systemName: page.systemImage)
-                    .font(.system(size: 48, weight: .semibold))
-                    .foregroundStyle(page.tint)
-                    .frame(width: 104, height: 104)
-                    .background(page.tint.opacity(0.14))
-                    .clipShape(Circle())
+                Image(page.imageName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 220, height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .accessibilityIdentifier("auth-onboarding-illustration-\(page.id + 1)")
+                    .accessibilityHidden(true)
 
                 VStack(spacing: 6) {
                     Text(page.title)
