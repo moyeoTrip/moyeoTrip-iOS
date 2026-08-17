@@ -138,7 +138,15 @@ extension TripRecruitment {
             vibe: vibe,
             tags: tags,
             route: route,
-            participants: participants
+            participants: participants,
+            courseSource: courseSource,
+            itinerary: itinerary,
+            scheduleDetails: scheduleDetails,
+            meetingDetails: meetingDetails,
+            recruitmentDeadline: recruitmentDeadline,
+            routeEditState: status == .confirmed ? .tripConfirmed : routeEditState,
+            notices: notices,
+            applicationState: applicationState
         )
     }
 

@@ -6,10 +6,10 @@
 import SwiftUI
 
 struct HomeView: View {
+    @Environment(\.moyeoIsOffline) private var isOffline
     @Binding var isBottomNavigationSuppressed: Bool
     @Binding var feedPosts: [FeedPost]
     var tripContext = TripInteractionContext()
-    var showsAuthFlowEntry = false
     var onAuthCompleted: () -> Void = {}
     var onOpenCourseList: () -> Void = {}
     @State private var supportRoute: SupportRoute?
@@ -30,7 +30,9 @@ struct HomeView: View {
                 MoyeoHeader(
                     title: "모여트립 in 경북",
                     rightSystemImage: "bell",
-                    rightAccessibilityLabel: "알림"
+                    rightAccessibilityLabel: "알림",
+                    isRightActionEnabled: !isOffline,
+                    rightDisabledHint: "인터넷에 연결되면 알림을 확인할 수 있어요"
                 ) {
                     supportRoute = .notifications
                 }
@@ -38,14 +40,11 @@ struct HomeView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 18) {
-                            if showsAuthFlowEntry {
-                                AuthFlowEntryButton {
-                                    supportRoute = .authFlow
-                                }
-                                .padding(.horizontal, 18)
+                            if isOffline {
+                                OfflineHomeHeroCard()
+                            } else {
+                                HomeHeroCard(content: WeatherHeroPolicy.content(for: weatherCondition))
                             }
-
-                            HomeHeroCard(content: WeatherHeroPolicy.content(for: weatherCondition))
 
                             VStack(spacing: 12) {
                                 HStack {
@@ -109,22 +108,42 @@ struct HomeView: View {
                 }
             }
 
-            Button {
-                supportRoute = .createRecruitment(recommendedCourses.first?.id ?? MockData.courses[0].id)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
-                    .background(MoyeoTheme.forest)
-                    .clipShape(Circle())
-                    .shadow(color: MoyeoTheme.forest.opacity(0.28), radius: 18, x: 0, y: 10)
+            VStack(alignment: .trailing, spacing: 7) {
+                if isOffline {
+                    Text("연결 후 모집 만들기")
+                        .font(MoyeoTypography.tinyMeta)
+                        .foregroundStyle(MoyeoTheme.warningText)
+                        .padding(.horizontal, 9)
+                        .frame(height: 26)
+                        .background(MoyeoTheme.warningBackground)
+                        .clipShape(Capsule())
+                        .accessibilityHidden(true)
+                }
+
+                Button {
+                    supportRoute = .createRecruitment(recommendedCourses.first?.id ?? MockData.courses[0].id)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 50, height: 50)
+                        .background(isOffline ? MoyeoTheme.text400 : MoyeoTheme.forest)
+                        .clipShape(Circle())
+                        .shadow(
+                            color: isOffline ? .clear : MoyeoTheme.forest.opacity(0.28),
+                            radius: 18,
+                            x: 0,
+                            y: 10
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(isOffline)
+                .accessibilityLabel("모집 만들기")
+                .accessibilityHint(isOffline ? "인터넷에 연결되면 사용할 수 있어요" : "")
+                .accessibilityIdentifier("home.floatingPlus")
             }
-            .buttonStyle(.plain)
             .padding(.trailing, 20)
             .padding(.bottom, 86)
-            .accessibilityLabel("모집 만들기")
-            .accessibilityIdentifier("home.floatingPlus")
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -180,45 +199,6 @@ struct HomeView: View {
         case .middle:
             return 180
         }
-    }
-}
-
-private struct AuthFlowEntryButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        let label = "회원가입 · 로그인 체험"
-
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: "person.badge.key.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(MoyeoTheme.forest)
-                    .frame(width: 24, height: 24)
-                    .background(MoyeoTheme.leaf)
-                    .clipShape(Circle())
-
-                Text(label)
-                    .font(.caption.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .lineLimit(1)
-
-                Image(systemName: "chevron.right")
-                    .font(.caption2.bold())
-                    .foregroundStyle(MoyeoTheme.text400)
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 34)
-            .background(MoyeoTheme.card)
-            .clipShape(Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityIdentifier("home.authFlowEntry")
     }
 }
 

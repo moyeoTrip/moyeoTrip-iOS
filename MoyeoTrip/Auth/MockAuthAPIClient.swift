@@ -121,7 +121,7 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
     }
 
     func generateProfileImage(accessToken: String) async throws -> AuthProfileImageGenerationResponse {
-        try await Task.sleep(nanoseconds: 2_500_000_000)
+        try await Task.sleep(nanoseconds: UITestRuntime.mockNetworkDelayNanoseconds)
         let index = generatedImages.count + 1
         let candidate = AuthProfileImageCandidate(
             profileImageId: Int64(index),
@@ -156,6 +156,6 @@ final class MockAuthAPIClient: AuthAPIClientProtocol {
     }
 
     private func pause() async throws {
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: UITestRuntime.mockRefreshDelayNanoseconds)
     }
 }

@@ -152,7 +152,6 @@ private struct CourseDetailHero: View {
                 HStack(spacing: 0) {
                     CourseMetricColumn(icon: "clock", label: "소요시간", value: course.duration)
                     CourseMetricColumn(icon: "map", label: "이동거리", value: course.distance)
-                    CourseMetricColumn(icon: "sun.max", label: "추천시기", value: "봄~가을")
                     CourseMetricColumn(icon: "star.fill", label: "평점", value: "4.8")
                 }
             }

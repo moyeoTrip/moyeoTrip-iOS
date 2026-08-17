@@ -5,6 +5,7 @@
 //  Created by 김한빈 on 5/29/26.
 //
 
+// swiftlint:disable file_length
 import Foundation
 import SwiftUI
 
@@ -92,13 +93,16 @@ enum MyRoute: Hashable {
     case friendDex
     case settings
     case customerCenter
+    case friends
 }
 
 enum MeetingsRoute: Hashable {
     case specialMessages
 }
 
+// swiftlint:disable:next type_body_length
 struct ContentView: View {
+    @StateObject private var connectivity: MoyeoConnectivity
     @State private var selectedTab: MoyeoTab
     @State private var isShowingSplash: Bool
     @State private var homePath = NavigationPath()
@@ -118,7 +122,6 @@ struct ContentView: View {
     private let initialFeedStartsWriting: Bool
     private let exploreStartsInMap: Bool
     private let forcedColorScheme: ColorScheme?
-    private let showsTestAuthEntry: Bool
     private let splashHoldNanoseconds: UInt64 = 1_150_000_000
 
     init() {
@@ -126,6 +129,7 @@ struct ContentView: View {
         let launchState = UITestInitialState(arguments: arguments)
         let currentUserService = AuthCurrentUserService()
         self.currentUserService = currentUserService
+        _connectivity = StateObject(wrappedValue: MoyeoConnectivity(arguments: arguments))
 
         _selectedTab = State(initialValue: launchState.selectedTab)
         _isShowingSplash = State(initialValue: !arguments.contains("UITEST_MODE"))
@@ -143,18 +147,17 @@ struct ContentView: View {
         initialFeedStartsWriting = launchState.feedStartsWriting
         exploreStartsInMap = launchState.exploreStartsInMap
         forcedColorScheme = arguments.contains("UITEST_FORCE_DARK") ? .dark : nil
-        showsTestAuthEntry = arguments.contains("UITEST_MODE")
     }
 
     var body: some View {
         ZStack {
-            rootContent
+            connectionAwareContent
                 .opacity(isShowingSplash ? 0 : 1)
                 .scaleEffect(isShowingSplash ? 0.985 : 1)
                 .offset(y: isShowingSplash ? 12 : 0)
                 .allowsHitTesting(!isShowingSplash)
                 .accessibilityHidden(isShowingSplash)
-                .animation(.easeOut(duration: 0.42), value: isShowingSplash)
+                .animation(UITestRuntime.reducesVisualAnimations ? nil : .easeOut(duration: 0.42), value: isShowingSplash)
 
             if isShowingSplash {
                 SplashView()
@@ -170,7 +173,7 @@ struct ContentView: View {
             guard isShowingSplash else { return }
 
             try? await Task.sleep(nanoseconds: splashHoldNanoseconds)
-            withAnimation(.easeInOut(duration: 0.42)) {
+            withAnimation(UITestRuntime.reducesVisualAnimations ? nil : .easeInOut(duration: 0.42)) {
                 isShowingSplash = false
             }
         }
@@ -188,6 +191,32 @@ struct ContentView: View {
                 profile = profile.applying(authenticatedProfile)
             }
         }
+        .task(id: connectivity.recoveryToken) {
+            guard connectivity.recoveryToken != nil, connectivity.status == .online, isAuthenticated else { return }
+            if let authenticatedProfile = try? await currentUserService.refreshProfile() {
+                profile = profile.applying(authenticatedProfile)
+            }
+        }
+        .onChange(of: connectivity.status) { _, status in
+            if status == .online, isAuthenticated {
+                connectivity.markCacheAvailable()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var connectionAwareContent: some View {
+        if connectivity.isOffline, !connectivity.hasCachedContent {
+            OfflineEmptyView(onRetry: connectivity.retry)
+        } else {
+            VStack(spacing: 0) {
+                if connectivity.isOffline {
+                    MoyeoOfflineBanner(cachedContentAvailable: true)
+                }
+                rootContent
+            }
+            .environment(\.moyeoIsOffline, connectivity.isOffline)
+        }
     }
 
     @ViewBuilder
@@ -197,7 +226,7 @@ struct ContentView: View {
                 .transition(.opacity)
         } else {
             AuthFlowView(allowsDismissal: false) {
-                withAnimation(.easeInOut(duration: 0.28)) {
+                withAnimation(UITestRuntime.reducesVisualAnimations ? nil : .easeInOut(duration: 0.28)) {
                     isAuthenticated = true
                 }
             }
@@ -240,7 +269,6 @@ struct ContentView: View {
                     isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
                     feedPosts: $feedPosts,
                     tripContext: tripContext,
-                    showsAuthFlowEntry: showsTestAuthEntry,
                     onOpenCourseList: {
                         selectedTab = .explore
                     }
@@ -292,7 +320,7 @@ struct ContentView: View {
         feedPath = NavigationPath()
         myPath = NavigationPath()
         isBottomNavigationSuppressed = false
-        withAnimation(.easeInOut(duration: 0.28)) {
+        withAnimation(UITestRuntime.reducesVisualAnimations ? nil : .easeInOut(duration: 0.28)) {
             isAuthenticated = false
         }
     }
@@ -300,6 +328,7 @@ struct ContentView: View {
     private var tripContext: TripInteractionContext {
         TripInteractionContext(
             trips: trips,
+            chatThreads: chatThreads,
             appliedTripIDs: appliedTripIDs,
             chatThreadProvider: chatThread(for:),
             onApplyTrip: registerTripApplication,
@@ -307,7 +336,10 @@ struct ContentView: View {
             onSendChatMessage: updateChatThreadPreview,
             onApproveHostApplicant: approveHostApplicant,
             onRejectHostApplicant: rejectHostApplicant,
-            onSetRecruitmentClosed: setRecruitmentClosed
+            onSetRecruitmentClosed: setRecruitmentClosed,
+            onUpdateRoute: updateTripRoute,
+            onCreateNotice: createNotice,
+            onCancelApplication: cancelTripApplication
         )
     }
 
@@ -345,6 +377,8 @@ struct ContentView: View {
     private func approveHostApplicant(_ trip: TripRecruitment, participant: Participant) {
         let baseTrip = trips.first { $0.id == trip.id } ?? trip
         let updatedTrip = baseTrip.withHostApprovedParticipant(participant)
+        let becameConfirmed = baseTrip.joined < baseTrip.minimumParticipants
+            && updatedTrip.joined >= updatedTrip.minimumParticipants
         upsertTrip(updatedTrip, prioritize: true)
 
         let baseThread = chatThread(for: updatedTrip) ?? updatedTrip.createdChatThread(profile: profile)
@@ -353,6 +387,11 @@ struct ContentView: View {
             baseThread.withTripStatus(updatedTrip).withSystemNotice(message, avatar: participant.avatar),
             prioritize: true
         )
+
+        if becameConfirmed {
+            selectedTab = .home
+            homePath.append(SupportRoute.tripConfirmed(updatedTrip.id))
+        }
     }
 
     private func rejectHostApplicant(_ trip: TripRecruitment, participant: Participant) {
@@ -373,6 +412,32 @@ struct ContentView: View {
         let baseThread = chatThread(for: updatedTrip) ?? updatedTrip.createdChatThread(profile: profile)
         let message = isClosed ? "호스트가 모집을 취소했어요." : "호스트가 모집을 다시 열었어요."
         upsertChatThread(baseThread.withTripStatus(updatedTrip).withSystemNotice(message), prioritize: true)
+    }
+
+    private func updateTripRoute(_ trip: TripRecruitment, stops: [ItineraryStop]) {
+        guard trip.courseSource == .custom, trip.routeEditState == .editable else { return }
+        guard let index = trips.firstIndex(where: { $0.id == trip.id }) else { return }
+        trips[index].itinerary = stops
+        let summary = "여행 경로가 변경됐어요: " + stops.map(\.name).joined(separator: " → ")
+        if let thread = chatThread(for: trips[index]) {
+            var updated = thread.withSystemNotice(summary)
+            if let lastIndex = updated.messages.indices.last {
+                updated.messages[lastIndex].kind = .routeChanged
+            }
+            updated.routeSummary = stops
+            upsertChatThread(updated, prioritize: true)
+        }
+    }
+
+    private func createNotice(_ thread: ChatThread, notice: TripNotice) {
+        var updated = thread
+        updated.pinnedNotices.insert(notice, at: 0)
+        updated.pinnedNotices = Array(updated.pinnedNotices.prefix(3))
+        upsertChatThread(updated.withSystemNotice("공지: \(notice.title) · \(notice.body)"), prioritize: true)
+    }
+
+    private func cancelTripApplication(_ trip: TripRecruitment) {
+        appliedTripIDs.remove(trip.id)
     }
 
     private func updateChatThreadPreview(thread: ChatThread, message: ChatMessage) {

@@ -228,3 +228,54 @@ enum ApplicationNotePolicy {
         return nil
     }
 }
+
+enum RoutePolicy {
+    static let minimumStopCount = 2
+    static let maximumStopCount = 20
+    static let maximumPinnedNoticeCount = 3
+
+    static func editState(source: CourseSource, isTripConfirmed: Bool) -> RouteEditState {
+        if isTripConfirmed {
+            return .tripConfirmed
+        }
+        return source == .custom ? .editable : .linkedLocked
+    }
+
+    static func canSave(stops: [ItineraryStop], state: RouteEditState) -> Bool {
+        state == .editable && (minimumStopCount...maximumStopCount).contains(stops.count)
+    }
+
+    static func normalized(_ stops: [ItineraryStop]) -> [ItineraryStop] {
+        stops.enumerated().map { index, stop in
+            var value = stop
+            value.order = index + 1
+            return value
+        }
+    }
+
+    static func pinnedNotices(from notices: [TripNotice]) -> [TripNotice] {
+        Array(notices.filter(\.isPinned).prefix(maximumPinnedNoticeCount))
+    }
+}
+
+enum RecruitmentSchedulePolicy {
+    static func isComplete(_ schedule: TripScheduleDetails) -> Bool {
+        switch schedule.kind {
+        case .dayTrip:
+            return !schedule.startDate.isEmpty
+                && !(schedule.startTime ?? "").isEmpty
+                && !(schedule.endTime ?? "").isEmpty
+        case .overnight:
+            return !schedule.startDate.isEmpty && !(schedule.endDate ?? "").isEmpty
+        }
+    }
+}
+
+enum NicknamePolicy {
+    static let maximumLength = 10
+
+    static func isValid(_ nickname: String) -> Bool {
+        let value = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !value.isEmpty && value.count <= maximumLength
+    }
+}

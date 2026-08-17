@@ -12,6 +12,7 @@ struct HostManageView: View {
     @State private var rejectedApplicants: [HostApplicant] = []
     @State private var isRecruitmentClosed: Bool
     @State private var selectedThread: ChatThread?
+    @State private var routeDestination: SupportRoute?
 
     init(
         trip: TripRecruitment,
@@ -52,6 +53,33 @@ struct HostManageView: View {
             }
             .accessibilityIdentifier("hostManage.summary")
 
+            Button {
+                routeDestination = .courseEdit(trip.id, trip.routeEditState)
+            } label: {
+                SupportCard {
+                    HStack(spacing: 12) {
+                        Image(systemName: "map.fill")
+                            .foregroundStyle(MoyeoTheme.primary300)
+                            .frame(width: 36, height: 36)
+                            .background(MoyeoTheme.leaf)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("여행 경로 · \(trip.itinerary.isEmpty ? trip.route.count : trip.itinerary.count)곳")
+                                .font(.subheadline.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.ink)
+                            Text(routePolicyCopy)
+                                .font(.caption)
+                                .foregroundStyle(MoyeoTheme.muted)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(MoyeoTheme.text400)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("hostManage.route")
+
             HostManageSectionTitle(title: "승인 대기", count: pendingApplicants.count)
             pendingContent
 
@@ -65,6 +93,7 @@ struct HostManageView: View {
                             .foregroundStyle(MoyeoTheme.muted)
                     }
                 }
+                .accessibilityIdentifier("hostApproved.\(applicant.id)")
             }
 
             if !rejectedApplicants.isEmpty {
@@ -98,6 +127,9 @@ struct HostManageView: View {
                 onSendChatMessage(thread, message)
             }
         }
+        .navigationDestination(item: $routeDestination) { route in
+            SupportDestinationView(route: route)
+        }
         .accessibilityIdentifier("screen.hostManage")
     }
 
@@ -127,6 +159,17 @@ struct HostManageView: View {
             return "모집이 취소되어 새 신청을 받지 않아요. 채팅방에서는 기존 안내를 확인할 수 있어요."
         }
         return "최소 \(trip.minimumParticipants)명 이상이면 출발 확정 상태로 전환돼요."
+    }
+
+    private var routePolicyCopy: String {
+        switch trip.routeEditState {
+        case .editable:
+            return "여행 확정 전까지 수정할 수 있어요. 저장 시 멤버 모두에게 알려요."
+        case .linkedLocked:
+            return "등록 코스의 경로는 고정돼요. 집합 정보는 수정할 수 있어요."
+        case .tripConfirmed:
+            return "여행이 확정되어 경로가 잠겼어요. 변경은 공지로 알려주세요."
+        }
     }
 
     private func approve(_ applicant: HostApplicant) {
@@ -298,7 +341,6 @@ private struct HostApplicantCard: View {
                 }
             }
         }
-        .accessibilityIdentifier("hostApplicant.\(applicant.id)")
     }
 }
 

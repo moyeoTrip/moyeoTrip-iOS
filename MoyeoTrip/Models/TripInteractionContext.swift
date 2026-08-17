@@ -5,6 +5,7 @@
 
 struct TripInteractionContext {
     var trips: [TripRecruitment] = MockData.trips
+    var chatThreads: [ChatThread] = MockData.chatThreads
     var appliedTripIDs: Set<String> = []
     var chatThreadProvider: (TripRecruitment) -> ChatThread? = { MockData.chatThread(forTripID: $0.id) }
     var onApplyTrip: (TripRecruitment) -> Void = { _ in }
@@ -13,6 +14,9 @@ struct TripInteractionContext {
     var onApproveHostApplicant: (TripRecruitment, Participant) -> Void = { _, _ in }
     var onRejectHostApplicant: (TripRecruitment, Participant) -> Void = { _, _ in }
     var onSetRecruitmentClosed: (TripRecruitment, Bool) -> Void = { _, _ in }
+    var onUpdateRoute: (TripRecruitment, [ItineraryStop]) -> Void = { _, _ in }
+    var onCreateNotice: (ChatThread, TripNotice) -> Void = { _, _ in }
+    var onCancelApplication: (TripRecruitment) -> Void = { _ in }
 
     func isApplied(_ trip: TripRecruitment) -> Bool {
         appliedTripIDs.contains(trip.id)

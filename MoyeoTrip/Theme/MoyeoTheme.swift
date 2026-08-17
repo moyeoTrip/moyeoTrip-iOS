@@ -8,6 +8,8 @@ import UIKit
 
 enum MoyeoTheme {
     static let forest = Color(hex: "#2D8F5A")
+    static let primary300 = Color(hex: "#58A574")
+    static let primary400 = Color(hex: "#4E996A")
     static let coral = Color(hex: "#FF7550")
     static let leaf = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#07110E") : UIColor(hex: "#F0F8F4")
@@ -40,6 +42,12 @@ enum MoyeoTheme {
     static let subtleBackground = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#141D19") : UIColor(hex: "#F7F8F7")
     })
+    static let warningBackground = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#3A321E") : UIColor(hex: "#FFF6D8")
+    })
+    static let warningText = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#FFD98A") : UIColor(hex: "#87530D")
+    })
     static let card = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#18231E") : UIColor(hex: "#FFFFFF")
     })
@@ -57,14 +65,31 @@ enum MoyeoTheme {
 }
 
 enum MoyeoTypography {
-    static let screenTitle = Font.system(size: 21, weight: .heavy)
-    static let sectionTitle = Font.system(size: 18, weight: .heavy)
-    static let tab = Font.system(size: 15, weight: .heavy)
-    static let cardTitle = Font.system(size: 17, weight: .heavy)
-    static let cardBody = Font.system(size: 14, weight: .semibold)
-    static let cardMeta = Font.system(size: 13, weight: .semibold)
-    static let chip = Font.system(size: 12, weight: .heavy)
-    static let tinyMeta = Font.system(size: 11, weight: .semibold)
+    private static let regularName = "LINESeedSansKR-Regular"
+    private static let boldName = "LINESeedSansKR-Bold"
+
+    static let screenTitle = font(size: 21, weight: .bold, relativeTo: .title2)
+    static let sectionTitle = font(size: 18, weight: .bold, relativeTo: .headline)
+    static let tab = font(size: 15, weight: .bold, relativeTo: .subheadline)
+    static let cardTitle = font(size: 17, weight: .bold, relativeTo: .headline)
+    static let cardBody = font(size: 14, weight: .regular, relativeTo: .body)
+    static let cardMeta = font(size: 13, weight: .regular, relativeTo: .caption)
+    static let chip = font(size: 12, weight: .bold, relativeTo: .caption)
+    static let tinyMeta = font(size: 11, weight: .regular, relativeTo: .caption2)
+    static let body = font(size: 16, weight: .regular, relativeTo: .body)
+
+    static func font(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        relativeTo style: Font.TextStyle = .body
+    ) -> Font {
+        let usesBoldFace = weight == .semibold || weight == .bold || weight == .heavy || weight == .black
+        let name = usesBoldFace ? boldName : regularName
+        guard UIFont(name: name, size: size) != nil else {
+            return .system(size: size, weight: weight)
+        }
+        return .custom(name, size: size, relativeTo: style)
+    }
 }
 
 extension WeatherHeroState {

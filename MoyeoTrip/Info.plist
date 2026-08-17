@@ -11,7 +11,7 @@
 			<string>kakao</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>kakao169671f85c683f09c7db764532ea64d5</string>
+				<string>kakao$(KAKAO_NATIVE_APP_KEY)</string>
 			</array>
 		</dict>
 		<dict>
@@ -26,7 +26,7 @@
 		</dict>
 	</array>
 	<key>KAKAO_NATIVE_APP_KEY</key>
-	<string>169671f85c683f09c7db764532ea64d5</string>
+	<string>$(KAKAO_NATIVE_APP_KEY)</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>kakaokompassauth</string>
@@ -34,5 +34,18 @@
 	</array>
 	<key>MOYEO_API_BASE_URL</key>
 	<string>https://moyeo-trip-api.jayden-bin.cc</string>
+	<key>SENTRY_DSN</key>
+	<string>$(SENTRY_DSN)</string>
+	<key>SENTRY_ENVIRONMENT</key>
+	<string>$(SENTRY_ENVIRONMENT)</string>
+	<key>SENTRY_RELEASE</key>
+	<string>$(SENTRY_RELEASE)</string>
+	<key>SENTRY_TRACES_SAMPLE_RATE</key>
+	<string>$(SENTRY_TRACES_SAMPLE_RATE)</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>LINESeedKR-Rg.ttf</string>
+		<string>LINESeedKR-Bd.ttf</string>
+	</array>
 </dict>
 </plist>

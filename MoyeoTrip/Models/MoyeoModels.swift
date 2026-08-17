@@ -44,6 +44,79 @@ enum DogamVisibility: String, CaseIterable, Hashable {
     case privateOnly = "나만 보기"
 }
 
+enum CourseSource: String, CaseIterable, Hashable {
+    case linked
+    case custom
+
+    var title: String {
+        switch self {
+        case .linked: "등록된 코스"
+        case .custom: "호스트 직접 코스"
+        }
+    }
+}
+
+enum RouteEditState: String, Hashable {
+    case editable
+    case linkedLocked
+    case tripConfirmed
+}
+
+enum TripScheduleKind: String, CaseIterable, Hashable {
+    case dayTrip = "당일치기"
+    case overnight = "1박 이상"
+}
+
+struct TripScheduleDetails: Hashable {
+    var kind: TripScheduleKind
+    var startDate: String
+    var endDate: String?
+    var startTime: String?
+    var endTime: String?
+}
+
+struct MeetingPointDetails: Hashable {
+    var name: String
+    var address: String
+    var detail: String
+    var latitude: Double
+    var longitude: Double
+    var meetingTime: String
+}
+
+struct ItineraryStop: Identifiable, Hashable {
+    var id: String
+    var day: Int
+    var order: Int
+    var time: String
+    var name: String
+    var memo: String
+    var placeID: String?
+    var latitude: Double?
+    var longitude: Double?
+}
+
+enum RecruitmentApplicationState: Hashable {
+    case none
+    case approvalPending
+    case waitlisted(position: Int)
+    case approved
+}
+
+struct TripNotice: Identifiable, Hashable {
+    var id: String
+    var title: String
+    var body: String
+    var createdAt: String
+    var isPinned: Bool
+}
+
+enum ChatMessageKind: String, Hashable {
+    case text
+    case system
+    case routeChanged
+}
+
 struct TravelCourse: Identifiable, Hashable {
     let id: String
     let title: String
@@ -55,6 +128,8 @@ struct TravelCourse: Identifiable, Hashable {
     let mood: CourseMood
     let tags: [String]
     let stops: [String]
+    var source: CourseSource = .linked
+    var itinerary: [ItineraryStop] = []
 
     var status: CourseStatus {
         switch parsedDistance {
@@ -97,6 +172,14 @@ struct TripRecruitment: Identifiable, Hashable {
     let tags: [String]
     let route: [String]
     let participants: [Participant]
+    var courseSource: CourseSource = .linked
+    var itinerary: [ItineraryStop] = []
+    var scheduleDetails: TripScheduleDetails?
+    var meetingDetails: MeetingPointDetails?
+    var recruitmentDeadline: String = ""
+    var routeEditState: RouteEditState = .linkedLocked
+    var notices: [TripNotice] = []
+    var applicationState: RecruitmentApplicationState = .none
 
     var remainingSeats: Int {
         max(capacity - joined, 0)
@@ -171,11 +254,16 @@ struct ChatThread: Identifiable, Hashable {
     let statusSummary: String
     let statusDetail: String
     let members: [Participant]
-    let messages: [ChatMessage]
+    var messages: [ChatMessage]
     let isReadOnly: Bool
     var closureReason: String?
     var archiveNotice: String?
     var archiveStatus: String?
+    var tripID: String?
+    var pinnedNotices: [TripNotice] = []
+    var routeSummary: [ItineraryStop] = []
+    var courseSource: CourseSource = .linked
+    var isCurrentUserHost: Bool = false
 }
 
 struct ChatMessage: Identifiable, Hashable {
@@ -185,11 +273,12 @@ struct ChatMessage: Identifiable, Hashable {
     let body: String
     let time: String
     let isMine: Bool
+    var kind: ChatMessageKind = .text
 }
 
 extension ChatMessage {
     var isSystemNotice: Bool {
-        senderName == "시스템" || senderName == "모여트립"
+        kind != .text || senderName == "시스템" || senderName == "모여트립"
     }
 }
 

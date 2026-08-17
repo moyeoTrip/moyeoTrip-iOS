@@ -20,6 +20,7 @@ import KakaoSDKCommon
 @main
 struct MoyeoTripApp: App {
     init() {
+        SentryBootstrap.startIfConfigured()
         #if canImport(FirebaseCore)
         if Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil,
            FirebaseApp.app() == nil {
@@ -37,6 +38,12 @@ struct MoyeoTripApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(\.font, MoyeoTypography.body)
+                .transaction { transaction in
+                    if UITestRuntime.reducesVisualAnimations {
+                        transaction.animation = nil
+                    }
+                }
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)
                     if GIDSignIn.sharedInstance.handle(url) {

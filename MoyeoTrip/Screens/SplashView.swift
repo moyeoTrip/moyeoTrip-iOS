@@ -25,10 +25,10 @@ struct SplashView: View {
 
                 VStack(spacing: 10) {
                     Text("모여트립 in 경북")
-                        .font(.system(size: 36, weight: .black))
+                        .font(MoyeoTypography.font(size: 36, weight: .black, relativeTo: .largeTitle))
                         .foregroundStyle(titleColor)
                     Text("경상북도 특화 반패키지 매칭 플랫폼")
-                        .font(.system(size: 14, weight: .heavy))
+                        .font(MoyeoTypography.font(size: 14, weight: .bold, relativeTo: .subheadline))
                         .foregroundStyle(subtitleColor)
                 }
                 .frame(width: proxy.size.width)

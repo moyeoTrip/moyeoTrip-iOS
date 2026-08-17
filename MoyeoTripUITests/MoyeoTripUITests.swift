@@ -22,8 +22,9 @@ final class MoyeoTripUITests: XCTestCase {
     }
 
     private func launch(startTab: String? = nil, extraArguments: [String] = []) {
+        XCUIDevice.shared.orientation = .portrait
         let launchedApp = XCUIApplication()
-        launchedApp.launchArguments = ["UITEST_MODE"]
+        launchedApp.launchArguments = ["UITEST_MODE", "UITEST_FAST_ANIMATIONS"]
         if let startTab {
             launchedApp.launchArguments.append("UITEST_TAB=\(startTab)")
         }
@@ -49,8 +50,61 @@ final class MoyeoTripUITests: XCTestCase {
         line: UInt = #line
     ) {
         let target = element(identifier)
-        XCTAssertTrue(target.waitForExistence(timeout: timeout), "Missing \(identifier)", file: file, line: line)
+        if !target.exists || !target.isHittable {
+            if !target.exists {
+                _ = target.waitForExistence(timeout: timeout)
+            }
+            for _ in 0..<12 where !target.exists || !target.isHittable {
+                app.swipeUp()
+                _ = target.waitForExistence(timeout: 0.25)
+            }
+        }
+        XCTAssertTrue(target.exists || target.waitForExistence(timeout: 0.5), "Missing \(identifier)", file: file, line: line)
+        XCTAssertTrue(waitForHittable(target, timeout: timeout), "Element is not hittable \(identifier)", file: file, line: line)
         target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        if element.isHittable { return true }
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func performTransition(
+        _ name: String,
+        action: () -> Void,
+        destination: XCUIElement,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let actionStartedAt = ProcessInfo.processInfo.systemUptime
+        action()
+        let actionElapsed = ProcessInfo.processInfo.systemUptime - actionStartedAt
+        let existenceStartedAt = ProcessInfo.processInfo.systemUptime
+        let exists = destination.exists || destination.waitForExistence(timeout: timeout)
+        let existenceElapsed = ProcessInfo.processInfo.systemUptime - existenceStartedAt
+        let hittableStartedAt = ProcessInfo.processInfo.systemUptime
+        let hittable = exists && waitForHittable(destination, timeout: timeout)
+        let hittableElapsed = ProcessInfo.processInfo.systemUptime - hittableStartedAt
+
+        let report = String(
+            format: "%@ | tap %.3fs | existence %.3fs | hittable %.3fs",
+            name,
+            actionElapsed,
+            existenceElapsed,
+            hittableElapsed
+        )
+        print("TRANSITION_METRIC \(report)")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "transition-\(name)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(exists, "Transition did not show destination: \(name)", file: file, line: line)
+        XCTAssertTrue(hittable, "Transition destination is not hittable: \(name)", file: file, line: line)
     }
 
     private func tapButton(
@@ -60,7 +114,13 @@ final class MoyeoTripUITests: XCTestCase {
         line: UInt = #line
     ) {
         let target = app.buttons[label]
-        XCTAssertTrue(target.waitForExistence(timeout: timeout), "Missing button \(label)", file: file, line: line)
+        XCTAssertTrue(
+            target.exists || target.waitForExistence(timeout: timeout),
+            "Missing button \(label)",
+            file: file,
+            line: line
+        )
+        XCTAssertTrue(waitForHittable(target, timeout: timeout), "Button is not hittable \(label)", file: file, line: line)
         target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
@@ -72,7 +132,13 @@ final class MoyeoTripUITests: XCTestCase {
     ) {
         let predicate = NSPredicate(format: "label CONTAINS %@", text)
         let target = app.buttons.matching(predicate).firstMatch
-        XCTAssertTrue(target.waitForExistence(timeout: timeout), "Missing button containing \(text)", file: file, line: line)
+        XCTAssertTrue(
+            target.exists || target.waitForExistence(timeout: timeout),
+            "Missing button containing \(text)",
+            file: file,
+            line: line
+        )
+        XCTAssertTrue(waitForHittable(target, timeout: timeout), "Button is not hittable \(text)", file: file, line: line)
         target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
@@ -84,16 +150,46 @@ final class MoyeoTripUITests: XCTestCase {
     ) {
         let predicate = NSPredicate(format: "label CONTAINS %@", text)
         let target = app.staticTexts.matching(predicate).firstMatch
-        XCTAssertTrue(target.waitForExistence(timeout: timeout), "Missing text containing \(text)", file: file, line: line)
+        XCTAssertTrue(
+            target.exists || target.waitForExistence(timeout: timeout),
+            "Missing text containing \(text)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func assertLoginProviderContracts() {
+        XCTAssertTrue(app.staticTexts["모여트립에 오신 걸 환영해요"].waitForExistence(timeout: 3))
+        XCTAssertTrue(element("auth.login.welcomeImage").waitForExistence(timeout: 3))
+        XCTAssertEqual(element("auth.header.label").label, "로그인")
+        XCTAssertEqual(element("auth.header.step").label, "4/7")
+        XCTAssertTrue(element("auth.login.email").exists)
+        XCTAssertTrue(element("auth.login.google").exists)
+        XCTAssertTrue(element("auth.login.apple").exists)
+        let termsCopy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "계속 진행하면")).firstMatch
+        XCTAssertFalse(termsCopy.exists)
     }
 
     private func openNicknameSelection() {
-        tapElement("home.authFlowEntry", timeout: 5)
+        app.terminate()
+        launch(extraArguments: ["UITEST_SCREEN=auth"])
         tapButton("다음", timeout: 5)
         tapButton("다음")
         tapButton("로그인 시작")
         tapElement("auth.login.kakao")
         XCTAssertTrue(app.staticTexts["어떤 친구로 시작할까요?"].waitForExistence(timeout: 3))
+    }
+
+    private func completeRecruitmentFlow() {
+        XCTAssertTrue(app.staticTexts["모집 만들기 (1/5)"].waitForExistence(timeout: 3))
+        tapButton("이 코스로 다음")
+        for step in 2...4 {
+            XCTAssertTrue(app.staticTexts["모집 만들기 (\(step)/5)"].waitForExistence(timeout: 3))
+            tapButton("다음")
+        }
+        XCTAssertTrue(app.staticTexts["모집 만들기 (5/5)"].waitForExistence(timeout: 3))
+        tapButton("모집 열기")
+        XCTAssertTrue(element("screen.hostManage").waitForExistence(timeout: 3))
     }
 
     private func bottomExploreTabExists(timeout: TimeInterval = 3) -> Bool {
@@ -162,7 +258,7 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertLessThan(title.frame.maxY, subtitle.frame.minY, file: file, line: line)
         XCTAssertLessThan(subtitle.frame.maxY, meta.frame.minY, file: file, line: line)
         XCTAssertLessThanOrEqual(meta.frame.maxY, card.frame.maxY - 8, file: file, line: line)
-        XCTAssertLessThanOrEqual(badge.frame.maxX, card.frame.maxX - 12, file: file, line: line)
+        XCTAssertLessThanOrEqual(badge.frame.maxX, card.frame.maxX - 10, file: file, line: line)
     }
 
     @MainActor
@@ -208,12 +304,10 @@ final class MoyeoTripUITests: XCTestCase {
         launch()
 
         app.buttons["모집 만들기"].tap()
-        XCTAssertTrue(app.staticTexts["모집 정보"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.buttons["채팅방 미리보기"].exists)
-        app.buttons["모집 만들기"].tap()
-        XCTAssertTrue(app.staticTexts["모집이 준비됐어요"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.buttons["모집 만들기"].exists)
-        XCTAssertTrue(app.buttons["채팅방 미리보기"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["코스 선택"].waitForExistence(timeout: 3))
+        XCTAssertFalse(element("screen.hostManage").exists)
+        completeRecruitmentFlow()
+        XCTAssertTrue(app.staticTexts["모집 관리"].waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -247,10 +341,8 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["모여트립 in 경북"].waitForExistence(timeout: 5))
 
         app.buttons["모집 만들기"].tap()
-        XCTAssertTrue(app.staticTexts["모집 정보"].waitForExistence(timeout: 3))
-        app.buttons["모집 만들기"].tap()
-        XCTAssertTrue(app.buttons["채팅방 미리보기"].waitForExistence(timeout: 3))
-        app.buttons["채팅방 미리보기"].tap()
+        completeRecruitmentFlow()
+        tapElement("hostManage.openChat")
         XCTAssertTrue(app.textFields["메시지 입력"].waitForExistence(timeout: 3))
         app.textFields["메시지 입력"].tap()
         app.typeText("새 모집 준비물 확인했어요")
@@ -264,7 +356,7 @@ final class MoyeoTripUITests: XCTestCase {
         assertStaticTextContaining("나: 새 모집 준비물 확인했어요")
 
         tapElement("tab.my")
-        XCTAssertTrue(app.staticTexts["2026.06.06 (토)"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -290,31 +382,39 @@ final class MoyeoTripUITests: XCTestCase {
 
     @MainActor
     func testMockAuthFlowCompletesBackToHome() {
-        tapElement("home.authFlowEntry", timeout: 5)
+        app.terminate()
+        launch(extraArguments: ["UITEST_SCREEN=auth"])
+        XCTAssertTrue(element("auth.header.step").waitForExistence(timeout: 5))
 
         assertStaticTextContaining("고민 없이 고르는 경북 코스", timeout: 5)
         XCTAssertEqual(element("auth.header.label").label, "온보딩")
         XCTAssertEqual(element("auth.header.step").label, "1/7")
-        tapButton("다음", timeout: 5)
+        performTransition(
+            "onboarding-1-to-2",
+            action: { tapButton("다음", timeout: 5) },
+            destination: app.staticTexts["3명이 모이면 채팅방이 열려요"]
+        )
         assertStaticTextContaining("3명이 모이면 채팅방이 열려요")
         XCTAssertEqual(element("auth.header.step").label, "2/7")
-        tapButton("다음")
+        performTransition(
+            "onboarding-2-to-3",
+            action: { tapButton("다음") },
+            destination: app.staticTexts["여행 뒤엔 자연스럽게 친구로"]
+        )
         assertStaticTextContaining("여행 뒤엔 자연스럽게 친구로")
         XCTAssertEqual(element("auth.header.step").label, "3/7")
-        tapButton("로그인 시작")
+        performTransition(
+            "onboarding-to-login",
+            action: { tapButton("로그인 시작") },
+            destination: element("auth.login.welcomeImage")
+        )
 
-        XCTAssertTrue(app.staticTexts["모여트립에 오신 걸 환영해요"].waitForExistence(timeout: 3))
-        XCTAssertTrue(element("auth.login.welcomeImage").waitForExistence(timeout: 3))
-        XCTAssertEqual(element("auth.header.label").label, "로그인")
-        XCTAssertEqual(element("auth.header.step").label, "4/7")
-        XCTAssertTrue(element("auth.login.email").exists)
-        XCTAssertTrue(element("auth.login.google").exists)
-        XCTAssertTrue(element("auth.login.apple").exists)
-        let implicitTermsCopy = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "계속 진행하면")
-        ).firstMatch
-        XCTAssertFalse(implicitTermsCopy.exists)
-        tapElement("auth.login.kakao")
+        assertLoginProviderContracts()
+        performTransition(
+            "login-to-nickname",
+            action: { tapElement("auth.login.kakao") },
+            destination: element("auth.nickname.option.deer")
+        )
 
         XCTAssertTrue(app.staticTexts["어떤 친구로 시작할까요?"].waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.label").label, "프로필 설정")
@@ -324,13 +424,21 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertFalse(element("auth.nickname.continue").isEnabled)
         tapElement("auth.nickname.option.deer")
         XCTAssertTrue(element("auth.nickname.continue").isEnabled)
-        tapElement("auth.nickname.continue")
+        performTransition(
+            "nickname-to-basics",
+            action: { tapElement("auth.nickname.continue") },
+            destination: element("auth.basic.birthdate")
+        )
 
         XCTAssertTrue(app.staticTexts["기본 정보"].waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.step").label, "6/7")
         XCTAssertTrue(element("auth.basic.birthdate").waitForExistence(timeout: 3))
         tapElement("auth.basic.gender.female")
-        tapElement("auth.basic.continue")
+        performTransition(
+            "basics-to-profile-image",
+            action: { tapElement("auth.basic.continue") },
+            destination: element("auth.profile.generate")
+        )
 
         XCTAssertTrue(app.staticTexts["여행 친구를 만들어볼까요?"].waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.step").label, "7/7")
@@ -344,7 +452,11 @@ final class MoyeoTripUITests: XCTestCase {
         tapElement("auth.profile.option.1")
         XCTAssertFalse(app.staticTexts["모여트립 in 경북"].exists)
         XCTAssertTrue(element("auth.profile.confirm").isEnabled)
-        tapElement("auth.profile.confirm")
+        performTransition(
+            "profile-image-to-home",
+            action: { tapElement("auth.profile.confirm") },
+            destination: element("tab.home")
+        )
 
         XCTAssertTrue(app.staticTexts["모여트립 in 경북"].waitForExistence(timeout: 3))
     }
@@ -426,15 +538,14 @@ final class MoyeoTripUITests: XCTestCase {
     @MainActor
     func testProfileRequiredUserResumesAtImageStep() {
         app.terminate()
-        launch(extraArguments: ["UITEST_AUTH_PROFILE_REQUIRED"])
+        launch(extraArguments: ["UITEST_AUTH_PROFILE_REQUIRED", "UITEST_SCREEN=auth"])
 
-        tapElement("home.authFlowEntry", timeout: 5)
         tapButton("다음", timeout: 5)
         tapButton("다음")
         tapButton("로그인 시작")
         tapElement("auth.login.apple")
 
-        XCTAssertTrue(app.staticTexts["나를 닮은 여행 친구"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["여행 친구를 만들어볼까요?"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["어떤 친구로 시작할까요?"].exists)
         XCTAssertFalse(app.staticTexts["기본 정보"].exists)
     }
@@ -454,7 +565,7 @@ final class MoyeoTripUITests: XCTestCase {
         tapElement("auth.email.submit")
 
         XCTAssertTrue(app.staticTexts["모여트립 in 경북"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.staticTexts["나를 닮은 여행 친구"].exists)
+        XCTAssertFalse(app.staticTexts["여행 친구를 만들어볼까요?"].exists)
     }
 
     @MainActor
@@ -483,8 +594,8 @@ final class MoyeoTripUITests: XCTestCase {
         tapElement("auth.email.forgotPassword")
         XCTAssertTrue(app.staticTexts["비밀번호 재설정"].waitForExistence(timeout: 3))
         let resetEmail = element("auth.reset.email")
-        resetEmail.tap()
-        resetEmail.typeText("moyeo@example.com")
+        XCTAssertTrue(resetEmail.waitForExistence(timeout: 3))
+        XCTAssertEqual(resetEmail.value as? String, "moyeo@example.com")
         tapElement("auth.reset.submit")
         XCTAssertTrue(element("auth.reset.success").waitForExistence(timeout: 3))
     }

@@ -83,7 +83,8 @@ final class MockAuthNicknameCandidateProvider: AuthNicknameCandidateProviding {
     ) {
         self.batches = batches ?? Self.defaultBatches
         let arguments = ProcessInfo.processInfo.arguments
-        self.delayNanoseconds = delayNanoseconds ?? (arguments.contains("UITEST_MODE") ? 1_500_000_000 : 550_000_000)
+        self.delayNanoseconds = delayNanoseconds
+            ?? (arguments.contains("UITEST_MODE") ? UITestRuntime.mockNicknameDelayNanoseconds : 550_000_000)
         self.shouldFail = shouldFail ?? arguments.contains("UITEST_NICKNAME_REFRESH_FAIL")
     }
 

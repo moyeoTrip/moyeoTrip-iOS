@@ -18,9 +18,11 @@ final class MoyeoTripTripApplicationUITests: XCTestCase {
     }
 
     private func launch(startTab: String) {
+        XCUIDevice.shared.orientation = .portrait
         let launchedApp = XCUIApplication()
         launchedApp.launchArguments = [
             "UITEST_MODE",
+            "UITEST_FAST_ANIMATIONS",
             "UITEST_TAB=\(startTab)"
         ]
         launchedApp.launch()

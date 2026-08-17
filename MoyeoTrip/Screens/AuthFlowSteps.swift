@@ -320,33 +320,7 @@ struct AuthBasicsView: View {
         AuthStepContainer(title: "기본 정보", subtitle: "생년월일과 성별만 먼저 알려주세요.") {
             VStack(alignment: .leading, spacing: 20) {
                 AuthSectionTitle(title: "생년월일")
-                DatePicker(
-                    "생년월일",
-                    selection: Binding(
-                        get: { selectedBirthdate?.date ?? AuthBirthdate.april1998.date },
-                        set: { selectedBirthdate = AuthBirthdate(date: $0) }
-                    ),
-                    in: ...Date(),
-                    displayedComponents: .date
-                )
-                .datePickerStyle(.wheel)
-                .labelsHidden()
-                .environment(\.locale, Locale(identifier: "ko_KR"))
-                .frame(maxWidth: .infinity)
-                .frame(height: 176)
-                .background(MoyeoTheme.card)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                        .stroke(MoyeoTheme.line, lineWidth: 1)
-                }
-                .accessibilityLabel("생년월일")
-                .accessibilityIdentifier("auth.basic.birthdate")
-                .onAppear {
-                    if selectedBirthdate == nil {
-                        selectedBirthdate = .april1998
-                    }
-                }
+                KoreanBirthdateField(selection: $selectedBirthdate)
 
                 AuthSectionTitle(title: "성별")
                 HStack(spacing: 10) {

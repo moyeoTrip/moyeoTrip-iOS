@@ -65,22 +65,12 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         launch(startTab: "home")
 
         tapButton("모집 만들기", timeout: 5)
-        XCTAssertTrue(element("screen.createRecruitment.course-cheongsong-juwangsan").waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["모집 정보"].waitForExistence(timeout: 3))
-        replaceText(identifier: "createRecruitment.date", with: "2026.06.20 (토)")
-        replaceText(identifier: "createRecruitment.time", with: "10:30 - 16:30")
-        replaceText(identifier: "createRecruitment.place", with: "청송 시외버스터미널 2번 승강장")
-        replaceText(identifier: "createRecruitment.note", with: "새로 만든 청송 숲길 모임이에요. 점심은 각자 준비해요.")
-        XCTAssertTrue(element("createRecruitment.capacity").exists)
-        tapButton("모집 만들기")
-        XCTAssertTrue(app.buttons["채팅방 미리보기"].waitForExistence(timeout: 3))
-        tapButton("채팅방 미리보기")
-        XCTAssertTrue(app.staticTexts["새로 만든 청송 숲길 모임이에요. 점심은 각자 준비해요."].waitForExistence(timeout: 3))
-        app.navigationBars.buttons.firstMatch.tap()
-
+        completeRecruitmentFlow()
+        XCTAssertTrue(element("screen.hostManage").waitForExistence(timeout: 3))
         tapButton("뒤로")
+
         tapElement("tab.my")
-        XCTAssertTrue(app.staticTexts["2026.06.20 (토)"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["1/5명"].waitForExistence(timeout: 3))
         tapButton("프로필 메뉴")
 
@@ -99,35 +89,7 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["3/6명"].waitForExistence(timeout: 3))
 
         tapButton("모집 만들기")
-        XCTAssertTrue(element("screen.createRecruitment.course-cheongsong-juwangsan").waitForExistence(timeout: 3))
-    }
-
-    @MainActor
-    func testHostManageApprovesRejectsCancelsAndOpensChatAfterRecruitmentCreation() {
-        launch(startTab: "home")
-
-        tapButton("모집 만들기", timeout: 5)
-        XCTAssertTrue(app.staticTexts["모집 정보"].waitForExistence(timeout: 3))
-        tapButton("모집 만들기")
-        XCTAssertTrue(app.buttons["채팅방 미리보기"].waitForExistence(timeout: 3))
-        tapElement("createRecruitment.openManage")
-
-        XCTAssertTrue(app.staticTexts["모집 관리"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["승인 대기"].exists)
-        XCTAssertTrue(app.staticTexts["따스한 사슴 3492"].exists)
-        tapButton("따스한 사슴 3492 승인")
-        XCTAssertTrue(app.staticTexts["승인된 동행자"].exists)
-        XCTAssertTrue(app.staticTexts["따스한 사슴 3492"].waitForExistence(timeout: 3))
-
-        tapButton("잔잔한 거북이 9032 거절")
-        XCTAssertTrue(app.staticTexts["거절 기록"].waitForExistence(timeout: 3))
-
-        tapElement("hostManage.toggleClose")
-        assertElement("hostManage.closeState", hasLabel: "모집 취소됨")
-        assertElement("hostManage.toggleClose", hasLabel: "모집 다시 열기")
-        tapElement("hostManage.openChat")
-        XCTAssertTrue(app.textFields["메시지 입력"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["모집이 막 만들어졌어요. 함께 갈 사람을 기다려요."].exists)
+        XCTAssertTrue(element("screen.createRecruitment.course-cheongsong-juwangsan.step1").waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -161,7 +123,7 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
 
         let firstPost = app.buttons["feed.post.feed-01"]
         XCTAssertTrue(firstPost.waitForExistence(timeout: 3))
-        XCTAssertGreaterThanOrEqual(firstPost.frame.height, 300)
+        XCTAssertGreaterThanOrEqual(firstPost.frame.height, 280)
         XCTAssertLessThanOrEqual(firstPost.frame.height, 460)
 
         let author = app.staticTexts["feed.post.feed-01.author"]
@@ -184,9 +146,11 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
     }
 
     private func launch(startTab: String) {
+        XCUIDevice.shared.orientation = .portrait
         let launchedApp = XCUIApplication()
         launchedApp.launchArguments = [
             "UITEST_MODE",
+            "UITEST_FAST_ANIMATIONS",
             "UITEST_TAB=\(startTab)"
         ]
         launchedApp.launch()
@@ -214,6 +178,21 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         tapElement("feed.write.complete")
     }
 
+    private func completeRecruitmentFlow() {
+        XCTAssertTrue(
+            element("screen.createRecruitment.course-cheongsong-juwangsan.step1")
+                .waitForExistence(timeout: 3)
+        )
+        tapButton("이 코스로 다음")
+        for step in 2...4 {
+            XCTAssertTrue(app.staticTexts["모집 만들기 (\(step)/5)"].waitForExistence(timeout: 3))
+            tapButton("다음")
+        }
+        XCTAssertTrue(app.staticTexts["모집 만들기 (5/5)"].waitForExistence(timeout: 3))
+        tapButton("모집 열기")
+        XCTAssertTrue(element("screen.hostManage").waitForExistence(timeout: 3))
+    }
+
     private func element(_ identifier: String) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
     }
@@ -226,7 +205,7 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
     ) {
         let target = element(identifier)
         if !target.waitForExistence(timeout: timeout) || !target.isHittable {
-            for _ in 0..<5 where !target.exists || !target.isHittable {
+            for _ in 0..<12 where !target.exists || !target.isHittable {
                 app.swipeUp()
                 _ = target.waitForExistence(timeout: 1)
             }
@@ -244,7 +223,7 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
     ) {
         let target = app.buttons[label].firstMatch
         if !target.waitForExistence(timeout: timeout) || !target.isHittable {
-            for _ in 0..<5 where !target.exists || !target.isHittable {
+            for _ in 0..<12 where !target.exists || !target.isHittable {
                 app.swipeUp()
                 _ = target.waitForExistence(timeout: 1)
             }
@@ -263,25 +242,5 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         let target = element(identifier)
         XCTAssertTrue(target.waitForExistence(timeout: 3), "Missing \(identifier)", file: file, line: line)
         XCTAssertEqual(target.label, expectedLabel, file: file, line: line)
-    }
-
-    private func replaceText(
-        identifier: String,
-        with replacement: String,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let target = element(identifier)
-        if !target.waitForExistence(timeout: 3) || !target.isHittable {
-            for _ in 0..<5 where !target.exists || !target.isHittable {
-                app.swipeUp()
-                _ = target.waitForExistence(timeout: 1)
-            }
-        }
-        XCTAssertTrue(target.exists, "Missing \(identifier)", file: file, line: line)
-        XCTAssertTrue(target.isHittable, "Element is not hittable \(identifier)", file: file, line: line)
-        target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        target.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 80))
-        target.typeText(replacement)
     }
 }

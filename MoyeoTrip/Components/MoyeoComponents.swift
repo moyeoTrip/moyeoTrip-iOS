@@ -49,6 +49,8 @@ struct MoyeoHeader: View {
     let title: String
     var rightSystemImage: String?
     var rightAccessibilityLabel: String = "더보기"
+    var isRightActionEnabled = true
+    var rightDisabledHint: String?
     var showsBottomBorder = false
     var action: () -> Void = {}
 
@@ -70,13 +72,16 @@ struct MoyeoHeader: View {
                         .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.plain)
+                .disabled(!isRightActionEnabled)
+                .opacity(isRightActionEnabled ? 1 : 0.42)
                 .accessibilityLabel(rightAccessibilityLabel)
+                .accessibilityHint(isRightActionEnabled ? "" : (rightDisabledHint ?? "현재 사용할 수 없어요"))
             } else {
                 Color.clear
                     .frame(width: 34, height: 34)
             }
         }
-        .frame(height: 44)
+        .frame(height: 56)
         .padding(.horizontal, 18)
         .background(MoyeoTheme.background)
         .overlay(alignment: .bottom) {

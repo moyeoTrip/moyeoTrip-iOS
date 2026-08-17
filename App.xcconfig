@@ -1,0 +1,4 @@
+// Non-sensitive defaults. Local overrides live in the ignored Secrets.xcconfig.
+KAKAO_NATIVE_APP_KEY =
+
+#include? "Secrets.xcconfig"

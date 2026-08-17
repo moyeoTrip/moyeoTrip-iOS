@@ -196,6 +196,12 @@ private struct TripDetailPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Pill(text: trip.courseSource.title, tint: MoyeoTheme.primary300)
+                    if let kind = trip.scheduleDetails?.kind {
+                        Pill(text: kind.rawValue, tint: MoyeoTheme.river)
+                    }
+                }
                 Text(trip.title)
                     .font(.title3.weight(.heavy))
                     .foregroundStyle(MoyeoTheme.ink)
@@ -234,7 +240,25 @@ private struct TripDetailPanel: View {
             VStack(spacing: 12) {
                 DetailInfoRow(icon: "calendar", title: "일정", value: trip.detailDateText)
                 DetailInfoRow(icon: "clock", title: "시간", value: trip.detailTimeText)
+                if let meeting = trip.meetingDetails {
+                    DetailInfoRow(icon: "clock.badge", title: "집합 시간", value: meeting.meetingTime)
+                }
                 DetailInfoRow(icon: "mappin.and.ellipse", title: "모이는 곳", value: trip.meetupPoint)
+                if let meeting = trip.meetingDetails {
+                    DetailInfoRow(
+                        icon: "map",
+                        title: "좌표",
+                        value: String(format: "%.6f, %.6f", meeting.latitude, meeting.longitude)
+                    )
+                    Link(destination: directionsURL(for: meeting)) {
+                        Label("길찾기", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.primary300)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .accessibilityIdentifier("trip.detail.directions")
+                }
             }
             .padding(14)
             .background(MoyeoTheme.subtleBackground)
@@ -267,6 +291,18 @@ private struct TripDetailPanel: View {
             }
 
             TripRoutePreview(stops: trip.route)
+
+            if trip.courseSource == .custom {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "sparkles")
+                    Text("호스트가 직접 만든 코스예요. 여행 확정 전에는 경로가 바뀔 수 있고, 변경 시 모든 멤버에게 알려드려요.")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.primary300)
+                .padding(13)
+                .background(MoyeoTheme.leaf)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -279,6 +315,15 @@ private struct TripDetailPanel: View {
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
         }
         .padding(.horizontal, 16)
+    }
+
+    private func directionsURL(for meeting: MeetingPointDetails) -> URL {
+        var components = URLComponents(string: "https://maps.apple.com/")!
+        components.queryItems = [
+            URLQueryItem(name: "daddr", value: "\(meeting.latitude),\(meeting.longitude)"),
+            URLQueryItem(name: "q", value: meeting.name)
+        ]
+        return components.url!
     }
 }
 
