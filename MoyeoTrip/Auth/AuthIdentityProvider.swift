@@ -151,3 +151,9 @@ protocol AuthFCMTokenProviding {
 struct UnsupportedAuthFCMTokenProvider: AuthFCMTokenProviding {
     func currentToken() async -> String? { nil }
 }
+
+struct FirebaseMessagingAuthFCMTokenProvider: AuthFCMTokenProviding {
+    func currentToken() async -> String? {
+        await MoyeoPushNotificationManager.shared.currentToken()
+    }
+}

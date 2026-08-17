@@ -184,6 +184,7 @@ struct ContentView: View {
         }
         .task(id: isAuthenticated) {
             guard isAuthenticated, !ProcessInfo.processInfo.arguments.contains("UITEST_MODE") else { return }
+            await MoyeoPushNotificationManager.shared.requestAuthorizationIfNeeded()
             if let cachedProfile = currentUserService.cachedProfile() {
                 profile = profile.applying(cachedProfile)
             }
@@ -201,6 +202,10 @@ struct ContentView: View {
             if status == .online, isAuthenticated {
                 connectivity.markCacheAvailable()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .moyeoPushNotificationOpened)) { notification in
+            guard isAuthenticated, let destination = notification.object as? MoyeoPushDestination else { return }
+            openPushDestination(destination)
         }
     }
 
@@ -322,6 +327,31 @@ struct ContentView: View {
         isBottomNavigationSuppressed = false
         withAnimation(UITestRuntime.reducesVisualAnimations ? nil : .easeInOut(duration: 0.28)) {
             isAuthenticated = false
+        }
+    }
+
+    private func openPushDestination(_ destination: MoyeoPushDestination) {
+        isBottomNavigationSuppressed = false
+        switch destination {
+        case .home:
+            selectedTab = .home
+            homePath = NavigationPath()
+        case .notifications:
+            selectedTab = .home
+            homePath = NavigationPath()
+            homePath.append(SupportRoute.notifications)
+        case .explore:
+            selectedTab = .explore
+            explorePath = NavigationPath()
+        case .meetings:
+            selectedTab = .meetings
+            meetingsPath = NavigationPath()
+        case .feed:
+            selectedTab = .feed
+            feedPath = NavigationPath()
+        case .my:
+            selectedTab = .my
+            myPath = NavigationPath()
         }
     }
 

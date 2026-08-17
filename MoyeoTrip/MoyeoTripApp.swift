@@ -19,14 +19,10 @@ import KakaoSDKCommon
 
 @main
 struct MoyeoTripApp: App {
+    @UIApplicationDelegateAdaptor(MoyeoAppDelegate.self) private var appDelegate
+
     init() {
         SentryBootstrap.startIfConfigured()
-        #if canImport(FirebaseCore)
-        if Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil,
-           FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
-        #endif
         #if canImport(KakaoSDKCommon)
         if let nativeAppKey = Bundle.main.object(forInfoDictionaryKey: "KAKAO_NATIVE_APP_KEY") as? String,
            !nativeAppKey.isEmpty {

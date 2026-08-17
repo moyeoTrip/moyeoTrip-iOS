@@ -45,7 +45,7 @@ struct AuthFlowDependencies {
             apiClient: apiClient,
             identityProvider: currentIdentityProvider(apiClient: apiClient),
             sessionStore: KeychainAuthSessionStore(),
-            fcmTokenProvider: UnsupportedAuthFCMTokenProvider()
+            fcmTokenProvider: FirebaseMessagingAuthFCMTokenProvider()
         )
     }
 

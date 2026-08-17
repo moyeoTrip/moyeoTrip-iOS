@@ -160,7 +160,7 @@ final class AuthProviderLinkService: ObservableObject {
         self.apiClient = apiClient ?? AuthAPIClient()
         self.identityProvider = identityProvider ?? AuthFlowDependencies.current.identityProvider
         self.sessionStore = sessionStore ?? KeychainAuthSessionStore()
-        self.fcmTokenProvider = fcmTokenProvider ?? UnsupportedAuthFCMTokenProvider()
+        self.fcmTokenProvider = fcmTokenProvider ?? FirebaseMessagingAuthFCMTokenProvider()
     }
 
     func load() async {

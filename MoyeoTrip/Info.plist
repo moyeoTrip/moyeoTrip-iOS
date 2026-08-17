@@ -47,5 +47,9 @@
 		<string>LINESeedKR-Rg.ttf</string>
 		<string>LINESeedKR-Bd.ttf</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

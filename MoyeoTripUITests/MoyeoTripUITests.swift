@@ -890,6 +890,24 @@ final class MoyeoTripUITests: XCTestCase {
     }
 
     @MainActor
+    func testAppliedTripActionsHaveMatchingSizes() {
+        relaunch(startTab: "meetings")
+        let appliedSegmentByID = element("meetings.segment.신청")
+        let appliedSegment = appliedSegmentByID.waitForExistence(timeout: 1)
+            ? appliedSegmentByID
+            : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "신청")).firstMatch
+        XCTAssertTrue(appliedSegment.waitForExistence(timeout: 3))
+        appliedSegment.tap()
+
+        let detail = app.buttons["상세 보기"].firstMatch
+        let cancel = app.buttons["신청 취소"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 3))
+        XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+        XCTAssertEqual(detail.frame.width, cancel.frame.width, accuracy: 1)
+        XCTAssertEqual(detail.frame.height, cancel.frame.height, accuracy: 1)
+    }
+
+    @MainActor
     func testFeedTimelineStaysAtTopAfterInitialLoad() {
         relaunch(startTab: "feed")
         XCTAssertTrue(app.descendants(matching: .any)["screen.feed"].waitForExistence(timeout: 3))

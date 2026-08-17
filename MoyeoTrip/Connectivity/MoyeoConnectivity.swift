@@ -137,14 +137,12 @@ struct OfflineEmptyView: View {
                     Circle()
                         .fill(MoyeoTheme.subtleBackground)
                         .frame(width: 108, height: 108)
-                    Image(systemName: "safari")
-                        .font(.system(size: 46, weight: .regular))
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 44, weight: .regular))
                         .foregroundStyle(MoyeoTheme.text400)
-                    Capsule()
-                        .fill(MoyeoTheme.text400)
-                        .frame(width: 76, height: 3)
-                        .rotationEffect(.degrees(-45))
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("인터넷 연결 없음")
 
                 Text("연결 상태를\n확인해주세요")
                     .font(MoyeoTypography.font(size: 21, weight: .bold, relativeTo: .title2))

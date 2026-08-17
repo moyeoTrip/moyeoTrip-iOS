@@ -88,6 +88,10 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
     func testOfflineEmptyAndCachedStatesExplainWhatIsAvailable() {
         launch(arguments: ["UITEST_OFFLINE_EMPTY"])
         XCTAssertTrue(element("screen.offline.empty").waitForExistence(timeout: 4))
+        let connectionIcon = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "인터넷 연결 없음"))
+            .firstMatch
+        XCTAssertTrue(connectionIcon.exists)
         XCTAssertTrue(app.staticTexts["연결 상태를\n확인해주세요"].exists)
         XCTAssertTrue(app.staticTexts["지금도 볼 수 있는 것"].exists)
         XCTAssertTrue(app.buttons["다시 시도"].exists)

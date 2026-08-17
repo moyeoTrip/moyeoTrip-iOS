@@ -209,13 +209,19 @@ private struct AppliedTripList: View {
             .font(.caption).foregroundStyle(MoyeoTheme.muted)
           HStack(spacing: 10) {
             NavigationLink(value: trip) {
-              Text("상세 보기").frame(maxWidth: .infinity).frame(height: 42)
+              AppliedTripActionLabel(title: "상세 보기")
             }
             .buttonStyle(.bordered)
-            Button("신청 취소") { context.onCancelApplication(trip) }
-              .frame(maxWidth: .infinity).frame(height: 42)
+            .accessibilityIdentifier("meeting.applied.detail.\(trip.id)")
+
+            Button {
+              context.onCancelApplication(trip)
+            } label: {
+              AppliedTripActionLabel(title: "신청 취소")
+            }
               .buttonStyle(.bordered)
               .tint(MoyeoTheme.coral)
+              .accessibilityIdentifier("meeting.applied.cancel.\(trip.id)")
           }
         }
         .padding(15)
@@ -225,5 +231,17 @@ private struct AppliedTripList: View {
         .accessibilityIdentifier("meeting.applied.\(trip.id)")
       }
     }
+  }
+}
+
+private struct AppliedTripActionLabel: View {
+  let title: String
+
+  var body: some View {
+    Text(title)
+      .font(MoyeoTypography.tab)
+      .frame(maxWidth: .infinity)
+      .frame(height: 42)
+      .contentShape(Rectangle())
   }
 }
