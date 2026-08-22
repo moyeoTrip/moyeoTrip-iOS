@@ -9,6 +9,8 @@ import SwiftUI
 
 struct FeedWriteView: View {
     @Environment(\.dismiss) private var dismiss
+    /// 24-1~24-5 단계별 캡처를 위해 시작 단계를 지정할 수 있다.
+    var initialStep: Int = 1
     var onPublish: (FeedPost) -> Void = { _ in }
 
     @State private var title = "첫 반패키지 단풍 여행"
@@ -46,9 +48,11 @@ struct FeedWriteView: View {
             bottomCTA
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
+        .onAppear { currentStep = min(max(initialStep, 1), stepCount) }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
+        .accessibilityIdentifier("screen.feedWrite.step\(currentStep)")
     }
 }
 
@@ -132,8 +136,10 @@ private extension FeedWriteView {
             metaCard
         case 2:
             photoGrid
+            routeCard
         case 3:
             memoCard
+            photoGrid
         case 4:
             visibilityCard
             metaCard
@@ -379,7 +385,7 @@ private extension FeedWriteView {
 
     var nextTitle: String {
         if currentStep >= stepCount {
-            return "완료"
+            return "게시하기"
         }
         return "다음 (\(currentStep + 1)/\(stepCount))"
     }

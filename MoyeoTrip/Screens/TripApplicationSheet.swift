@@ -10,7 +10,7 @@ struct ApplicationSheet: View {
     let onDismiss: () -> Void
     var onSubmitted: () -> Void = {}
     let onSubmit: () -> Void
-    @State private var memo = "처음 참여라 집결지에서 같이 움직이고 싶어요."
+    @State private var memo = ""
     @State private var didSubmit = false
 
     private var validationMessage: String? {
@@ -20,7 +20,9 @@ struct ApplicationSheet: View {
     var body: some View {
         GeometryReader { proxy in
             let bottomInset = max(proxy.safeAreaInsets.bottom, 18)
-            let sheetMaxHeight = min(proxy.size.height * 0.72, didSubmit ? 390 : 560)
+            // 화면기획·웹과 같은 반 높이 시트다. 72%로 열리면 원래 화면의 배경을
+            // 거의 가려 bottom sheet가 아니라 새 전체 화면처럼 읽힌다.
+            let sheetMaxHeight = min(proxy.size.height * 0.56, didSubmit ? 390 : 468)
             ZStack(alignment: .bottom) {
                 Color.black
                     .ignoresSafeArea()
@@ -47,20 +49,30 @@ struct ApplicationSheet: View {
                 .padding(.leading, 18)
                 .padding(.top, max(proxy.safeAreaInsets.top + 12, 52))
 
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        sheetHeader
+                VStack(spacing: 0) {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 18) {
+                            sheetHeader
+                            if didSubmit {
+                                completionCard
+                            } else {
+                                applicationMessage
+                                introCard
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
+                        .padding(.bottom, 12)
+                    }
+                    Group {
                         if didSubmit {
-                            completionCard
                             openChatButton
                         } else {
-                            applicationMessage
-                            introCard
                             submitButton
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 20)
+                    .padding(.top, 4)
                     .padding(.bottom, bottomInset)
                 }
                 .frame(maxHeight: sheetMaxHeight)
@@ -192,12 +204,9 @@ struct ApplicationSheet: View {
                 didSubmit = true
             }
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "paperplane.fill")
-                Text("신청하기")
-                    .fontWeight(.bold)
-            }
-            .font(.subheadline)
+            Text("신청하기")
+                .fontWeight(.bold)
+                .font(.subheadline)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
@@ -226,5 +235,14 @@ struct ApplicationSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("application.sheet.openChat")
+    }
+}
+
+struct ApplicationSheetDirectLaunchView: View {
+    private let trip = MockData.trip(for: "trip-cheongsong-juwangsan") ?? MockData.trips[0]
+
+    var body: some View {
+        ApplicationSheet(trip: trip, onDismiss: {}, onSubmit: {})
+            .accessibilityIdentifier("screen.applicationSheet")
     }
 }

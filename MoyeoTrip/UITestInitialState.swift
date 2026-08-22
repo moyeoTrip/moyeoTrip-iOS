@@ -5,6 +5,8 @@
 
 import SwiftUI
 
+// Direct-launch routing intentionally centralizes the visual-regression catalog.
+// swiftlint:disable type_body_length
 struct UITestInitialState {
   var selectedTab: MoyeoTab
   var homePath = NavigationPath()
@@ -13,7 +15,10 @@ struct UITestInitialState {
   var myPath = NavigationPath()
   var feedPostID: String?
   var feedStartsWriting = false
+  /// 24-1~24-5 단계별 캡처용 시작 단계 (1...5)
+  var feedWriteInitialStep = 1
   var exploreStartsInMap = false
+  var meetingsInitialSegment: MeetingSegment = .ongoing
 
   init(arguments: [String]) {
     selectedTab = MoyeoTab.uiTestInitialTab(from: arguments) ?? .home
@@ -66,6 +71,16 @@ struct UITestInitialState {
   }
 
   private mutating func applyMeetingRoute(_ screen: UITestScreenRequest) -> Bool {
+    if screen.matches("chat-list") {
+      selectedTab = .meetings
+      meetingsInitialSegment = .ongoing
+      return true
+    }
+    if screen.matches("chat-list-applied") {
+      selectedTab = .meetings
+      meetingsInitialSegment = .applied
+      return true
+    }
     if screen.matches("special-messages", "specialmessages") {
       selectedTab = .meetings
       meetingsPath.append(MeetingsRoute.specialMessages)
@@ -105,13 +120,64 @@ struct UITestInitialState {
       feedStartsWriting = true
       return true
     }
+    for step in 1...5 where screen.matches("feed-write-\(step)", "feedwrite\(step)") {
+      selectedTab = .feed
+      feedStartsWriting = true
+      feedWriteInitialStep = step
+      return true
+    }
     return false
   }
 
   // Direct-launch aliases intentionally cover design-spec filenames used by visual regression tests.
-  // swiftlint:disable:next cyclomatic_complexity
+  // swiftlint:disable function_body_length cyclomatic_complexity
   private mutating func applySupportRoute(_ screen: UITestScreenRequest) -> Bool {
-    if screen.matches("auth", "login", "signup") {
+    if screen.matches("onb-1", "onboarding-1") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.onboarding1))
+      return true
+    }
+    if screen.matches("onb-2", "onboarding-2") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.onboarding2))
+      return true
+    }
+    if screen.matches("onb-3", "onboarding-3") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.onboarding3))
+      return true
+    }
+    if screen.matches("login") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.login))
+      return true
+    }
+    if screen.matches("email-auth") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.emailLogin))
+      return true
+    }
+    if screen.matches("nickname") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.nickname))
+      return true
+    }
+    if screen.matches("profile-basic", "profilebasic") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.profileBasic))
+      return true
+    }
+    if screen.matches("profile-image", "profileimage") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.profileImage))
+      return true
+    }
+    if screen.matches("terms") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authTerms)
+      return true
+    }
+    if screen.matches("auth", "signup") {
       selectedTab = .home
       homePath.append(SupportRoute.authFlow)
       return true
@@ -119,6 +185,11 @@ struct UITestInitialState {
     if screen.matches("notifications", "notification") {
       selectedTab = .home
       homePath.append(SupportRoute.notifications)
+      return true
+    }
+    if screen.matches("apply") {
+      selectedTab = .home
+      homePath.append(SupportRoute.applicationSheet)
       return true
     }
     if screen.matches("create", "create-recruitment", "createrecruitment") {
@@ -152,9 +223,61 @@ struct UITestInitialState {
       homePath.append(SupportRoute.createMeeting)
       return true
     }
-    if screen.matches("create-summary", "createsummary") {
+    if screen.matches("create-detail", "createdetail") {
+      selectedTab = .home
+      homePath.append(SupportRoute.createDetail)
+      return true
+    }
+    if screen.matches("create-people", "createpeople") {
+      selectedTab = .home
+      homePath.append(SupportRoute.createPeople)
+      return true
+    }
+    // 17-6 은 직접 만든 코스, 17-7 은 등록 코스 차용이다.
+    // 한 라우트로 묶으면 두 아트보드에 같은 화면이 찍힌다.
+    if screen.matches("create-summary-linked", "createsummarylinked") {
       selectedTab = .home
       homePath.append(SupportRoute.createSummary)
+      return true
+    }
+    if screen.matches("create-summary", "createsummary", "create-summary-custom", "createsummarycustom") {
+      selectedTab = .home
+      homePath.append(SupportRoute.createSummaryCustom)
+      return true
+    }
+    if screen.matches("place-search", "placesearch") {
+      selectedTab = .home
+      homePath.append(SupportRoute.placeSearch)
+      return true
+    }
+    if screen.matches("place-detail", "placedetail") {
+      selectedTab = .home
+      homePath.append(SupportRoute.placeDetail(screen.identifier ?? "CT2299341"))
+      return true
+    }
+    if screen.matches("terms-detail", "terms-service") {
+      selectedTab = .home
+      homePath.append(SupportRoute.signupLegalDocument(.service))
+      return true
+    }
+    if screen.matches("terms-privacy") {
+      selectedTab = .home
+      homePath.append(SupportRoute.signupLegalDocument(.privacy))
+      return true
+    }
+    if screen.matches("terms-location") {
+      selectedTab = .home
+      homePath.append(SupportRoute.signupLegalDocument(.location))
+      return true
+    }
+    if screen.matches("terms-marketing") {
+      selectedTab = .home
+      homePath.append(SupportRoute.signupLegalDocument(.marketing))
+      return true
+    }
+    if screen.matches("terms-settings") {
+      selectedTab = .home
+      homePath.append(SupportRoute.legalDocument(.service))
       return true
     }
     if screen.matches("course-edit", "courseedit", "course-edit-custom") {
@@ -187,6 +310,7 @@ struct UITestInitialState {
     }
     return applyChangelogRoute(screen)
   }
+  // swiftlint:enable function_body_length cyclomatic_complexity
 
   // swiftlint:disable:next cyclomatic_complexity
   private mutating func applyChangelogRoute(_ screen: UITestScreenRequest) -> Bool {
@@ -213,6 +337,17 @@ struct UITestInitialState {
     if screen.matches("report") {
       selectedTab = .home
       homePath.append(SupportRoute.report)
+      return true
+    }
+    if screen.matches("states") {
+      selectedTab = .home
+      homePath.append(SupportRoute.componentStates)
+      return true
+    }
+    if screen.matches("leave") {
+      selectedTab = .home
+      homePath.append(
+        SupportRoute.leaveConfirmation(screen.identifier ?? "chat-cheongsong-juwangsan"))
       return true
     }
     if screen.matches("blocked", "blocked-users", "blockedusers") {
@@ -252,7 +387,8 @@ struct UITestInitialState {
     }
     if screen.matches("feed-comments", "feedcomments") {
       selectedTab = .home
-      homePath.append(SupportRoute.feedComments(screen.identifier ?? "feed-03"))
+      // 기본 게시물은 다른 플랫폼과 같은 대표 피드(댓글 18)다
+      homePath.append(SupportRoute.feedComments(screen.identifier ?? "feed-01"))
       return true
     }
     return false
@@ -293,6 +429,7 @@ struct UITestInitialState {
     }
   }
 }
+// swiftlint:enable type_body_length
 
 private struct UITestScreenRequest {
   let name: String

@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum AuthDirectScreen: String, Hashable {
+    case onboarding1
+    case onboarding2
+    case onboarding3
+    case login
+    case emailLogin
+    case nickname
+    case profileBasic
+    case profileImage
+}
+
 struct AuthFlowView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: AuthFlowViewModel
@@ -19,32 +30,53 @@ struct AuthFlowView: View {
     init(
         dependencies: AuthFlowDependencies? = nil,
         allowsDismissal: Bool = true,
+        directScreen: AuthDirectScreen? = nil,
         onComplete: @escaping () -> Void = {}
     ) {
         let model = AuthFlowViewModel(dependencies: dependencies)
         let showsProviderListForUITest = ProcessInfo.processInfo.arguments.contains("UITEST_AUTH_PROVIDER_LIST")
-        if !allowsDismissal {
+        let directConfiguration = directScreen.map(Self.directConfiguration)
+        if let directConfiguration {
+            model.stage = directConfiguration.stage
+        } else if !allowsDismissal {
             model.stage = .splash
         } else if showsProviderListForUITest {
             model.stage = .login
         }
         _viewModel = StateObject(wrappedValue: model)
+        _onboardingIndex = State(initialValue: directConfiguration?.onboardingIndex ?? 0)
+        _nickname = State(initialValue: directScreen == .nickname ? "다정한 곰 1001" : "")
+        _selectedBirthdate = State(initialValue: directScreen == .profileBasic ? .april1998 : nil)
+        // 성별은 사용자가 직접 고르는 값이다. 화면기획·웹과 같이 진입 시점에는 아무것도 고르지 않은 상태.
+        _selectedGender = State(initialValue: nil)
         self.allowsDismissal = allowsDismissal
-        shouldRestoreSession = !showsProviderListForUITest
+        shouldRestoreSession = directScreen == nil && !showsProviderListForUITest
         self.onComplete = onComplete
+    }
+
+    nonisolated private static func directConfiguration(
+        _ screen: AuthDirectScreen
+    ) -> (stage: AuthFlowStage, onboardingIndex: Int) {
+        switch screen {
+        case .onboarding1: (.onboarding, 0)
+        case .onboarding2: (.onboarding, 1)
+        case .onboarding3: (.onboarding, 2)
+        case .login: (.login, 0)
+        case .emailLogin: (.emailLogin, 0)
+        case .nickname: (.nickname, 0)
+        case .profileBasic: (.basics, 0)
+        case .profileImage: (.profileImage, 0)
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if viewModel.stage != .splash {
                 AuthFlowHeader(
-                    label: headerProgress.label,
-                    currentStep: headerProgress.current,
-                    totalSteps: headerProgress.total,
+                    progress: headerProgress,
                     showsBackButton: showsBackButton,
-                    showsCloseButton: allowsDismissal,
                     backAction: moveBack,
-                    closeAction: dismiss.callAsFunction
+                    skipAction: skipAction
                 )
             }
 
@@ -112,6 +144,7 @@ struct AuthFlowView: View {
                     passwordConfirmation = ""
                     viewModel.stage = .emailRegistration
                 },
+                signInAction: {},
                 forgotPasswordAction: {
                     viewModel.clearError()
                     viewModel.stage = .passwordReset
@@ -127,6 +160,12 @@ struct AuthFlowView: View {
                 errorMessage: viewModel.errorMessage,
                 submitAction: { authenticateEmail(mode: .createAccount) },
                 createAccountAction: {},
+                signInAction: {
+                    viewModel.clearError()
+                    password = ""
+                    passwordConfirmation = ""
+                    viewModel.stage = .emailLogin
+                },
                 forgotPasswordAction: {}
             )
         case .passwordReset:
@@ -148,13 +187,15 @@ struct AuthFlowView: View {
             }
         case .basics:
             AuthBasicsView(
+                nickname: viewModel.selectedNicknameForProfile,
+                nicknameCandidate: viewModel.selectedNicknameCandidateForProfile,
                 selectedBirthdate: $selectedBirthdate,
                 selectedGender: $selectedGender,
                 isSubmitting: viewModel.isSubmittingSignup,
-                errorMessage: viewModel.errorMessage
-            ) {
-                submitSignup()
-            }
+                errorMessage: viewModel.errorMessage,
+                backAction: { moveBack() },
+                continueAction: { submitSignup() }
+            )
         case .profileImage:
             AuthProfileImageView(
                 nickname: viewModel.selectedNicknameForProfile,
@@ -241,16 +282,23 @@ struct AuthFlowView: View {
         dismiss()
     }
 
-    private var headerProgress: AuthHeaderProgress {
+    // 온보딩에서만 오른쪽에 건너뛰기를 둔다. 화면기획·웹 헤더에는 닫기(X)가 없다.
+    private var skipAction: (() -> Void)? {
+        guard viewModel.stage == .onboarding else { return nil }
+        return { viewModel.stage = .login }
+    }
+
+    private var headerProgress: AuthHeaderProgress? {
         switch viewModel.stage {
         case .splash:
-            return AuthHeaderProgress(label: "", current: 0, total: 7)
+            return nil
         case .onboarding:
             return AuthHeaderProgress(label: "온보딩", current: onboardingIndex + 1, total: 7)
         case .login:
             return AuthHeaderProgress(label: "로그인", current: 4, total: 7)
         case .emailLogin, .emailRegistration, .passwordReset:
-            return AuthHeaderProgress(label: "이메일 로그인", current: 4, total: 7)
+            // 화면기획·웹의 이메일 화면은 7단계 프로그레스를 두지 않는 보조 화면이다.
+            return nil
         case .nickname:
             return AuthHeaderProgress(label: "프로필 설정", current: 5, total: 7)
         case .basics:
@@ -268,13 +316,10 @@ private struct AuthHeaderProgress {
 }
 
 private struct AuthFlowHeader: View {
-    let label: String
-    let currentStep: Int
-    let totalSteps: Int
+    let progress: AuthHeaderProgress?
     let showsBackButton: Bool
-    let showsCloseButton: Bool
     let backAction: () -> Void
-    let closeAction: () -> Void
+    let skipAction: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 9) {
@@ -296,38 +341,38 @@ private struct AuthFlowHeader: View {
 
                 Spacer()
 
-                if showsCloseButton {
-                    Button(action: closeAction) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(MoyeoTheme.muted)
-                            .frame(width: 38, height: 38)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("닫기")
-                    .accessibilityIdentifier("auth.close")
+                if let skipAction {
+                    Button("건너뛰기", action: skipAction)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .buttonStyle(.plain)
+                        .frame(height: 38)
+                        .accessibilityIdentifier("auth.skip")
                 } else {
                     Color.clear
                         .frame(width: 38, height: 38)
                 }
             }
 
-            HStack {
-                Text(label)
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.forest)
-                    .accessibilityIdentifier("auth.header.label")
+            // 단계 라벨은 7단계 프로그레스와 한 쌍이다. 프로그레스가 없는 보조 화면에서는 그리지 않는다.
+            if let progress {
+                HStack {
+                    Text(progress.label)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.forest)
+                        .accessibilityIdentifier("auth.header.label")
 
-                Spacer()
+                    Spacer()
 
-                Text("\(currentStep)/\(totalSteps)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.muted)
-                    .accessibilityIdentifier("auth.header.step")
+                    Text("\(progress.current)/\(progress.total)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .accessibilityIdentifier("auth.header.step")
+                }
+
+                ProgressBar(value: Double(progress.current) / Double(progress.total))
+                    .accessibilityIdentifier("auth.progress")
             }
-
-            ProgressBar(value: Double(currentStep) / Double(totalSteps))
-                .accessibilityIdentifier("auth.progress")
         }
         .padding(.horizontal, 18)
         .padding(.top, 6)

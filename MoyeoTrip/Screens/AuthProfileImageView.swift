@@ -16,7 +16,7 @@ struct AuthProfileImageView: View {
 
     var body: some View {
         AuthStepContainer(
-            title: "여행 친구를 만들어볼까요?",
+            title: "여행에서 만날 내 친구를 골라주세요",
             subtitle: profileSubtitle
         ) {
             VStack(spacing: 14) {
@@ -35,7 +35,6 @@ struct AuthProfileImageView: View {
                     AuthInlineError(message: errorMessage, accessibilityIdentifier: "auth.profile.error")
                     AuthSecondaryButton(
                         title: "다시 시도",
-                        systemImage: "arrow.clockwise",
                         accessibilityIdentifier: "auth.profile.retry",
                         action: retryAction
                     )
@@ -43,9 +42,8 @@ struct AuthProfileImageView: View {
             }
         } footer: {
             VStack(spacing: 10) {
-                AuthPrimaryButton(
+                AuthSecondaryButton(
                     title: generateButtonTitle,
-                    systemImage: isGenerating ? "hourglass" : "wand.and.stars",
                     accessibilityIdentifier: "auth.profile.generate",
                     action: generateAction
                 )
@@ -53,13 +51,11 @@ struct AuthProfileImageView: View {
                 .opacity(canGenerate ? 1 : 0.44)
 
                 AuthPrimaryButton(
-                    title: selectedCandidateID == nil ? "이 이미지를 선택해주세요" : "이 이미지로 시작",
-                    systemImage: selectedCandidateID == nil ? "photo" : "checkmark.circle.fill",
+                    title: "이 친구로 시작하기",
                     accessibilityIdentifier: "auth.profile.confirm",
                     action: confirmAction
                 )
                 .disabled(selectedCandidateID == nil || selectingImageID != nil || isLoading || isGenerating)
-                .opacity(selectedCandidateID == nil || selectingImageID != nil ? 0.44 : 1)
             }
         }
     }
@@ -71,14 +67,14 @@ struct AuthProfileImageView: View {
     private var generateButtonTitle: String {
         if isGenerating { return "새 후보를 만들고 있어요..." }
         if remainingGenerationCount == 0 { return "새 후보 생성 기회를 모두 사용했어요" }
-        return "새 후보 만들기 · 남은 \(remainingGenerationCount)회"
+        return "새 후보 만들기 · \(remainingGenerationCount)회 남음"
     }
 
     private var profileSubtitle: String {
         guard let nickname, !nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "서버에 저장된 닉네임을 바탕으로 후보를 만들어요."
+            return "서버에 저장된 닉네임을 바탕으로 후보를 하나씩 추가해요."
         }
-        return "선택한 닉네임 ‘\(nickname)’을 바탕으로 후보를 만들어요."
+        return "\(nickname) 닉네임을 바탕으로 후보를 하나씩 추가해요. 이전에 만든 후보는 사라지지 않아요."
     }
 
     private var profileLoadingView: some View {
@@ -94,55 +90,59 @@ struct AuthProfileImageView: View {
         .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
     }
 
+    // 후보는 항상 수평 배치 — 1개는 가운데(폭 1/3), 2개는 좌우 절반, 3개는 3등분.
+    // 카드 래퍼와 "여행 친구 N / 서버에서 생성된 …" 같은 부가 문구는 두지 않는다 (화면기획 기준).
     private var profileGrid: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("프로필 후보 \(candidates.count)개")
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                Spacer()
-                Text("\(remainingGenerationCount)회 남음")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.forest)
-            }
-
+        Group {
             if candidates.isEmpty {
-                VStack(spacing: 12) {
-                    Text("아직 만든 이미지가 없어요.")
-                        .font(.subheadline)
-                        .foregroundStyle(MoyeoTheme.muted)
-                }
-                .frame(maxWidth: .infinity, minHeight: 132)
-                .background(MoyeoTheme.elevatedCard)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            } else {
-                VStack(spacing: 10) {
-                    ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
-                        profileCandidate(candidate, index: index)
+                Text("아래 버튼을 눌러 첫 프로필 이미지를 만들어보세요.")
+                    .font(.subheadline)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .frame(maxWidth: .infinity, minHeight: 150)
+                    .background(MoyeoTheme.subtleBackground.opacity(0.35))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(
+                                MoyeoTheme.line,
+                                style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                            )
                     }
-                }
-            }
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                GeometryReader { proxy in
+                    let spacing: CGFloat = 10
+                    let thirdWidth = (proxy.size.width - spacing * 2) / 3
+                    let tileWidth = candidates.count == 1
+                        ? thirdWidth
+                        : (proxy.size.width - spacing * CGFloat(candidates.count - 1)) / CGFloat(candidates.count)
 
-            Text("새 후보는 기존 후보에 추가돼요. 남은 생성 횟수 \(remainingGenerationCount)회")
-                .font(.caption)
-                .foregroundStyle(MoyeoTheme.muted)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .accessibilityIdentifier("auth.profile.remaining")
-        }
-        .padding(18)
-        .background(MoyeoTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                .stroke(MoyeoTheme.line, lineWidth: 1)
+                    HStack(spacing: spacing) {
+                        ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+                            profileCandidate(candidate, index: index, width: tileWidth)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .frame(height: candidateTileHeight)
+            }
         }
     }
 
-    private func profileCandidate(_ candidate: AuthProfileImageCandidate, index: Int) -> some View {
-        Button {
+    private var candidateTileHeight: CGFloat {
+        // 3등분 타일 폭(대략)에 1:1.16 비율을 적용한 높이
+        candidates.count == 1 ? 132 : (candidates.count == 2 ? 200 : 132)
+    }
+
+    private func profileCandidate(
+        _ candidate: AuthProfileImageCandidate,
+        index: Int,
+        width: CGFloat
+    ) -> some View {
+        let isSelected = selectedCandidateID == candidate.id
+        return Button {
             selectedCandidateID = candidate.id
         } label: {
-            HStack(spacing: 14) {
+            ZStack {
                 CachedRemoteImage(url: candidate.profileImageUrl) { image in
                     image
                         .resizable()
@@ -153,46 +153,27 @@ struct AuthProfileImageView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(MoyeoTheme.leaf)
                 }
-                .frame(width: 66, height: 66)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("여행 친구 \(index + 1)")
-                        .font(.subheadline.weight(.heavy))
-                        .foregroundStyle(MoyeoTheme.ink)
-                    Text("서버에서 생성된 프로필 이미지")
-                        .font(.caption)
-                        .foregroundStyle(MoyeoTheme.muted)
-                    if let nicknameCandidate {
-                        Text("닉네임 색상 · \(nicknameCandidate.colorLabel)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(nicknameCandidate.swatchColor)
-                    }
+                if selectingImageID == candidate.id {
+                    ProgressView().controlSize(.small)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Group {
-                    if selectingImageID == candidate.id {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: selectedCandidateID == candidate.id ? "checkmark.circle.fill" : "circle")
-                    }
-                }
-                .foregroundStyle(selectedCandidateID == candidate.id ? MoyeoTheme.forest : MoyeoTheme.ink)
             }
-            .padding(12)
-            .frame(height: 92)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .padding(10)
+            .frame(width: width, height: width * 1.16)
+            .background(isSelected ? MoyeoTheme.leaf : MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                    .stroke(selectedCandidateID == candidate.id ? MoyeoTheme.forest : MoyeoTheme.line, lineWidth: selectedCandidateID == candidate.id ? 2 : 1)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(
+                        isSelected ? MoyeoTheme.forest : MoyeoTheme.line,
+                        lineWidth: isSelected ? 2 : 1
+                    )
             }
         }
         .buttonStyle(.plain)
         .disabled(isLoading || isGenerating || selectingImageID != nil)
-        .accessibilityLabel("프로필 후보 \(candidate.id)")
+        .accessibilityLabel("프로필 후보 \(index + 1)")
         .accessibilityIdentifier("auth.profile.option.\(candidate.id)")
         .onAppear {
             if selectedCandidateID == nil, candidate.selected {

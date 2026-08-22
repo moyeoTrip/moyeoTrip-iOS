@@ -146,6 +146,11 @@ private extension UIApplication {
 
 protocol AuthFCMTokenProviding {
     func currentToken() async -> String?
+    func markRegisteredWithBackend(_ token: String?)
+}
+
+extension AuthFCMTokenProviding {
+    func markRegisteredWithBackend(_ token: String?) {}
 }
 
 struct UnsupportedAuthFCMTokenProvider: AuthFCMTokenProviding {
@@ -155,5 +160,9 @@ struct UnsupportedAuthFCMTokenProvider: AuthFCMTokenProviding {
 struct FirebaseMessagingAuthFCMTokenProvider: AuthFCMTokenProviding {
     func currentToken() async -> String? {
         await MoyeoPushNotificationManager.shared.currentToken()
+    }
+
+    func markRegisteredWithBackend(_ token: String?) {
+        MoyeoPushNotificationManager.shared.markTokenRegisteredWithBackend(token)
     }
 }

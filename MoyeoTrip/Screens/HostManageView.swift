@@ -32,96 +32,100 @@ struct HostManageView: View {
     }
 
     var body: some View {
-        SupportList(title: "모집 관리") {
-            SupportCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(trip.title)
-                        .font(.headline.weight(.heavy))
-                        .foregroundStyle(MoyeoTheme.ink)
-                    SupportField(title: "일정", value: trip.schedule)
-                    SupportField(title: "모이는 곳", value: trip.meetupPoint)
-                    HStack(spacing: 8) {
-                        HostManagePill("\(approvedApplicants.count + 1)/\(trip.capacity)명")
-                        HostManagePill("대기 \(pendingApplicants.count)")
-                        HostManagePill(isRecruitmentClosed ? "모집 취소됨" : trip.status.rawValue)
-                    }
-                    Text(statusCopy)
-                        .font(.subheadline)
-                        .foregroundStyle(MoyeoTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .accessibilityIdentifier("hostManage.summary")
+        VStack(spacing: 0) {
+            HostManageNavigationBar()
 
-            Button {
-                routeDestination = .courseEdit(trip.id, trip.routeEditState)
-            } label: {
-                SupportCard {
-                    HStack(spacing: 12) {
-                        Image(systemName: "map.fill")
-                            .foregroundStyle(MoyeoTheme.primary300)
-                            .frame(width: 36, height: 36)
-                            .background(MoyeoTheme.leaf)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("여행 경로 · \(trip.itinerary.isEmpty ? trip.route.count : trip.itinerary.count)곳")
-                                .font(.subheadline.weight(.heavy))
-                                .foregroundStyle(MoyeoTheme.ink)
-                            Text(routePolicyCopy)
-                                .font(.caption)
-                                .foregroundStyle(MoyeoTheme.muted)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    HostManageTripSummary(
+                        title: trip.title,
+                        participantText: "\(approvedApplicants.count + 1)/\(trip.capacity)명",
+                        status: isRecruitmentClosed ? "모집 취소됨" : trip.status.rawValue
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+                    .accessibilityIdentifier("hostManage.summary")
+
+                    Button {
+                        routeDestination = .courseEdit(trip.id, trip.routeEditState)
+                    } label: {
+                        HostManageRouteRow(
+                            count: trip.itinerary.isEmpty ? trip.route.count : trip.itinerary.count,
+                            detail: routePolicyCopy
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
+                    .padding(.bottom, 18)
+                    .accessibilityIdentifier("hostManage.route")
+
+                    Divider()
+                        .overlay(MoyeoTheme.line)
+
+                    HostManageSectionTitle(
+                        title: "승인 대기",
+                        count: pendingApplicants.count,
+                        trailingNote: "48시간 후 자동 거절"
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                    .padding(.bottom, 12)
+
+                    pendingContent
+                        .padding(.horizontal, 20)
+
+                    HostManageSectionTitle(title: "승인된 동행자", count: approvedApplicants.count)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 24)
+                        .padding(.bottom, 12)
+
+                    HostApprovedCompanionsRow(
+                        avatars: [trip.hostAvatar] + approvedApplicants.map(\.avatar),
+                        count: approvedApplicants.count + 1
+                    )
+                    .padding(.horizontal, 20)
+                    .accessibilityIdentifier("hostApproved.companions")
+
+                    if !rejectedApplicants.isEmpty {
+                        HostManageSectionTitle(title: "거절 기록", count: rejectedApplicants.count)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 24)
+                            .padding(.bottom, 12)
+                        ForEach(rejectedApplicants) { applicant in
+                            HostCompactApplicantRow(applicant: applicant, detail: "거절된 신청")
+                                .padding(.horizontal, 20)
+                                .accessibilityIdentifier("hostRejected.\(applicant.id)")
                         }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(MoyeoTheme.text400)
                     }
                 }
+                .padding(.bottom, 24)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button {
+                selectedThread = thread
+            } label: {
+                Text("채팅방 들어가기")
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(thread == nil ? MoyeoTheme.text400 : MoyeoTheme.forest)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("hostManage.route")
-
-            HostManageSectionTitle(title: "승인 대기", count: pendingApplicants.count)
-            pendingContent
-
-            HostManageSectionTitle(title: "승인된 동행자", count: approvedApplicants.count)
-            ForEach(approvedApplicants) { applicant in
-                SupportCard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HostApplicantHeader(applicant: applicant)
-                        Text("집결지와 쉬는 시간을 채팅방에서 함께 확인해요.")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(MoyeoTheme.muted)
-                    }
-                }
-                .accessibilityIdentifier("hostApproved.\(applicant.id)")
+            .disabled(thread == nil)
+            .accessibilityIdentifier("hostManage.openChat")
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(MoyeoTheme.card)
+            .overlay(alignment: .top) {
+                Rectangle().fill(MoyeoTheme.line).frame(height: 1)
             }
-
-            if !rejectedApplicants.isEmpty {
-                HostManageSectionTitle(title: "거절 기록", count: rejectedApplicants.count)
-                ForEach(rejectedApplicants) { applicant in
-                    SupportCard {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HostApplicantHeader(applicant: applicant)
-                            Text("거절 사유: 일정과 동선 조건이 맞지 않아요.")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(MoyeoTheme.coral)
-                        }
-                    }
-                    .accessibilityIdentifier("hostRejected.\(applicant.id)")
-                }
-            }
-
-            HostManageActions(
-                isRecruitmentClosed: isRecruitmentClosed,
-                hasThread: thread != nil,
-                onOpenChat: { selectedThread = thread },
-                onToggleClose: {
-                    let nextValue = !isRecruitmentClosed
-                    isRecruitmentClosed = nextValue
-                    onSetRecruitmentClosed(trip, nextValue)
-                }
-            )
         }
+        .background(MoyeoTheme.background.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $selectedThread) { thread in
             ChatRoomView(thread: thread) { message in
                 onSendChatMessage(thread, message)
@@ -136,20 +140,24 @@ struct HostManageView: View {
     @ViewBuilder
     private var pendingContent: some View {
         if pendingApplicants.isEmpty {
-            SupportCard {
+            HostManageEmptyState {
                 Text("새 신청이 오면 이곳에서 승인하거나 거절할 수 있어요.")
                     .font(.subheadline)
                     .foregroundStyle(MoyeoTheme.muted)
             }
         } else {
-            ForEach(pendingApplicants) { applicant in
+            if let primaryApplicant = pendingApplicants.first {
                 HostApplicantCard(
-                    applicant: applicant,
+                    applicant: primaryApplicant,
                     primaryLabel: "승인",
                     secondaryLabel: "거절",
-                    onPrimary: { approve(applicant) },
-                    onSecondary: { reject(applicant) }
+                    onPrimary: { approve(primaryApplicant) },
+                    onSecondary: { reject(primaryApplicant) }
                 )
+            }
+            ForEach(Array(pendingApplicants.dropFirst())) { applicant in
+                HostCompactApplicantRow(applicant: applicant, detail: "신청 한마디 보기")
+                    .padding(.top, 8)
             }
         }
     }
@@ -253,7 +261,7 @@ private struct HostManageActions: View {
     }
 }
 
-private struct HostApplicant: Identifiable, Hashable {
+struct HostApplicant: Identifiable, Hashable {
     let id: String
     let name: String
     let avatar: String
@@ -286,16 +294,18 @@ private struct HostApplicant: Identifiable, Hashable {
 private struct HostManageSectionTitle: View {
     let title: String
     let count: Int
+    /// 화면기획은 대기 목록 옆에 자동 거절 정책을 함께 알려준다
+    var trailingNote: String?
 
     var body: some View {
         HStack {
-            Text(title)
-                .font(.headline.weight(.heavy))
+            Text("\(title) (\(count))")
+                .font(.subheadline.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.ink)
             Spacer()
-            Text("\(count)명")
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.forest)
+            Text(trailingNote ?? "\(count)명")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.muted)
         }
     }
 }
@@ -308,38 +318,53 @@ private struct HostApplicantCard: View {
     let onSecondary: () -> Void
 
     var body: some View {
-        SupportCard {
-            VStack(alignment: .leading, spacing: 12) {
-                HostApplicantHeader(applicant: applicant)
-                Text(applicant.note)
-                    .font(.subheadline)
-                    .foregroundStyle(MoyeoTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button(action: onSecondary) {
-                        Text(secondaryLabel)
-                            .font(.subheadline.weight(.heavy))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(MoyeoTheme.leaf)
-                    .foregroundStyle(MoyeoTheme.forest)
-                    .accessibilityLabel("\(applicant.name) \(secondaryLabel)")
-                    .accessibilityIdentifier("hostApplicant.\(applicant.id).reject")
+        VStack(alignment: .leading, spacing: 12) {
+            HostApplicantHeader(applicant: applicant)
+            // 신청 한마디는 인용 블록으로 (화면기획)
+            Text("\u{201C}\(applicant.note)\u{201D}")
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.muted)
+                .lineLimit(2)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                .background(MoyeoTheme.subtleBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                    Button(action: onPrimary) {
-                        Text(primaryLabel)
-                            .font(.subheadline.weight(.heavy))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(MoyeoTheme.forest)
-                    .accessibilityLabel("\(applicant.name) \(primaryLabel)")
-                    .accessibilityIdentifier("hostApplicant.\(applicant.id).approve")
+            HStack(spacing: 10) {
+                Button(action: onSecondary) {
+                    Text(secondaryLabel)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .background(MoyeoTheme.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(applicant.name) \(secondaryLabel)")
+                .accessibilityIdentifier("hostApplicant.\(applicant.id).reject")
+
+                Button(action: onPrimary) {
+                    Text(primaryLabel)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .background(MoyeoTheme.forest)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(applicant.name) \(primaryLabel)")
+                .accessibilityIdentifier("hostApplicant.\(applicant.id).approve")
             }
+        }
+        .padding(16)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(MoyeoTheme.line, lineWidth: 1)
         }
     }
 }
@@ -367,7 +392,7 @@ private struct HostApplicantHeader: View {
     }
 }
 
-private struct HostManagePill: View {
+struct HostManagePill: View {
     let text: String
 
     init(_ text: String) {

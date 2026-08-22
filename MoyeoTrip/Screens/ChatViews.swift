@@ -31,16 +31,16 @@ private struct ChatThreadRow: View {
       MoyeoPhotoTile(
         mascot: thread.mascot,
         mood: thread.mood,
-        height: 54,
-        cornerRadius: 8
+        height: 56,
+        cornerRadius: 16
       )
-      .frame(width: 54)
+      .frame(width: 56)
 
       VStack(alignment: .leading, spacing: 3) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           HStack(spacing: 7) {
             Text(thread.tripTitle)
-              .font(MoyeoTypography.cardTitle)
+            .font(MoyeoTypography.font(size: 14, weight: .bold, relativeTo: .headline))
               .foregroundStyle(MoyeoTheme.ink)
               .lineLimit(1)
               .truncationMode(.tail)
@@ -55,20 +55,27 @@ private struct ChatThreadRow: View {
           Spacer(minLength: 4)
 
           Text(thread.updatedAt)
-            .font(MoyeoTypography.cardMeta)
+            .font(MoyeoTypography.font(size: 11, relativeTo: .caption))
             .foregroundStyle(MoyeoTheme.text400)
             .monospacedDigit()
         }
 
+        if !thread.courseDisplayName.isEmpty {
+          Label(thread.courseDisplayName, systemImage: "map.fill")
+            .font(MoyeoTypography.font(size: 11, relativeTo: .caption2))
+            .foregroundStyle(MoyeoTheme.text400)
+            .lineLimit(1)
+        }
+
         Text(thread.statusSummary)
-          .font(MoyeoTypography.cardBody)
+          .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
           .foregroundStyle(MoyeoTheme.muted)
           .monospacedDigit()
           .lineLimit(1)
 
         HStack(alignment: .top, spacing: 10) {
           Text(thread.lastMessage)
-            .font(MoyeoTypography.cardBody)
+            .font(MoyeoTypography.font(size: 13, relativeTo: .subheadline))
             .foregroundStyle(MoyeoTheme.text700)
             .lineLimit(1)
 
@@ -86,8 +93,8 @@ private struct ChatThreadRow: View {
         }
       }
     }
-    .padding(.vertical, 9)
-    .frame(minHeight: 76)
+    .padding(.vertical, 14)
+    .frame(minHeight: 96)
     .overlay(alignment: .bottom) {
       Rectangle()
         .fill(MoyeoTheme.softLine)
@@ -157,8 +164,9 @@ struct ChatRoomView: View {
         HStack(spacing: 9) {
           Image(systemName: "map.fill")
           VStack(alignment: .leading, spacing: 2) {
-            Text("여행 경로")
-            Text(routeSummaryText).font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
+            Text(thread.courseDisplayName)
+            Text("방문지 \(thread.routeSummary.count)개 · \(thread.courseSource.title) · \(routeSummaryText)")
+              .font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
           }
           Spacer()
           Image(systemName: "chevron.right")
@@ -215,12 +223,13 @@ struct ChatRoomView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItemGroup(placement: .navigationBarTrailing) {
+        // 화면기획·웹의 채팅 헤더는 대화 검색이다. 연락처를 받지 않는 서비스라 통화 진입은 없다.
         Button {
-          toolbarMessage = "호스트 연락 방식과 통화 가능 시간을 확인할 수 있어요."
+          toolbarMessage = "이 채팅방의 대화를 검색할 수 있어요."
         } label: {
-          Image(systemName: "phone.fill")
+          Image(systemName: "magnifyingglass")
         }
-        .accessibilityLabel("전화")
+        .accessibilityLabel("대화 검색")
 
         Button {
           supportRoute = .chatMenu(thread.id)
@@ -367,18 +376,58 @@ private struct ChatRoomStatusHeader: View {
   let thread: ChatThread
 
   var body: some View {
-    Text("\(thread.memberCountText) · \(thread.statusSummary)")
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(MoyeoTheme.muted)
-      .frame(maxWidth: .infinity)
-      .padding(.top, 2)
-      .padding(.bottom, 10)
-      .background(MoyeoTheme.background)
-      .overlay(alignment: .bottom) {
-        Rectangle()
-          .fill(MoyeoTheme.softLine)
-          .frame(height: 1)
+    VStack(spacing: 8) {
+      Text(thread.chatStatusLine)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MoyeoTheme.muted)
+        .frame(maxWidth: .infinity)
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 6) {
+          conditionPill("wonsign.circle", thread.priceDisplayText)
+          conditionPill("person.2", thread.ageRangeDisplayText)
+          conditionPill("person.crop.circle", thread.genderDisplayText)
+        }
       }
+      .padding(.horizontal, 16)
+    }
+    .padding(.top, 2)
+    .padding(.bottom, 9)
+    .background(MoyeoTheme.background)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MoyeoTheme.softLine).frame(height: 1)
+    }
+  }
+
+  private func conditionPill(_ icon: String, _ title: String) -> some View {
+    Label(title, systemImage: icon)
+      .font(.caption2.weight(.heavy))
+      .foregroundStyle(MoyeoTheme.text700)
+      .padding(.horizontal, 9)
+      .frame(height: 26)
+      .background(MoyeoTheme.subtleBackground)
+      .overlay(Capsule().stroke(MoyeoTheme.softLine))
+      .clipShape(Capsule())
+  }
+}
+
+extension ChatThread {
+  var courseDisplayName: String {
+    if !courseName.isEmpty { return courseName }
+    if let tripID, let trip = MockData.trip(for: tripID), let course = MockData.course(for: trip.courseID) {
+      return course.title
+    }
+    return "코스 정보"
+  }
+
+  var priceDisplayText: String { price.isEmpty ? "비용 협의" : price }
+  var ageRangeDisplayText: String { ageRange.isEmpty ? "20~100세" : ageRange }
+  var genderDisplayText: String { genderRestriction.isEmpty ? "성별 무관" : genderRestriction }
+
+  var chatStatusLine: String {
+    let scheduleText = scheduleSummary.isEmpty ? "일정 확인" : scheduleSummary
+    let deadlineText = recruitmentDeadline.isEmpty ? statusSummary : "마감 \(recruitmentDeadline)"
+    return "\(memberCountText) · \(scheduleText) · \(deadlineText)"
   }
 }
 
@@ -421,7 +470,8 @@ struct MessageBubble: View {
             .foregroundStyle(MoyeoTheme.ink)
             .padding(.horizontal, 13)
             .padding(.vertical, 10)
-            .background(message.isMine ? MoyeoTheme.leaf : MoyeoTheme.card)
+            // 디자인 시스템의 chat-mine 토큰 — leaf(선택 틴트)와 구분한다
+            .background(message.isMine ? MoyeoTheme.chatMine : MoyeoTheme.card)
             .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
             .overlay {
               RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)

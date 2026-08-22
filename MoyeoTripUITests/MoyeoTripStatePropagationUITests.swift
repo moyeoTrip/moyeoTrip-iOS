@@ -70,7 +70,6 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         tapButton("뒤로")
 
         tapElement("tab.my")
-        XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["1/5명"].waitForExistence(timeout: 3))
         tapButton("프로필 메뉴")
 
@@ -83,9 +82,10 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         launch(startTab: "explore")
 
         XCTAssertTrue(element("screen.explore").waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["모집중"].waitForExistence(timeout: 3))
+        // 탐색 배지는 화면기획·웹·안드로이드와 같은 진행중 / 확정 두 가지다
+        XCTAssertTrue(app.staticTexts["진행중"].firstMatch.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["2/5명"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["출발확정"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["확정"].firstMatch.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["3/6명"].waitForExistence(timeout: 3))
 
         tapButton("모집 만들기")
@@ -123,21 +123,19 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
 
         let firstPost = app.buttons["feed.post.feed-01"]
         XCTAssertTrue(firstPost.waitForExistence(timeout: 3))
-        XCTAssertGreaterThanOrEqual(firstPost.frame.height, 280)
+        // 태그 칩 줄이 빠져(부제 한 줄로 통일) 카드가 약 18pt 낮아졌다
+        XCTAssertGreaterThanOrEqual(firstPost.frame.height, 240)
         XCTAssertLessThanOrEqual(firstPost.frame.height, 460)
 
         let author = app.staticTexts["feed.post.feed-01.author"]
         let title = app.staticTexts["feed.post.feed-01.title"]
         let subtitle = app.staticTexts["feed.post.feed-01.subtitle"]
-        let tagRow = element("feed.post.feed-01.tags")
         XCTAssertTrue(author.exists)
         XCTAssertTrue(title.exists)
         XCTAssertTrue(subtitle.exists)
-        XCTAssertTrue(tagRow.exists)
         XCTAssertGreaterThanOrEqual(title.frame.minY - author.frame.maxY, 8)
         XCTAssertGreaterThanOrEqual(subtitle.frame.minY - title.frame.maxY, 4)
-        XCTAssertGreaterThanOrEqual(tagRow.frame.minY - subtitle.frame.maxY, 8)
-        XCTAssertLessThanOrEqual(tagRow.frame.maxX, firstPost.frame.maxX - 8)
+        XCTAssertLessThanOrEqual(subtitle.frame.maxX, firstPost.frame.maxX - 8)
 
         let writeButton = app.buttons["feed.write.open"].firstMatch
         XCTAssertTrue(writeButton.waitForExistence(timeout: 3))

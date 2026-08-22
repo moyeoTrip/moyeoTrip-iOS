@@ -57,3 +57,16 @@ enum OfflineChatQueue {
         }
     }
 }
+
+enum UITestCaptureSeed {
+    static func prepare(arguments: [String], defaults: UserDefaults = .standard) {
+        guard arguments.contains("UITEST_MODE"), arguments.contains("UITEST_OFFLINE_CHAT") else { return }
+        let pending = OfflinePendingChatMessage(
+            id: "uitest-offline-pending",
+            threadID: "chat-cheongsong-juwangsan",
+            body: "연결되면 보내주세요",
+            createdAt: Date(timeIntervalSince1970: 1_786_937_600)
+        )
+        OfflineChatQueue.enqueue(pending, defaults: defaults)
+    }
+}

@@ -14,17 +14,18 @@ final class Changelog01UITests: XCTestCase {
         XCTAssertTrue(element("customCourse.addStop").exists)
 
         relaunch("create-schedule")
-        XCTAssertTrue(element("screen.createSchedule").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.buttons["당일치기"].exists)
-        XCTAssertTrue(element("createSchedule.meeting").exists)
+        // 직접 실행 화면은 단계 뷰로 감싸이므로 화면 안의 요소로 확인한다
+        XCTAssertTrue(element("createSchedule.meeting").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["일정 정하기"].exists)
+        XCTAssertTrue(dayTripSegment.exists)
 
         relaunch("create-meet")
-        XCTAssertTrue(element("screen.createMeeting").waitForExistence(timeout: 4))
-        XCTAssertTrue(element("createMeeting.map").exists)
+        XCTAssertTrue(element("createMeeting.map").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["집합 장소 정하기"].exists)
 
         relaunch("create-summary")
-        XCTAssertTrue(element("screen.createSummary").waitForExistence(timeout: 4))
-        XCTAssertTrue(element("createSummary.source").exists)
+        XCTAssertTrue(element("createSummary.source").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["이대로 모집을 열까요?"].exists)
     }
 
     @MainActor
@@ -43,15 +44,15 @@ final class Changelog01UITests: XCTestCase {
 
         relaunch("notice-history:chat-cheongsong-juwangsan")
         XCTAssertTrue(element("screen.noticeHistory").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.staticTexts["고정 공지"].exists)
+        XCTAssertTrue(app.staticTexts["상단 고정 중"].exists)
     }
 
     @MainActor
     func testMeetingsHasAppliedTabWithoutChatAccess() {
         launch("", tab: "meetings")
-        XCTAssertTrue(app.staticTexts["신청"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["신청중"].waitForExistence(timeout: 4))
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "신청")).firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["승인 전에는 채팅방에 들어갈 수 없어요."].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["호스트 승인을 기다리는 중"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["채팅"].exists)
     }
 
@@ -63,17 +64,17 @@ final class Changelog01UITests: XCTestCase {
         app.buttons["이 코스로 다음"].tap()
         XCTAssertTrue(app.staticTexts["모집 만들기 (2/5)"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["일정 정하기"].exists)
-        XCTAssertTrue(app.buttons["당일치기"].exists)
+        XCTAssertTrue(dayTripSegment.exists)
 
         app.buttons["다음"].tap()
         XCTAssertTrue(app.staticTexts["모집 만들기 (3/5)"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["인원 정하기"].exists)
+        XCTAssertTrue(app.staticTexts["몇 명이 모이면 좋을까요?"].exists)
         XCTAssertTrue(app.buttons["이전"].exists)
 
+        // 집합 장소는 일정 단계에서 여는 화면이고, 4/5는 세부 정보다
         app.buttons["다음"].tap()
         XCTAssertTrue(app.staticTexts["모집 만들기 (4/5)"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["집합 장소 정하기"].exists)
-        XCTAssertTrue(element("createMeeting.map").exists)
+        XCTAssertTrue(app.staticTexts["어떤 여행인지 알려주세요"].exists)
         XCTAssertTrue(app.buttons["이전"].exists)
 
         app.buttons["다음"].tap()
@@ -99,5 +100,10 @@ final class Changelog01UITests: XCTestCase {
 
     private func element(_ identifier: String) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
+    }
+
+    /// 세그먼트 버튼은 부제(시작·종료 시간)까지 라벨에 붙어 정확히 일치하지 않는다
+    private var dayTripSegment: XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "당일치기")).firstMatch
     }
 }

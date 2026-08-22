@@ -8,58 +8,61 @@ import SwiftUI
 struct CourseDetailView: View {
     let course: TravelCourse
     var tripContext = TripInteractionContext()
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedTrip: TripRecruitment?
     @State private var supportRoute: SupportRoute?
     @State private var isFavorite = false
     @State private var feedbackMessage: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                CourseDetailHero(course: course)
-
-                if let feedbackMessage {
-                    CourseDetailFeedbackBanner(message: feedbackMessage)
-                        .padding(.horizontal, 20)
+        VStack(spacing: 0) {
+            CourseDetailHeader(
+                isFavorite: isFavorite,
+                onBack: { dismiss() },
+                onShare: {
+                    feedbackMessage = "코스 공유 링크를 복사했어요."
+                },
+                onToggleFavorite: {
+                    isFavorite.toggle()
+                    feedbackMessage = isFavorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
                 }
+            )
 
-                DetailPanel(title: "코스 미리보기") {
-                    CourseRouteMap(route: course.stops, mood: course.mood)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 18) {
+                        CourseDetailHero(course: course)
+
+                        if let feedbackMessage {
+                            CourseDetailFeedbackBanner(message: feedbackMessage)
+                                .padding(.horizontal, 20)
+                        }
+
+                        DetailPanel(title: "코스 미리보기") {
+                            CourseRouteMap(route: course.stops, mood: course.mood)
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id("course.detail.bottom")
+                    }
+                    .padding(.bottom, 132)
                 }
-
-                DetailPanel(title: "코스 태그") {
-                    HStack(spacing: 6) {
-                        ForEach(course.tags, id: \.self) { tag in
-                            Pill(text: tag, tint: course.mood.accent)
+                .onAppear {
+                    guard UITestScrollDriver.requestedPage > 1 else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 700_000_000)
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo("course.detail.bottom", anchor: .bottom)
                         }
                     }
                 }
             }
-            .padding(.bottom, 132)
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
-        .navigationTitle("코스 상세")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    isFavorite.toggle()
-                    feedbackMessage = isFavorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
-                } label: {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.ink)
-                }
-                .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
-
-                Button {
-                    feedbackMessage = "코스 공유 링크를 복사했어요."
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .foregroundStyle(MoyeoTheme.ink)
-                }
-                .accessibilityLabel("공유")
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom) {
             CourseDetailBottomBar(
                 onCreateRecruitment: {
@@ -90,6 +93,60 @@ struct CourseDetailView: View {
     }
 }
 
+private struct CourseDetailHeader: View {
+    let isFavorite: Bool
+    let onBack: () -> Void
+    let onShare: () -> Void
+    let onToggleFavorite: () -> Void
+
+    var body: some View {
+        ZStack {
+            Text("코스 상세")
+                .font(MoyeoTypography.font(size: 16, weight: .bold, relativeTo: .headline))
+                .foregroundStyle(MoyeoTheme.ink)
+
+            HStack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 19, weight: .bold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MoyeoTheme.ink)
+                .accessibilityLabel("뒤로")
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Button(action: onShare) {
+                        Image(systemName: "square.and.arrow.up")
+                            .frame(width: 40, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .accessibilityLabel("공유")
+
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: isFavorite ? "heart.fill" : "heart")
+                            .frame(width: 40, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.ink)
+                    .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
+                }
+            }
+        }
+        .frame(height: 56)
+        .padding(.horizontal, 12)
+        .background(MoyeoTheme.background)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(MoyeoTheme.softLine)
+                .frame(height: 1)
+        }
+    }
+}
+
 private struct CourseDetailFeedbackBanner: View {
     let message: String
 
@@ -109,32 +166,18 @@ private struct CourseDetailHero: View {
     let course: TravelCourse
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ZStack(alignment: .topLeading) {
-                Image(course.heroImageAssetName)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(height: 218)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-                    .overlay(alignment: .bottom) {
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.48)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: 96)
-                    }
-                    .accessibilityLabel("\(course.title) 대표 이미지")
-
-                Pill(text: course.status.rawValue, tint: MoyeoTheme.coral)
-                    .background(Capsule().fill(MoyeoTheme.coral.opacity(0.12)))
-                    .padding(14)
-            }
+        VStack(alignment: .leading, spacing: 20) {
+            Image(course.heroImageAssetName)
+                .resizable()
+                .scaledToFill()
+                .frame(height: 174)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .accessibilityLabel("\(course.title) 대표 이미지")
 
             VStack(alignment: .leading, spacing: 13) {
                 Text(course.title)
-                    .font(.title3.weight(.heavy))
+                    .font(MoyeoTypography.font(size: 22, weight: .bold, relativeTo: .title2))
                     .foregroundStyle(MoyeoTheme.ink)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -144,8 +187,12 @@ private struct CourseDetailHero: View {
                     Pill(text: "추천", tint: course.mood.accent)
                 }
 
+                if let publishingInfo = course.publishingInfo {
+                    CoursePublishingSource(info: publishingInfo)
+                }
+
                 Text(course.subtitle)
-                    .font(.subheadline)
+                    .font(MoyeoTypography.font(size: 13, relativeTo: .subheadline))
                     .foregroundStyle(MoyeoTheme.text700)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -157,14 +204,46 @@ private struct CourseDetailHero: View {
             }
             .padding(.horizontal, 20)
         }
+    }
+}
+
+private struct CoursePublishingSource: View {
+    let info: CoursePublishingInfo
+
+    var body: some View {
+        HStack(spacing: 9) {
+            MascotAvatar(mascot: info.travelerAvatar, size: 30, background: MoyeoTheme.leaf)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(info.travelerName) 님이 다녀온 코스")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .lineLimit(1)
+                Text("\(info.publishedAt) · 이 코스로 떠난 모임 \(info.tripCount)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Label("여행자 코스", systemImage: "person.fill")
+                .font(.caption2.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.forest)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(MoyeoTheme.leaf)
+                .clipShape(Capsule())
+                .fixedSize()
+        }
+        .padding(11)
         .background(MoyeoTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("course.publishingSource")
     }
 }
 
@@ -176,13 +255,13 @@ private struct CourseMetricColumn: View {
     var body: some View {
         VStack(spacing: 5) {
             Image(systemName: icon)
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(MoyeoTheme.muted)
             Text(label)
-                .font(.caption2.weight(.semibold))
+                .font(MoyeoTypography.font(size: 10, weight: .bold, relativeTo: .caption2))
                 .foregroundStyle(MoyeoTheme.muted)
             Text(value)
-                .font(.caption.weight(.heavy))
+                .font(MoyeoTypography.font(size: 12, weight: .bold, relativeTo: .caption))
                 .foregroundStyle(MoyeoTheme.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -258,6 +337,8 @@ private struct CourseRouteMap: View {
             }
         }
         .frame(height: 146)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("course.route.preview")
     }
 
     private func position(for index: Int, size: CGSize) -> CGPoint {
@@ -328,15 +409,15 @@ private struct DetailPanel<Content: View>: View {
         self.content = content()
     }
 
+    // 섹션을 카드로 감싸지 않는다 — 화면기획은 제목과 내용만 배경 위에 둔다
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
-                .font(.headline)
+                .font(MoyeoTypography.font(size: 15, weight: .bold, relativeTo: .headline))
                 .foregroundStyle(MoyeoTheme.ink)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .moyeoCard()
         .padding(.horizontal, 20)
     }
 }

@@ -19,23 +19,23 @@ struct AuthOnboardingPage: Identifiable {
     static let pages = [
         AuthOnboardingPage(
             id: 0,
-            title: "고민 없이 고르는 경북 코스",
+            title: "고민 없이 고르는\n경북 코스",
             subtitle: "날씨와 취향에 맞춰 추천해요",
-            body: "날씨와 취향에 맞춰 오늘 떠나기 좋은 코스를 추천해요.",
+            body: "날씨와 취향에 맞춰\n오늘 떠나기 좋은 코스를 추천해요.",
             imageName: "Onboarding1"
         ),
         AuthOnboardingPage(
             id: 1,
-            title: "3명이 모이면 채팅방이 열려요",
+            title: "3명이 모이면\n채팅방이 열려요",
             subtitle: "모집 확정 후 바로 대화해요",
-            body: "모집이 확정되면 바로 대화가 시작돼요.",
+            body: "모집이 확정되면\n바로 대화가 시작돼요.",
             imageName: "Onboarding2"
         ),
         AuthOnboardingPage(
             id: 2,
-            title: "여행 뒤엔 자연스럽게 친구로",
+            title: "여행 뒤엔\n자연스럽게 친구로",
             subtitle: "경로 피드와 도감으로 남겨요",
-            body: "경로 피드와 도감으로 함께한 순간을 남겨요.",
+            body: "경로 피드와 도감으로\n함께한 순간을 남겨요.",
             imageName: "Onboarding3"
         )
     ]
@@ -250,6 +250,25 @@ enum AuthTerm: String, CaseIterable, Identifiable {
     }
 
     static let requiredTerms: [AuthTerm] = [.age, .service, .privacy]
+
+    var legalDocument: LegalDocumentKind? {
+        switch self {
+        case .age: nil
+        case .service: .service
+        case .privacy: .privacy
+        case .location: .location
+        case .marketing: .marketing
+        }
+    }
+
+    init?(document: LegalDocumentKind) {
+        switch document {
+        case .service: self = .service
+        case .privacy: self = .privacy
+        case .location: self = .location
+        case .marketing: self = .marketing
+        }
+    }
 }
 
 struct AuthStepContainer<Content: View, Footer: View>: View {
@@ -313,19 +332,24 @@ struct AuthStepContainer<Content: View, Footer: View>: View {
 }
 
 struct AuthPrimaryButton: View {
+    /// 비활성 CTA는 화면기획·웹·안드로이드처럼 회색 채움으로 그린다. 초록을 흐리게만 두면
+    /// 같은 화면인데 플랫폼마다 CTA 색이 달라 보인다.
+    @Environment(\.isEnabled) private var isEnabled
+
     let title: String
-    let systemImage: String
+    /// 화면기획의 CTA는 글자만 있다. 호출부 호환을 위해 남겨두지만 그리지 않는다.
+    var systemImage: String = ""
     var accessibilityIdentifier: String?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Text(title)
                 .font(.subheadline.weight(.heavy))
-                .foregroundStyle(.white)
+                .foregroundStyle(isEnabled ? .white : MoyeoTheme.muted)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(MoyeoTheme.forest)
+                .background(isEnabled ? MoyeoTheme.forest : MoyeoTheme.subtleBackground)
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
                 .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
         }
@@ -335,19 +359,22 @@ struct AuthPrimaryButton: View {
 }
 
 struct AuthSecondaryButton: View {
+    @Environment(\.isEnabled) private var isEnabled
+
     let title: String
-    let systemImage: String
+    /// 화면기획의 CTA는 글자만 있다. 호출부 호환을 위해 남겨두지만 그리지 않는다.
+    var systemImage: String = ""
     var accessibilityIdentifier: String?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Text(title)
                 .font(.subheadline.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.forest)
+                .foregroundStyle(isEnabled ? MoyeoTheme.forest : MoyeoTheme.muted)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(MoyeoTheme.leaf)
+                .background(isEnabled ? MoyeoTheme.leaf : MoyeoTheme.subtleBackground)
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
                 .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
         }

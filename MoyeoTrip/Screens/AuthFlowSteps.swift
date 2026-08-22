@@ -48,31 +48,37 @@ struct AuthOnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 14) {
+            GeometryReader { proxy in
+                VStack(spacing: 0) {
+                    Spacer(minLength: 18)
+
                     AuthOnboardingPageView(page: currentPage)
                         .id(currentPage.id)
                         .accessibilityIdentifier("auth.onboarding.page.\(currentPage.id)")
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    Spacer(minLength: 18)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 24)
+                // 헤더와 CTA의 가로 패딩과 독립된 전체 폭에서 본문을 중앙 정렬한다.
+                // position 기반 보정은 레이아웃 좌표계를 다시 계산해 오른쪽으로 밀렸다.
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
             }
 
-            Button(action: advance) {
-                Label(
-                    currentPage.isLast ? "로그인 시작" : "다음",
-                    systemImage: currentPage.isLast ? "arrow.right.circle.fill" : "chevron.right"
-                )
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(MoyeoTheme.forest)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            VStack(spacing: 14) {
+                AuthOnboardingStepDots(current: index, total: AuthOnboardingPage.pages.count)
+                Button(action: advance) {
+                    // 화면기획의 CTA는 글자만 있다 — 방향 아이콘을 덧붙이지 않는다
+                    Text(currentPage.isLast ? "로그인 시작" : "다음")
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(MoyeoTheme.forest)
+                        .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("auth.onboarding.next")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("auth.onboarding.next")
             .padding(.horizontal, 18)
             .padding(.top, 12)
             .padding(.bottom, 14)
@@ -220,7 +226,7 @@ struct AuthNicknameView: View {
                     .foregroundStyle(viewModel.isLoading ? MoyeoTheme.muted : MoyeoTheme.forest)
                     .frame(maxWidth: .infinity)
                     .frame(height: 46)
-                    .background(viewModel.isLoading ? MoyeoTheme.elevatedCard : MoyeoTheme.background)
+                    .background(viewModel.isLoading ? MoyeoTheme.elevatedCard : MoyeoTheme.card)
                     .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
                     .overlay {
                         RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
@@ -237,13 +243,11 @@ struct AuthNicknameView: View {
         } footer: {
             AuthPrimaryButton(
                 title: "다음",
-                systemImage: "chevron.right",
                 accessibilityIdentifier: "auth.nickname.continue"
             ) {
                 continueAction(viewModel.selectedNickname, viewModel.selectionToken)
             }
             .disabled(!canContinue)
-            .opacity(canContinue ? 1 : 0.44)
         }
     }
 
@@ -256,7 +260,7 @@ struct AuthNicknameView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityIdentifier("auth.nickname.refresh.error")
         } else {
-            Text("마음에 드는 이름이 나올 때까지 새로 받을 수 있어요")
+            Text("마음에 들 때까지 새 후보를 받아보세요")
                 .font(.caption)
                 .foregroundStyle(MoyeoTheme.muted)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -299,17 +303,19 @@ struct AuthCharacterView: View {
                     continueAction()
                 }
                 .disabled(!isComplete)
-                .opacity(isComplete ? 1 : 0.44)
             }
         }
     }
 }
 
 struct AuthBasicsView: View {
+    var nickname: String?
+    var nicknameCandidate: AuthNicknameCandidate?
     @Binding var selectedBirthdate: AuthBirthdate?
     @Binding var selectedGender: AuthGender?
     var isSubmitting = false
     var errorMessage: String?
+    var backAction: (() -> Void)?
     let continueAction: () -> Void
 
     private var canContinue: Bool {
@@ -317,12 +323,16 @@ struct AuthBasicsView: View {
     }
 
     var body: some View {
-        AuthStepContainer(title: "기본 정보", subtitle: "생년월일과 성별만 먼저 알려주세요.") {
+        // 화면기획·웹은 이 단계에서 별도 제목 없이 앞 단계에서 고른 닉네임 카드를 먼저 보여준다.
+        AuthStepContainer {
             VStack(alignment: .leading, spacing: 20) {
-                AuthSectionTitle(title: "생년월일")
-                KoreanBirthdateField(selection: $selectedBirthdate)
+                AuthSelectedNicknameCard(nickname: nickname, candidate: nicknameCandidate)
 
-                AuthSectionTitle(title: "성별")
+                AuthSectionTitle(title: "생년월일", isRequired: true)
+                KoreanBirthdateField(selection: $selectedBirthdate)
+                AuthAgeBandNote(birthdate: selectedBirthdate)
+
+                AuthSectionTitle(title: "성별", isRequired: true)
                 HStack(spacing: 10) {
                     ForEach(AuthGender.allCases) { gender in
                         AuthPillButton(
@@ -340,15 +350,34 @@ struct AuthBasicsView: View {
                 }
             }
         } footer: {
-            AuthPrimaryButton(
-                title: isSubmitting ? "계정을 만들고 있어요..." : "가입하고 프로필 만들기",
-                systemImage: isSubmitting ? "hourglass" : "person.crop.circle.badge.plus",
-                accessibilityIdentifier: "auth.basic.continue"
-            ) {
-                continueAction()
+            // 화면기획은 이전 / 저장하고 프로필 만들기 두 버튼이다
+            HStack(spacing: 10) {
+                if let backAction {
+                    Button(action: backAction) {
+                        Text("이전")
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                            .frame(width: 92)
+                            .frame(height: 52)
+                            .background(MoyeoTheme.card)
+                            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                                    .stroke(MoyeoTheme.line, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("auth.basic.back")
+                }
+
+                AuthPrimaryButton(
+                    title: isSubmitting ? "계정을 만들고 있어요..." : "저장하고 프로필 만들기",
+                    accessibilityIdentifier: "auth.basic.continue"
+                ) {
+                    continueAction()
+                }
+                .disabled(!canContinue || isSubmitting)
             }
-            .disabled(!canContinue || isSubmitting)
-            .opacity(canContinue && !isSubmitting ? 1 : 0.44)
         }
     }
 }
@@ -358,6 +387,7 @@ struct AuthTermsView: View {
     let isSubmitting: Bool
     let errorMessage: String?
     let finishAction: () -> Void
+    @State private var selectedDocument: LegalDocumentKind?
 
     private var canFinish: Bool {
         AuthTerm.requiredTerms.allSatisfy { agreedTerms.contains($0) }
@@ -368,11 +398,12 @@ struct AuthTermsView: View {
     }
 
     var body: some View {
-        AuthStepContainer(title: "약관 동의", subtitle: "서비스 이용에 필요한 항목만 먼저 확인해요.") {
-            VStack(spacing: 12) {
+        AuthStepContainer(title: "약관 동의", subtitle: "모여트립 이용을 위해 동의가 필요해요") {
+            VStack(spacing: 0) {
                 AuthTermButton(
                     title: "모두 동의",
                     subtitle: "선택 항목까지 한 번에 동의",
+                    showsRequirement: false,
                     accessibilityIdentifier: "auth.terms.allAgree",
                     isSelected: didAgreeAll
                 ) {
@@ -385,6 +416,9 @@ struct AuthTermsView: View {
                         subtitle: term.subtitle,
                         isRequired: term.isRequired,
                         accessibilityIdentifier: term.accessibilityIdentifier,
+                        detailAction: term.legalDocument.map { document in
+                            { selectedDocument = document }
+                        },
                         isSelected: agreedTerms.contains(term)
                     ) {
                         toggle(term)
@@ -397,14 +431,21 @@ struct AuthTermsView: View {
             }
         } footer: {
             AuthPrimaryButton(
-                title: isSubmitting ? "계정을 만들고 있어요..." : "동의하고 프로필 만들기",
-                systemImage: isSubmitting ? "hourglass" : "person.crop.circle.badge.plus",
+                title: isSubmitting ? "계정을 만들고 있어요..." : "동의하고 시작",
                 accessibilityIdentifier: "auth.terms.finish"
             ) {
                 finishAction()
             }
             .disabled(!canFinish || isSubmitting)
-            .opacity(canFinish && !isSubmitting ? 1 : 0.44)
+        }
+        .fullScreenCover(item: $selectedDocument) { document in
+            NavigationStack {
+                LegalDocumentDetailView(kind: document, entry: .signup) {
+                    if let term = AuthTerm(document: document) {
+                        agreedTerms.insert(term)
+                    }
+                }
+            }
         }
     }
 
@@ -413,61 +454,6 @@ struct AuthTermsView: View {
             agreedTerms.remove(term)
         } else {
             agreedTerms.insert(term)
-        }
-    }
-}
-
-private struct AuthOnboardingPageView: View {
-    let page: AuthOnboardingPage
-
-    var body: some View {
-        VStack(spacing: 14) {
-            VStack(spacing: 16) {
-                Image(page.imageName)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 220, height: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .accessibilityIdentifier("auth-onboarding-illustration-\(page.id + 1)")
-                    .accessibilityHidden(true)
-
-                VStack(spacing: 6) {
-                    Text(page.title)
-                        .font(.title2.weight(.heavy))
-                        .foregroundStyle(MoyeoTheme.ink)
-                        .multilineTextAlignment(.center)
-                    Text(page.subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(MoyeoTheme.muted)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(MoyeoTheme.line, lineWidth: 1)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("\(page.id + 1)/\(AuthOnboardingPage.pages.count)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.coral)
-                Text(page.body)
-                    .font(.subheadline)
-                    .foregroundStyle(MoyeoTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                    .stroke(MoyeoTheme.line, lineWidth: 1)
-            }
         }
     }
 }

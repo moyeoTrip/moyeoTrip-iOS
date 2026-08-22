@@ -110,7 +110,17 @@ extension TripRecruitment {
                     isMine: false
                 )
             ],
-            isReadOnly: false
+            isReadOnly: false,
+            tripID: id,
+            routeSummary: itinerary,
+            courseSource: courseSource,
+            isCurrentUserHost: true,
+            courseName: MockData.course(for: courseID)?.title ?? courseID,
+            price: price,
+            recruitmentDeadline: recruitmentDeadline,
+            ageRange: ageRangeText,
+            genderRestriction: genderRestriction,
+            scheduleSummary: schedule
         )
     }
 
@@ -144,6 +154,9 @@ extension TripRecruitment {
             scheduleDetails: scheduleDetails,
             meetingDetails: meetingDetails,
             recruitmentDeadline: recruitmentDeadline,
+            minimumAge: minimumAge,
+            maximumAge: maximumAge,
+            genderRestriction: genderRestriction,
             routeEditState: status == .confirmed ? .tripConfirmed : routeEditState,
             notices: notices,
             applicationState: applicationState
@@ -200,7 +213,18 @@ extension ChatThread {
             isReadOnly: isReadOnly,
             closureReason: closureReason,
             archiveNotice: archiveNotice,
-            archiveStatus: archiveStatus
+            archiveStatus: archiveStatus,
+            tripID: tripID,
+            pinnedNotices: pinnedNotices,
+            routeSummary: routeSummary,
+            courseSource: courseSource,
+            isCurrentUserHost: isCurrentUserHost,
+            courseName: courseName,
+            price: trip.price,
+            recruitmentDeadline: trip.recruitmentDeadline,
+            ageRange: trip.ageRangeText,
+            genderRestriction: trip.genderRestriction,
+            scheduleSummary: trip.schedule
         )
     }
 
@@ -229,7 +253,18 @@ extension ChatThread {
             isReadOnly: isReadOnly,
             closureReason: closureReason,
             archiveNotice: archiveNotice,
-            archiveStatus: archiveStatus
+            archiveStatus: archiveStatus,
+            tripID: tripID,
+            pinnedNotices: pinnedNotices,
+            routeSummary: routeSummary,
+            courseSource: courseSource,
+            isCurrentUserHost: isCurrentUserHost,
+            courseName: courseName,
+            price: price,
+            recruitmentDeadline: recruitmentDeadline,
+            ageRange: ageRange,
+            genderRestriction: genderRestriction,
+            scheduleSummary: scheduleSummary
         )
     }
 }

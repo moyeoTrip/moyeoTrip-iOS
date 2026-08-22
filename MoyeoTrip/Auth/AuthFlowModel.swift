@@ -240,6 +240,7 @@ final class AuthFlowViewModel: ObservableObject {
                     fcmToken: fcmToken
                 )
             )
+            dependencies.fcmTokenProvider.markRegisteredWithBackend(fcmToken)
             try dependencies.sessionStore.save(response.tokens)
             tokens = response.tokens
             switch response.signupState {
@@ -333,6 +334,7 @@ final class AuthFlowViewModel: ObservableObject {
         let response = try await dependencies.apiClient.login(
             request: AuthLoginRequest(idToken: idToken, fcmToken: fcmToken)
         )
+        dependencies.fcmTokenProvider.markRegisteredWithBackend(fcmToken)
         self.provider = response.providerType
         self.idToken = idToken
 

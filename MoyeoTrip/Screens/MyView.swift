@@ -79,7 +79,7 @@ struct MyView: View {
       }
 
       ScrollView {
-        VStack(spacing: 11) {
+        VStack(spacing: 10) {
           NavigationLink(value: MyRoute.profile) {
             MyProfileSummaryCard(profile: profile)
           }
@@ -113,6 +113,7 @@ struct MyView: View {
               openCoursePublish: { path.append(SupportRoute.coursePublish) }
             )
           }
+          .padding(.top, 8)
 
           MyHubMenuPanel { route in
             path.append(route)
@@ -184,7 +185,7 @@ private struct MyHeader: View {
       .buttonStyle(.plain)
       .accessibilityIdentifier("my.settings")
     }
-    .frame(height: 48)
+    .frame(height: 56)
     .padding(.horizontal, 18)
     .background(MoyeoTheme.background)
   }
@@ -217,6 +218,7 @@ private struct MyProfileSummaryCard: View {
         .foregroundStyle(MoyeoTheme.text400)
     }
     .padding(12)
+    .frame(minHeight: 94)
     .background(MoyeoTheme.card)
     .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
     .overlay {
@@ -521,7 +523,7 @@ private struct ProfileEditView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      CompactDetailHeader(title: "내 정보 수정") {
+      CompactDetailHeader(title: "프로필 수정") {
         Button {
           saveMessage = "프로필 변경사항이 저장됐어요."
         } label: {
@@ -535,75 +537,83 @@ private struct ProfileEditView: View {
         .accessibilityIdentifier("profile.edit.save")
       }
 
+      // 화면기획 구조: 중앙 아바타(고정 배지) → 공개 프로필 그룹 → 비공개 정보 그룹.
+      // 항목마다 카드를 두면 무엇이 공개/비공개인지 묶음이 읽히지 않는다.
       ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          HStack(spacing: 14) {
-            AuthenticatedProfileAvatar(profile: profile, size: 66)
-            VStack(alignment: .leading, spacing: 5) {
-              Text(profile.handle)
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-              Text("대표 캐릭터와 소개는 여행 친구에게 먼저 보여요.")
-                .font(.caption.weight(.semibold))
+        VStack(spacing: 0) {
+          VStack(spacing: 10) {
+            ZStack(alignment: .bottomTrailing) {
+              AuthenticatedProfileAvatar(profile: profile, size: 96)
+              Image(systemName: "lock.fill")
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(MoyeoTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 26, height: 26)
+                .background(MoyeoTheme.subtleBackground)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(MoyeoTheme.line))
             }
-          }
-          .padding(18)
-          .background(MoyeoTheme.card)
-          .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-              .stroke(MoyeoTheme.softLine, lineWidth: 1)
-          }
-
-          ProfileEditFieldCard(title: "닉네임") {
-            TextField("닉네임", text: $displayName)
-              .textInputAutocapitalization(.never)
-              .disabled(true)
-              .padding(13)
-              .background(MoyeoTheme.subtleBackground)
-              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-              .accessibilityIdentifier("profile.edit.name")
-            Text("닉네임 변경 API가 아직 제공되지 않아요.")
+            Text(profile.name)
+              .font(.title3.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.ink)
+            Text("한 번 정한 친구는 바꿀 수 없어요")
               .font(.caption)
               .foregroundStyle(MoyeoTheme.muted)
           }
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 24)
 
-          ProfileEditFieldCard(title: "한 줄 소개") {
-            TextField("여행 스타일을 적어주세요", text: $bio, axis: .vertical)
-              .lineLimit(2...4)
-              .padding(13)
-              .background(MoyeoTheme.subtleBackground)
-              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-              .accessibilityIdentifier("profile.edit.bio")
-          }
-
-          ProfileEditFieldCard(title: "선호 지역") {
-            ProfileEditChipGrid(items: regionOptions, selectedItems: $selectedRegions)
-          }
-
-          ProfileEditFieldCard(title: "여행 취향") {
-            HStack(spacing: 8) {
-              ForEach(paceOptions, id: \.self) { option in
+          ProfileEditGroupHeader("공개 프로필")
+          ProfileEditListRow(label: "자기소개", value: bio, showsChevron: true)
+          ProfileEditListRow(label: "여행 스타일", value: selectedPace, showsChevron: true)
+          VStack(alignment: .leading, spacing: 10) {
+            Text("관심 지역").font(.subheadline.weight(.bold)).foregroundStyle(MoyeoTheme.ink)
+            HStack(spacing: 6) {
+              ForEach(regionOptions.prefix(4), id: \.self) { region in
+                let on = selectedRegions.contains(region)
                 Button {
-                  selectedPace = option
+                  if on { selectedRegions.remove(region) } else { selectedRegions.insert(region) }
                 } label: {
-                  Text(option)
+                  Text(region)
                     .font(.caption.weight(.heavy))
-                    .foregroundStyle(selectedPace == option ? .white : MoyeoTheme.forest)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(selectedPace == option ? MoyeoTheme.forest : MoyeoTheme.leaf)
+                    .foregroundStyle(on ? .white : MoyeoTheme.ink)
+                    .padding(.horizontal, 11)
+                    .frame(height: 28)
+                    .background(on ? MoyeoTheme.forest : MoyeoTheme.card)
+                    .overlay(Capsule().stroke(on ? MoyeoTheme.forest : MoyeoTheme.line))
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
               }
+              Text("+ 추가")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.muted)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .background(MoyeoTheme.subtleBackground)
+                .overlay(Capsule().stroke(MoyeoTheme.line))
+                .clipShape(Capsule())
+              Spacer(minLength: 0)
             }
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 20)
+          .padding(.vertical, 14)
+
+          ProfileEditGroupHeader("비공개 정보")
+          // 닉네임과 캐릭터는 선택 후 바꿀 수 없다 — 잠금 표시로 알린다
+          ProfileEditListRow(label: "닉네임", value: displayName, locked: true)
+          ProfileEditListRow(label: "캐릭터", value: "고정됨", locked: true)
+          ProfileEditListRow(label: "생년월일", value: "1998.04.12", showsChevron: true)
+          ProfileEditListRow(label: "성별", value: "여성", showsChevron: true)
+
+          Text("비공개 정보는 다른 여행자에게 보이지 않아요.")
+            .font(.caption2)
+            .foregroundStyle(MoyeoTheme.text400)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
         }
-        .padding(18)
-        .padding(.bottom, 48)
+        .padding(.bottom, 40)
       }
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
@@ -835,19 +845,56 @@ private struct PublicProfileView: View {
       }
 
       ScrollView {
-        VStack(spacing: 18) {
-          ProfileHeader(profile: profile)
+        VStack(spacing: 14) {
+          // 커버 위에 아바타가 걸치는 공개 프로필 헤더 (화면기획)
+          VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+              MoyeoTheme.mapGreen.frame(height: 132)
+              AuthenticatedProfileAvatar(profile: profile, size: 74)
+                .padding(6)
+                .background(MoyeoTheme.leaf)
+                .clipShape(Circle())
+                .offset(y: 38)
+            }
+            Spacer().frame(height: 46)
+            Text(profile.name)
+              .font(.title3.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.ink)
+            HStack(spacing: 4) {
+              Text("매너 점수 4.7점")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(MoyeoTheme.muted)
+              Image(systemName: "star")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MoyeoTheme.muted)
+            }
+            .padding(.top, 4)
+          }
+
           StatGrid(profile: profile)
+            .padding(.horizontal, 18)
+
+          VStack(alignment: .leading, spacing: 6) {
+            Text("소개").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+            Text(profile.oneLineBio)
+              .font(.subheadline)
+              .foregroundStyle(MoyeoTheme.muted)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(14)
+          .background(MoyeoTheme.card)
+          .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+              .stroke(MoyeoTheme.softLine, lineWidth: 1)
+          }
+          .padding(.horizontal, 18)
+
           ProfileMenuPanel { destination in
             selectedDestination = destination
           }
-          ProfileTagPanel(profile: profile)
-          DogamPanel {
-            selectedDestination = .friendDex
-          }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 20)
         .padding(.bottom, 32)
       }
     }
@@ -859,8 +906,10 @@ private struct PublicProfileView: View {
         ProfileEditView(profile: profile)
       case .settings:
         SettingsView(onAuthenticationRequired: onAuthenticationRequired)
-      case .friendDex:
-        FriendDexView()
+      case .friends:
+        FriendsManagementView()
+      case .blocked:
+        BlockedUsersView()
       }
     }
     .accessibilityIdentifier("screen.profile")
@@ -870,7 +919,8 @@ private struct PublicProfileView: View {
 private enum ProfileDestination: String, Identifiable {
   case edit
   case settings
-  case friendDex
+  case friends
+  case blocked
 
   var id: String { rawValue }
 }
@@ -889,10 +939,18 @@ private struct ProfileMenuPanel: View {
       )
       Divider().padding(.leading, 14)
       ProfileMenuButton(
-        title: "친구 도감",
-        subtitle: "함께 다녀온 친구를 모아봐요",
-        destination: .friendDex,
-        identifier: "profile.menu.friendDex",
+        title: "친구 관리",
+        subtitle: "함께 다녀온 친구와 신청을 관리해요",
+        destination: .friends,
+        identifier: "profile.menu.friends",
+        onSelect: onSelect
+      )
+      Divider().padding(.leading, 14)
+      ProfileMenuButton(
+        title: "차단한 사용자",
+        subtitle: "차단을 해제하면 다시 만날 수 있어요",
+        destination: .blocked,
+        identifier: "profile.menu.blocked",
         onSelect: onSelect
       )
     }
@@ -1316,13 +1374,14 @@ private struct SettingsView: View {
         ScrollView {
           VStack(spacing: 16) {
             SettingsSectionGroup("알림") {
-              SettingsValueRow(action: .notificationDetail) { _ in
-                supportRoute = .notificationDetail
-              }
+              // 세부 설정은 토글 다음에 온다 (화면기획·웹·안드로이드와 같은 순서)
               SettingsToggleRow(title: "채팅 메시지", subtitle: nil, isOn: $chatEnabled)
               SettingsToggleRow(title: "모집 마감 임박", subtitle: "D-3부터 알려드려요", isOn: $deadlineEnabled)
               SettingsToggleRow(title: "친구 신청·피드 반응", subtitle: nil, isOn: $friendEnabled)
               SettingsToggleRow(title: "마케팅 알림", subtitle: "이벤트·새 코스 소개", isOn: $marketingEnabled)
+              SettingsValueRow(action: .notificationDetail) { _ in
+                supportRoute = .notificationDetail
+              }
             }
 
             SettingsSectionGroup("화면") {
@@ -1338,8 +1397,12 @@ private struct SettingsView: View {
               SettingsValueRow(action: .blockedUsers) { _ in
                 supportRoute = .blockedUsers
               }
-              SettingsValueRow(action: .privacyPolicy) { selectedAction = $0 }
-              SettingsValueRow(action: .terms) { selectedAction = $0 }
+              SettingsValueRow(action: .privacyPolicy) { _ in
+                supportRoute = .legalDocument(.privacy)
+              }
+              SettingsValueRow(action: .terms) { _ in
+                supportRoute = .legalDocument(.service)
+              }
             }
 
             SettingsSectionGroup("정보") {
@@ -2063,22 +2126,22 @@ private struct MyActiveTripCard: View {
         .padding(.top, 1)
       }
     }
-    .padding(10)
+    .padding(12)
     .frame(height: MyTravelCardMetrics.activeHeight)
     .moyeoListCard()
   }
 }
 
 private enum MyTravelCardMetrics {
-  static let activeHeight: CGFloat = 120
-  static let summaryHeight: CGFloat = 112
-  static let thumbWidth: CGFloat = 78
-  static let thumbHeight: CGFloat = 68
-  static let thumbRadius: CGFloat = 8
-  static let gap: CGFloat = 10
-  static let titleFont = MoyeoTypography.cardTitle
-  static let subtitleFont = MoyeoTypography.cardBody
-  static let metaFont = MoyeoTypography.cardMeta
+  static let activeHeight: CGFloat = 144
+  static let summaryHeight: CGFloat = 136
+  static let thumbWidth: CGFloat = 96
+  static let thumbHeight: CGFloat = 86
+  static let thumbRadius: CGFloat = 9
+  static let gap: CGFloat = 14
+  static let titleFont = MoyeoTypography.font(size: 15, weight: .bold, relativeTo: .headline)
+  static let subtitleFont = MoyeoTypography.font(size: 12.5, relativeTo: .subheadline)
+  static let metaFont = MoyeoTypography.font(size: 11.5, weight: .bold, relativeTo: .caption)
 }
 
 private struct PastTrip: Identifiable {
@@ -2173,7 +2236,7 @@ private struct MyTravelSummaryCard: View {
       Pill(text: badge, tint: MoyeoTheme.forest)
         .accessibilityIdentifier("\(identifierPrefix).badge")
     }
-    .padding(10)
+    .padding(12)
     .frame(height: MyTravelCardMetrics.summaryHeight)
     .moyeoListCard()
   }
@@ -2204,11 +2267,14 @@ extension TripRecruitment {
   }
 
   fileprivate var ddayText: String {
+    // 마감 D-day는 4개 플랫폼 공통 값이다 (docs/alignment/MOCKDATA-CANON.md)
     switch id {
     case "trip-cheongsong-juwangsan":
-      return "D-2"
+      return "D-3"
     case "trip-andong-hahoe":
       return "D-5"
+    case "trip-gyeongju-night":
+      return "D-3"
     default:
       return "D-1"
     }
@@ -2464,5 +2530,49 @@ private struct ProfileTagPanel: View {
       }
     }
     .moyeoCard()
+  }
+}
+
+/// 프로필 수정의 그룹 제목. 공개/비공개 묶음을 구분한다.
+private struct ProfileEditGroupHeader: View {
+  let title: String
+
+  init(_ title: String) { self.title = title }
+
+  var body: some View {
+    Text(title)
+      .font(.caption.weight(.bold))
+      .foregroundStyle(MoyeoTheme.muted)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 10)
+      .background(MoyeoTheme.subtleBackground)
+  }
+}
+
+/// 라벨 좌측 · 값 우측의 한 줄 행. 카드로 감싸지 않는다 (화면기획).
+private struct ProfileEditListRow: View {
+  let label: String
+  let value: String
+  var showsChevron = false
+  var locked = false
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 8) {
+        Text(label).font(.subheadline.weight(.bold)).foregroundStyle(MoyeoTheme.ink)
+        Spacer(minLength: 8)
+        Text(value)
+          .font(.subheadline.weight(locked ? .regular : .bold))
+          .foregroundStyle(locked ? MoyeoTheme.muted : MoyeoTheme.ink)
+          .lineLimit(1)
+        Image(systemName: locked ? "checkmark" : "chevron.right")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MoyeoTheme.text400)
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
+      Divider().overlay(MoyeoTheme.softLine)
+    }
   }
 }

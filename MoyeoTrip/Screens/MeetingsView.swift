@@ -5,9 +5,9 @@
 
 import SwiftUI
 
-private enum MeetingSegment: String, CaseIterable, Hashable {
+enum MeetingSegment: String, CaseIterable, Hashable {
   case ongoing = "진행중"
-  case applied = "신청"
+  case applied = "신청중"
   case confirmed = "확정"
   case ended = "종료"
 }
@@ -15,7 +15,17 @@ private enum MeetingSegment: String, CaseIterable, Hashable {
 struct MeetingsView: View {
   @Binding var chatThreads: [ChatThread]
   var tripContext = TripInteractionContext()
-  @State private var segment: MeetingSegment = .ongoing
+  @State private var segment: MeetingSegment
+
+  init(
+    chatThreads: Binding<[ChatThread]>,
+    tripContext: TripInteractionContext = TripInteractionContext(),
+    initialSegment: MeetingSegment = .ongoing
+  ) {
+    _chatThreads = chatThreads
+    self.tripContext = tripContext
+    _segment = State(initialValue: initialSegment)
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -157,7 +167,7 @@ private struct MeetingSegmentTabs: View {
               .frame(height: 2)
           }
           .frame(maxWidth: .infinity)
-          .frame(height: 36)
+          .frame(height: 48)
           .contentShape(Rectangle())
           .accessibilityElement(children: .ignore)
           .accessibilityLabel("\(item.rawValue), \(count)")
@@ -194,43 +204,116 @@ private struct AppliedTripList: View {
   let context: TripInteractionContext
 
   var body: some View {
-    LazyVStack(spacing: 10) {
+    LazyVStack(alignment: .leading, spacing: 0) {
       ForEach(Array(trips.enumerated()), id: \.element.id) { index, trip in
-        VStack(alignment: .leading, spacing: 10) {
-          HStack {
-            Pill(
-              text: index == 0 ? "승인 대기" : "대기 \(index + 2)번",
-              tint: index == 0 ? MoyeoTheme.sunrise : MoyeoTheme.river)
-            Spacer()
-            Text(trip.region).font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted)
-          }
-          Text(trip.title).font(MoyeoTypography.cardTitle).foregroundStyle(MoyeoTheme.ink)
-          Text("승인 전에는 채팅방에 들어갈 수 없어요.")
-            .font(.caption).foregroundStyle(MoyeoTheme.muted)
-          HStack(spacing: 10) {
-            NavigationLink(value: trip) {
-              AppliedTripActionLabel(title: "상세 보기")
-            }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("meeting.applied.detail.\(trip.id)")
+        let waiting = index == 0
+        let tint = waiting ? MoyeoTheme.warningBackground : MoyeoTheme.leaf
+        let tintText = waiting ? MoyeoTheme.warningText : MoyeoTheme.onLeaf
 
-            Button {
-              context.onCancelApplication(trip)
-            } label: {
-              AppliedTripActionLabel(title: "신청 취소")
+        VStack(alignment: .leading, spacing: 0) {
+          if index == 0 || index == 1 {
+            AppliedSectionHeader(title: waiting ? "호스트 승인을 기다리는 중" : "대기열에 있는 모임")
+          }
+
+          HStack(alignment: .top, spacing: 12) {
+            if let course = MockData.course(for: trip.courseID) {
+              MoyeoPhotoTile(
+                mascot: course.mascot,
+                mood: course.mood,
+                height: 56,
+                cornerRadius: 16
+              )
+              .frame(width: 56)
             }
-              .buttonStyle(.bordered)
-              .tint(MoyeoTheme.coral)
-              .accessibilityIdentifier("meeting.applied.cancel.\(trip.id)")
+
+            VStack(alignment: .leading, spacing: 0) {
+              HStack(spacing: 6) {
+                Text(trip.title)
+                  .font(MoyeoTypography.font(size: 14, weight: .bold, relativeTo: .headline))
+                  .foregroundStyle(MoyeoTheme.ink)
+                  .lineLimit(1)
+                Text(waiting ? "승인 대기" : "대기열 \(index + 1)번")
+                  .font(MoyeoTypography.font(size: 11, weight: .bold, relativeTo: .caption))
+                  .foregroundStyle(tintText)
+                  .padding(.horizontal, 9)
+                  .frame(height: 22)
+                  .background(tint)
+                  .clipShape(Capsule())
+              }
+
+              Text(trip.schedule)
+                .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
+                .foregroundStyle(MoyeoTheme.text400)
+                .padding(.top, 4)
+              Text(trip.meetupPoint)
+                .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
+                .foregroundStyle(MoyeoTheme.text400)
+                .padding(.top, 2)
+
+              Text(
+                waiting
+                  ? "호스트가 확인하면 참여 여부가 정해져요. 보통 24시간 이내에 응답해요."
+                  : "정원이 차서 대기 중이에요. 자리가 나면 순서대로 자동 합류돼요."
+              )
+              .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
+              .foregroundStyle(tintText)
+              .fixedSize(horizontal: false, vertical: true)
+              .padding(.horizontal, 11)
+              .padding(.vertical, 9)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .background(tint)
+              .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+              .padding(.top, 8)
+
+              HStack(spacing: 8) {
+                Button {
+                  context.onCancelApplication(trip)
+                } label: {
+                  AppliedTripActionLabel(title: "신청 취소")
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("meeting.applied.cancel.\(trip.id)")
+
+                NavigationLink(value: trip) {
+                  AppliedTripActionLabel(title: "모집 상세")
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("meeting.applied.detail.\(trip.id)")
+              }
+              .padding(.top, 10)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
-        .padding(15)
-        .background(MoyeoTheme.card)
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.softLine))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .padding(.vertical, 16)
+        .overlay(alignment: .bottom) {
+          Rectangle()
+            .fill(MoyeoTheme.softLine)
+            .frame(height: 1)
+        }
         .accessibilityIdentifier("meeting.applied.\(trip.id)")
       }
+
+      Text("신청 상태에서는 아직 채팅방에 들어갈 수 없어요. 승인되거나 자리가 나면 알림으로 알려드릴게요.")
+        .font(.caption2)
+        .foregroundStyle(MoyeoTheme.text400)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 4)
+        .accessibilityIdentifier("meeting.applied.footnote")
     }
+  }
+}
+
+/// 신청중 탭의 섹션 머리말
+private struct AppliedSectionHeader: View {
+  let title: String
+
+  var body: some View {
+    Text(title)
+      .font(.caption.weight(.bold))
+      .foregroundStyle(MoyeoTheme.muted)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 6)
   }
 }
 
@@ -239,9 +322,16 @@ private struct AppliedTripActionLabel: View {
 
   var body: some View {
     Text(title)
-      .font(MoyeoTypography.tab)
-      .frame(maxWidth: .infinity)
-      .frame(height: 42)
+      .font(MoyeoTypography.font(size: 12, weight: .semibold, relativeTo: .caption))
+      .foregroundStyle(MoyeoTheme.text700)
+      .padding(.horizontal, 12)
+      .frame(height: 34)
+      .background(.clear)
+      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(MoyeoTheme.softLine, lineWidth: 1)
+      }
       .contentShape(Rectangle())
   }
 }

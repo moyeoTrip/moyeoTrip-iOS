@@ -46,43 +46,50 @@ struct HomeView: View {
                                 HomeHeroCard(content: WeatherHeroPolicy.content(for: weatherCondition))
                             }
 
-                            VStack(spacing: 12) {
-                                HStack {
-                                    Text("지금 떠나기 좋은 코스")
-                                        .font(MoyeoTypography.sectionTitle)
-                                        .foregroundStyle(MoyeoTheme.ink)
-                                    Spacer()
-                                    Button {
-                                        onOpenCourseList()
-                                    } label: {
-                                        Text("더보기 ›")
-                                            .font(MoyeoTypography.cardMeta)
-                                            .foregroundStyle(MoyeoTheme.muted)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityIdentifier("home.moreCourses")
-                                }
-                                .padding(.horizontal, 18)
-
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 14) {
-                                        ForEach(Array(recommendedCourses.enumerated()), id: \.element.id) { index, course in
-                                            NavigationLink(value: course) {
-                                                CourseCard(course: course, showsStatus: index == 0)
-                                                    .frame(width: 136)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .accessibilityIdentifier("course.card.\(course.id)")
+                            // 실시간 추천과 인기 순위는 네트워크 없이 만들 수 없다.
+                            // 오프라인에서는 저장해둔 코스만 보여준다 (화면기획).
+                            if isOffline {
+                                OfflineSavedCourseSection()
+                                    .id("home.middle")
+                            } else {
+                                VStack(spacing: 12) {
+                                    HStack {
+                                        Text("지금 떠나기 좋은 코스")
+                                            .font(MoyeoTypography.sectionTitle)
+                                            .foregroundStyle(MoyeoTheme.ink)
+                                        Spacer()
+                                        Button {
+                                            onOpenCourseList()
+                                        } label: {
+                                            Text("더보기 ›")
+                                                .font(MoyeoTypography.cardMeta)
+                                                .foregroundStyle(MoyeoTheme.muted)
                                         }
+                                        .buttonStyle(.plain)
+                                        .accessibilityIdentifier("home.moreCourses")
                                     }
                                     .padding(.horizontal, 18)
-                                    .padding(.bottom, 3)
-                                }
-                            }
-                            .id("home.middle")
 
-                            PopularCourseRanking()
-                                .padding(.horizontal, 18)
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 14) {
+                                            ForEach(Array(recommendedCourses.enumerated()), id: \.element.id) { index, course in
+                                                NavigationLink(value: course) {
+                                                    CourseCard(course: course, showsStatus: index == 0)
+                                                        .frame(width: 136)
+                                                }
+                                                .buttonStyle(.plain)
+                                                .accessibilityIdentifier("course.card.\(course.id)")
+                                            }
+                                        }
+                                        .padding(.horizontal, 18)
+                                        .padding(.bottom, 3)
+                                    }
+                                }
+                                .id("home.middle")
+
+                                PopularCourseRanking()
+                                    .padding(.horizontal, 18)
+                            }
 
                             Color.clear
                                 .frame(height: bottomScrollClearance)
@@ -282,7 +289,8 @@ private struct WeatherHeroImage: View {
             Image(content.imageAssetName)
                 .resizable()
                 .scaledToFill()
-                .frame(height: 130)
+                // 화면기획·웹과 같은 높이(144)와 아래쪽 기준 크롭 — 가운데로 자르면 첨성대가 잘려 나간다.
+                .frame(height: 144, alignment: .bottom)
                 .clipped()
                 .accessibilityIdentifier("home.weatherHero.image.\(content.imageAssetName)")
                 .accessibilityLabel("\(content.label) 날씨 \(content.place) 이미지")
@@ -386,6 +394,12 @@ struct TripRecruitmentCard: View {
                         .font(.headline)
                         .foregroundStyle(MoyeoTheme.ink)
                         .lineLimit(2)
+                    if let course = MockData.course(for: trip.courseID) {
+                        Label(course.title, systemImage: "map.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.text400)
+                            .lineLimit(1)
+                    }
                     Text(trip.summary)
                         .font(.subheadline)
                         .foregroundStyle(MoyeoTheme.muted)

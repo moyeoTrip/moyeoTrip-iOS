@@ -96,6 +96,13 @@ struct ItineraryStop: Identifiable, Hashable {
     var longitude: Double?
 }
 
+struct CoursePublishingInfo: Hashable {
+    let travelerName: String
+    let travelerAvatar: String
+    let publishedAt: String
+    let tripCount: Int
+}
+
 enum RecruitmentApplicationState: Hashable {
     case none
     case approvalPending
@@ -130,6 +137,7 @@ struct TravelCourse: Identifiable, Hashable {
     let stops: [String]
     var source: CourseSource = .linked
     var itinerary: [ItineraryStop] = []
+    var publishingInfo: CoursePublishingInfo?
 
     var status: CourseStatus {
         switch parsedDistance {
@@ -177,6 +185,9 @@ struct TripRecruitment: Identifiable, Hashable {
     var scheduleDetails: TripScheduleDetails?
     var meetingDetails: MeetingPointDetails?
     var recruitmentDeadline: String = ""
+    var minimumAge: Int = 25
+    var maximumAge: Int = 35
+    var genderRestriction: String = "성별 무관"
     var routeEditState: RouteEditState = .linkedLocked
     var notices: [TripNotice] = []
     var applicationState: RecruitmentApplicationState = .none
@@ -222,6 +233,10 @@ struct TripRecruitment: Identifiable, Hashable {
     var applicationActionTitle: String {
         status == .cancelled ? "모집 종료" : (canJoin ? "신청하기" : "대기 신청")
     }
+
+    var ageRangeText: String {
+        "\(minimumAge)~\(maximumAge)세"
+    }
 }
 
 struct Participant: Identifiable, Hashable {
@@ -264,6 +279,12 @@ struct ChatThread: Identifiable, Hashable {
     var routeSummary: [ItineraryStop] = []
     var courseSource: CourseSource = .linked
     var isCurrentUserHost: Bool = false
+    var courseName: String = ""
+    var price: String = ""
+    var recruitmentDeadline: String = ""
+    var ageRange: String = ""
+    var genderRestriction: String = ""
+    var scheduleSummary: String = ""
 }
 
 struct ChatMessage: Identifiable, Hashable {
@@ -301,7 +322,8 @@ struct FeedPost: Identifiable, Hashable {
     var detailBody: String?
     var distanceText: String = "12.4km"
     var durationText: String = "4시간 30분"
-    var visitCountText: String = "5곳"
+    // 대표 피드의 경로는 주왕산 · 용연폭포 · 주산지 3곳이다 (4개 플랫폼 공통)
+    var visitCountText: String = "3곳"
     var photoCountText: String = "1/10"
 }
 

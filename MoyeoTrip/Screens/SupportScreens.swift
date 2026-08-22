@@ -3,6 +3,10 @@ import SwiftUI
 
 enum SupportRoute: Hashable, Identifiable {
   case authFlow
+  case authPreview(AuthDirectScreen)
+  case authTerms
+  case applicationSheet
+  case leaveConfirmation(String)
   case notifications
   case createRecruitment(String)
   case hostManage(String)
@@ -10,7 +14,12 @@ enum SupportRoute: Hashable, Identifiable {
   case customCourse
   case createSchedule
   case createMeeting
+  case createPeople
+  case createDetail
   case createSummary
+  case createSummaryCustom
+  case placeSearch
+  case placeDetail(String)
   case courseEdit(String, RouteEditState)
   case noticeHistory(String)
   case tripConfirmed(String)
@@ -25,14 +34,25 @@ enum SupportRoute: Hashable, Identifiable {
   case tripDay(String)
   case notificationDetail
   case accountDelete
+  case componentStates
   case systemMaintenance
   case systemError
   case feedComments(String)
+  case legalDocument(LegalDocumentKind)
+  case signupLegalDocument(LegalDocumentKind)
 
   var id: String {
     switch self {
     case .authFlow:
       return "authFlow"
+    case .authPreview(let screen):
+      return "authPreview.\(screen.rawValue)"
+    case .authTerms:
+      return "authTerms"
+    case .applicationSheet:
+      return "applicationSheet"
+    case .leaveConfirmation(let threadID):
+      return "leaveConfirmation.\(threadID)"
     case .notifications:
       return "notifications"
     case .createRecruitment(let courseID):
@@ -47,8 +67,18 @@ enum SupportRoute: Hashable, Identifiable {
       return "createSchedule"
     case .createMeeting:
       return "createMeeting"
+    case .createPeople:
+      return "createPeople"
+    case .createDetail:
+      return "createDetail"
     case .createSummary:
       return "createSummary"
+    case .createSummaryCustom:
+      return "createSummaryCustom"
+    case .placeSearch:
+      return "placeSearch"
+    case .placeDetail(let placeID):
+      return "placeDetail.\(placeID)"
     case .courseEdit(let tripID, let state):
       return "courseEdit.\(tripID).\(state.rawValue)"
     case .noticeHistory(let threadID):
@@ -66,9 +96,12 @@ enum SupportRoute: Hashable, Identifiable {
     case .tripDay(let threadID): return "tripDay.\(threadID)"
     case .notificationDetail: return "notificationDetail"
     case .accountDelete: return "accountDelete"
+    case .componentStates: return "componentStates"
     case .systemMaintenance: return "systemMaintenance"
     case .systemError: return "systemError"
     case .feedComments(let postID): return "feedComments.\(postID)"
+    case .legalDocument(let document): return "legalDocument.\(document.rawValue)"
+    case .signupLegalDocument(let document): return "signupLegalDocument.\(document.rawValue)"
     }
   }
 }
@@ -94,6 +127,14 @@ struct SupportDestinationView: View {
     switch route {
     case .authFlow:
       AuthFlowView(onComplete: onAuthCompleted)
+    case .authPreview(let screen):
+      AuthFlowView(directScreen: screen, onComplete: onAuthCompleted)
+    case .authTerms:
+      AuthTermsDirectLaunchView()
+    case .applicationSheet:
+      ApplicationSheetDirectLaunchView()
+    case .leaveConfirmation:
+      HostLeaveConfirmationPreview()
     case .notifications:
       NotificationCenterView(tripContext: tripContext, feedPosts: $feedPosts)
     case .createRecruitment(let courseID):
@@ -122,11 +163,24 @@ struct SupportDestinationView: View {
     case .customCourse:
       CustomCourseEditorView()
     case .createSchedule:
-      RecruitmentScheduleView(draft: .constant(.preview))
+      RecruitmentSchedulePreviewView()
     case .createMeeting:
-      RecruitmentMeetingView(draft: .constant(.preview))
+      RecruitmentMeetingPreviewView()
+    case .createPeople:
+      RecruitmentPeoplePreviewView()
+    case .createDetail:
+      RecruitmentDetailPreviewView()
     case .createSummary:
-      RecruitmentSummaryView(draft: .constant(.preview), onCreate: {})
+      RecruitmentSummaryPreviewView(source: .linked)
+    case .createSummaryCustom:
+      RecruitmentSummaryPreviewView(source: .custom)
+    case .placeSearch:
+      PlaceSearchView()
+    case .placeDetail(let placeID):
+      PlaceDetailView(
+        place: TourismPlaceCatalog.places.first { $0.id == placeID }
+          ?? TourismPlaceCatalog.places[2]
+      )
     case .courseEdit(let tripID, let state):
       CourseRouteEditView(
         trip: tripContext.trips.first { $0.id == tripID } ?? MockData.trips[0],
@@ -171,12 +225,18 @@ struct SupportDestinationView: View {
       NotificationDetailView()
     case .accountDelete:
       AccountDeleteView(onDeleted: onAuthCompleted)
+    case .componentStates:
+      ComponentStatesPreview()
     case .systemMaintenance:
       SystemNoticeView(mode: .maintenance)
     case .systemError:
       SystemNoticeView(mode: .error)
     case .feedComments(let postID):
       FeedCommentsView(post: MockData.feedPost(for: postID, in: feedPosts) ?? feedPosts[0])
+    case .legalDocument(let document):
+      LegalDocumentDetailView(kind: document, entry: .settings)
+    case .signupLegalDocument(let document):
+      LegalDocumentDetailView(kind: document, entry: .signup)
     }
   }
 
@@ -193,6 +253,8 @@ private struct NotificationCenterView: View {
   @State private var selectedCourse: TravelCourse?
   @State private var selectedTrip: TripRecruitment?
   @State private var selectedPost: FeedPost?
+  @State private var showsUnreadOnly = false
+  @State private var readAll = false
 
   private let items = [
     SupportNotification(
@@ -200,38 +262,86 @@ private struct NotificationCenterView: View {
       body: "주왕산 & 주산지 힐링 트레킹",
       time: "방금",
       icon: "bell.badge.fill",
-      target: .trip("trip-cheongsong-juwangsan")
+      target: .trip("trip-cheongsong-juwangsan"),
+      isUnread: true
     ),
     SupportNotification(
       title: "새 댓글이 달렸어요",
       body: "경주 단풍·야경 기록에 반응이 왔어요",
       time: "12분 전",
       icon: "bubble.left.and.bubble.right.fill",
-      target: .post("feed-03")
+      target: .post("feed-03"),
+      isUnread: true
     ),
     SupportNotification(
       title: "날씨 추천이 바뀌었어요",
       body: "맑음 예보에 맞춰 경주 첨성대 코스를 추천해요",
       time: "오늘",
       icon: "sun.max.fill",
-      target: .course("course-gyeongju-history")
+      target: .course("course-gyeongju-history"),
+      isUnread: true
     ),
     SupportNotification(
       title: "하회마을 모임이 확정됐어요",
       body: "모임 채팅방에서 준비물을 확인해보세요",
       time: "어제",
       icon: "checkmark.seal.fill",
-      target: .trip("trip-andong-hahoe")
+      target: .trip("trip-andong-hahoe"),
+      group: "어제",
+      isUnread: true
     )
   ]
 
+  private var unreadCount: Int {
+    items.filter { $0.isUnread && !readAll }.count
+  }
+
+  private var visibleItems: [SupportNotification] {
+    guard showsUnreadOnly else { return items }
+    return items.filter { $0.isUnread && !readAll }
+  }
+
+  private var groupedItems: [(group: String, items: [SupportNotification])] {
+    var order: [String] = []
+    var buckets: [String: [SupportNotification]] = [:]
+    for item in visibleItems {
+      if buckets[item.group] == nil { order.append(item.group) }
+      buckets[item.group, default: []].append(item)
+    }
+    return order.map { ($0, buckets[$0] ?? []) }
+  }
+
   var body: some View {
-    SupportList(title: "알림") {
-      ForEach(items) { item in
-        Button {
-          open(item.target)
-        } label: {
-          SupportCard {
+    // 알림은 항목마다 카드를 두지 않고 테이블처럼 한 줄씩 수직으로 쌓는다 (화면기획 기준).
+    // 카드가 겹치면 목록을 훑을 때 어디까지 읽었는지 잡히지 않는다.
+    SupportList(
+      title: "알림",
+      spacing: 0,
+      trailingTitle: "모두 읽음",
+      trailingAction: { readAll = true },
+      content: {
+      // 화면기획·웹과 같은 전체 / 안읽음 필터
+      HStack(spacing: 8) {
+        NotificationFilterChip(title: "전체", isSelected: !showsUnreadOnly) { showsUnreadOnly = false }
+        NotificationFilterChip(title: "안읽음 \(unreadCount)", isSelected: showsUnreadOnly) { showsUnreadOnly = true }
+        Spacer(minLength: 0)
+      }
+      .padding(.bottom, 4)
+
+      ForEach(groupedItems, id: \.group) { section in
+        Text(section.group)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MoyeoTheme.muted)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.top, 12)
+          .padding(.bottom, 2)
+          .accessibilityIdentifier("notifications.group.\(section.group)")
+
+        ForEach(section.items) { item in
+        VStack(spacing: 0) {
+          Button {
+            open(item.target)
+          } label: {
             HStack(alignment: .top, spacing: 12) {
               SupportIconBubble(systemImage: item.icon)
               VStack(alignment: .leading, spacing: 6) {
@@ -251,11 +361,15 @@ private struct NotificationCenterView: View {
                 .font(.caption.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.text400)
             }
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          Divider().overlay(MoyeoTheme.softLine)
           }
         }
-        .buttonStyle(.plain)
       }
-    }
+    })
     .navigationDestination(item: $selectedCourse) { course in
       CourseDetailView(
         course: course,
@@ -576,6 +690,256 @@ private struct CreateRecruitmentView: View {
   }
 }
 
+private struct ComponentStatesPreview: View {
+    var body: some View {
+        ScrollView {
+            // 화면기획은 상태마다 생김새가 다르다 — 빈 상태·에러에는 행동 버튼, 로딩은 스켈레톤,
+            // 오프라인은 경고 색 배너. 네 장을 같은 모양으로 그리면 상태를 구분할 수 없다.
+            VStack(spacing: 14) {
+                Text("화면 상태")
+                    .font(.title2.weight(.heavy))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                StatePreviewCard(
+                    icon: "person.2.fill",
+                    iconBackground: MoyeoTheme.leaf,
+                    iconTint: MoyeoTheme.forest,
+                    label: "EMPTY",
+                    title: "아직 참여한 모임이 없어요",
+                    detail: "첫 모임을 열어보세요",
+                    actionTitle: "+ 만들기",
+                    actionIsPrimary: true
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("LOADING (Skeleton)")
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(MoyeoTheme.softLine)
+                            .frame(width: 56, height: 56)
+                        VStack(alignment: .leading, spacing: 8) {
+                            SkeletonBar(widthRatio: 0.7, height: 12)
+                            SkeletonBar(widthRatio: 0.5, height: 10)
+                            SkeletonBar(widthRatio: 0.85, height: 10)
+                        }
+                        .padding(.top, 6)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(MoyeoTheme.card)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(MoyeoTheme.softLine, lineWidth: 1)
+                }
+
+                StatePreviewCard(
+                    icon: "exclamationmark.triangle.fill",
+                    iconBackground: MoyeoTheme.coral.opacity(0.18),
+                    iconTint: MoyeoTheme.coral,
+                    label: "ERROR",
+                    title: "문제가 생겼어요",
+                    detail: "잠시 후 다시 시도해주세요 E-503",
+                    actionTitle: "새로고침",
+                    actionIsPrimary: false
+                )
+
+                HStack(spacing: 12) {
+                    Text("OFFLINE")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.warningText)
+                    Text("인터넷에 연결되어 있지 않아요")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.warningText)
+                    Spacer(minLength: 0)
+                    Text("재시도")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.warningText)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity)
+                .background(MoyeoTheme.warningBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .padding(20)
+        }
+        .background(MoyeoTheme.background.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .accessibilityIdentifier("screen.componentStates")
+    }
+}
+
+private struct SkeletonBar: View {
+    let widthRatio: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(MoyeoTheme.softLine)
+                .frame(width: proxy.size.width * widthRatio, height: height)
+        }
+        .frame(height: height)
+    }
+}
+
+private struct StatePreviewCard: View {
+    let icon: String
+    let iconBackground: Color
+    let iconTint: Color
+    let label: String
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let actionIsPrimary: Bool
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(iconTint)
+                .frame(width: 60, height: 60)
+                .background(iconBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.ink)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
+            Spacer(minLength: 0)
+            Text(actionTitle)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(actionIsPrimary ? .white : MoyeoTheme.ink)
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(actionIsPrimary ? MoyeoTheme.forest : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(actionIsPrimary ? Color.clear : MoyeoTheme.line, lineWidth: 1)
+                }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(MoyeoTheme.softLine, lineWidth: 1)
+        }
+    }
+}
+
+private struct HostLeaveConfirmationPreview: View {
+  var body: some View {
+    ZStack {
+      MoyeoTheme.background.ignoresSafeArea()
+      Color.black.opacity(0.58).ignoresSafeArea()
+
+      // 화면기획의 경고 팝업은 좌측 정렬이고, 두 버튼은 같은 너비의 꼭지점 둥근 사각형이다.
+      // 가운데 정렬 + 알약 버튼 + 플랫폼 강조색(파랑) 취소는 다른 플랫폼과 어긋난다.
+      VStack(alignment: .leading, spacing: 0) {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.system(size: 22, weight: .bold))
+          .foregroundStyle(MoyeoTheme.coral)
+          .frame(width: 48, height: 48)
+          .background(MoyeoTheme.coral.opacity(0.16))
+          .clipShape(Circle())
+
+        Text("호스트가 나가면\n이 모임은 종료돼요")
+          .font(.title3.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 16)
+
+        Text("승인된 4명에게 알림이 가고, 채팅방은 14일 동안 읽기 전용으로 유지돼요.")
+          .font(.subheadline)
+          .foregroundStyle(MoyeoTheme.muted)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 10)
+
+        // 이유 입력은 본문에서 한 줄 띄워 별개 입력으로 읽히게 한다
+        VStack(alignment: .leading, spacing: 6) {
+          Text("나가는 이유 (필수)")
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.muted)
+          Text("일정 변동으로 어렵게 됐어요...")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(MoyeoTheme.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.top, 20)
+
+        HStack(spacing: 8) {
+          Button {} label: {
+            Text("취소")
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(MoyeoTheme.ink)
+              .frame(maxWidth: .infinity)
+              .frame(height: 44)
+              .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
+          }
+          .buttonStyle(.plain)
+          Button {} label: {
+            Text("모임 종료")
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(.white)
+              .frame(maxWidth: .infinity)
+              .frame(height: 44)
+              .background(MoyeoTheme.coral)
+              .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+          }
+          .buttonStyle(.plain)
+        }
+        .padding(.top, 20)
+      }
+      .padding(24)
+      .frame(maxWidth: 330)
+      .background(MoyeoTheme.background)
+      .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 20).stroke(MoyeoTheme.line))
+    }
+    .toolbar(.hidden, for: .navigationBar)
+    .accessibilityIdentifier("screen.hostLeaveConfirmation")
+  }
+}
+
+/// 알림 목록 상단의 전체 / 안읽음 필터 칩
+private struct NotificationFilterChip: View {
+  let title: String
+  let isSelected: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(.footnote.weight(.bold))
+        .foregroundStyle(isSelected ? .white : MoyeoTheme.muted)
+        .padding(.horizontal, 13)
+        .frame(height: 32)
+        .background(isSelected ? MoyeoTheme.forest : MoyeoTheme.card)
+        .clipShape(Capsule())
+        .overlay {
+          Capsule().stroke(isSelected ? Color.clear : MoyeoTheme.softLine, lineWidth: 1)
+        }
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("notifications.filter.\(title)")
+  }
+}
+
 private struct SupportNotification: Identifiable {
   let id = UUID()
   let title: String
@@ -583,6 +947,9 @@ private struct SupportNotification: Identifiable {
   let time: String
   let icon: String
   let target: SupportNotificationTarget
+  /// 화면기획처럼 오늘/어제로 묶어서 보여준다
+  var group: String = "오늘"
+  var isUnread: Bool = false
 }
 
 private enum SupportNotificationTarget {

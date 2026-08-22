@@ -217,6 +217,7 @@ final class AuthProviderLinkService: ObservableObject {
                 accessToken: accessToken
             ).providers
         }
+        fcmTokenProvider.markRegisteredWithBackend(fcmToken)
     }
 
     private func withValidAccessToken<Value>(

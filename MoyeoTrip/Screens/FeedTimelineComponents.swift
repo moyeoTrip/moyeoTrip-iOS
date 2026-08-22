@@ -54,12 +54,16 @@ extension FeedPost {
         return caption
     }
 
+    /// 부제는 "장소 · #해시태그" 한 줄이다 (4개 플랫폼 공통, docs/alignment/MOCKDATA-CANON.md).
+    /// 별도의 태그 칩 줄은 두지 않는다 — 같은 내용을 두 줄로 반복하게 된다.
     var feedSubtitle: String {
+        let hashtags: String
         if let subtitle, !subtitle.isEmpty {
-            return subtitle
+            hashtags = subtitle
+        } else {
+            hashtags = tags.filter { $0 != region }.map { "#\($0)" }.joined(separator: " ")
         }
-
-        return tags.map { "#\($0)" }.joined(separator: " ")
+        return hashtags.isEmpty ? region : "\(region) · \(hashtags)"
     }
 
     var detailBodyText: String {
@@ -152,5 +156,80 @@ struct FeedRouteMap: View {
                 return CGPoint(x: size.width * 0.74, y: size.height * 0.36)
             }
         }
+    }
+}
+
+/// 오프라인 홈의 "저장해둔 코스" 구간.
+///
+/// 실시간 추천과 인기 순위는 네트워크 없이 만들 수 없으므로, 오프라인에서는
+/// 이미 받아둔 코스만 보여주고 연결이 필요한 동작은 자리 표시로 알린다 (화면기획).
+struct OfflineSavedCourseSection: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("저장해둔 코스")
+                    .font(MoyeoTypography.sectionTitle)
+                    .foregroundStyle(MoyeoTheme.ink)
+                Text("오프라인에서도 열려요")
+                    .font(MoyeoTypography.chip)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(MoyeoTheme.subtleBackground)
+                    .clipShape(Capsule())
+                Spacer(minLength: 0)
+            }
+
+            ForEach(MockData.courses.prefix(3)) { course in
+                NavigationLink(value: course) {
+                    HStack(spacing: 12) {
+                        MoyeoPhotoTile(mascot: course.mascot, mood: course.mood, height: 62, cornerRadius: 10)
+                            .frame(width: 62)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(course.title)
+                                .font(.subheadline.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.ink)
+                                .lineLimit(1)
+                            Text("\(course.region) · \(course.duration) \(course.distance)")
+                                .font(.caption)
+                                .foregroundStyle(MoyeoTheme.muted)
+                            Text("어제 저장됨")
+                                .font(.caption2)
+                                .foregroundStyle(MoyeoTheme.text400)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(10)
+                    .background(MoyeoTheme.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("home.offline.saved.\(course.id)")
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label("모집 신청 · 새 모집 만들기", systemImage: "person.2.fill")
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                Text("연결된 뒤에 할 수 있어요. 지금 누르면 저장해뒀다가 연결되면 이어서 진행해요.")
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("연결되면 신청할 수 있어요")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(MoyeoTheme.subtleBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .padding(16)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
+            .accessibilityIdentifier("home.offline.recruitmentPlaceholder")
+        }
+        .padding(.horizontal, 18)
     }
 }

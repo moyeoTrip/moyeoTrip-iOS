@@ -7,6 +7,7 @@
 
 import Foundation
 @testable import MoyeoTrip
+import SwiftUI
 import Testing
 
 // swiftlint:disable file_length
@@ -56,7 +57,9 @@ struct MoyeoTripTests {
 
     @Test func recruitmentSeatPolicyReflectsCapacity() {
         let openTrip = MockData.trips[0]
-        let nearlyFullTrip = MockData.trips[2]
+        // 자리 1개 남은 모집: 영주 부석사 눈꽃 산책(4/5명).
+        // 경주 단풍·야경은 기준 목데이터에서 4/8명(모집중)으로 바뀌었다.
+        let nearlyFullTrip = MockData.trip(for: "trip-yeongju-buseoksa")!
         let fullTrip = TripRecruitment(
             id: "full-trip",
             courseID: "course-test-full",
@@ -217,7 +220,7 @@ struct MoyeoTripTests {
         let timeTexts = MockData.trips.map(\.detailTimeText)
 
         #expect(dateTexts == [
-            "2026.06.06 (토)",
+            "2026.05.25 (토)",
             "2026.06.09 (화)",
             "2026.06.05 (금)",
             "2026.06.15 (월)",
@@ -447,17 +450,20 @@ extension MoyeoTripTests {
     @Test func existingCompleteUserFinishesLoginWithoutSignup() async {
         let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
         let sessionStore = InMemoryAuthSessionStore()
+        let fcmProvider = RecordingFCMTokenTestProvider(token: "fresh-fcm-token")
         let model = AuthFlowViewModel(
             dependencies: AuthFlowDependencies(
                 apiClient: apiClient,
                 identityProvider: AuthIdentityTestProvider(),
                 sessionStore: sessionStore,
-                fcmTokenProvider: AuthFCMTokenTestProvider(token: nil)
+                fcmTokenProvider: fcmProvider
             )
         )
 
         #expect(await model.authenticate(with: .apple))
         #expect(apiClient.capturedSignupRequest == nil)
+        #expect(apiClient.capturedLoginRequest?.fcmToken == "fresh-fcm-token")
+        #expect(fcmProvider.registeredToken == "fresh-fcm-token")
         #expect(sessionStore.tokens?.accessToken == "access-test")
     }
 
@@ -1109,6 +1115,156 @@ extension MoyeoTripTests {
         #expect(MockData.chatThread(forTripID: "pohang-sea")?.id == "chat-pohang-drive")
         #expect(UITestInitialState(arguments: ["UITEST_SCREEN=feed-detail:feed-1"]).feedPostID == "feed-01")
     }
+
+    @Test func changeLogDirectLaunchKeysResolveDeterministically() {
+        let keys = [
+            "onb-1", "onb-2", "onb-3", "login", "nickname", "profile-basic", "profile-image", "terms",
+            "place-search", "place-detail", "terms-detail", "terms-privacy", "terms-location",
+            "terms-marketing", "terms-settings", "create-detail", "create-people", "create-summary",
+            "create-summary-custom"
+        ]
+
+        for key in keys {
+            let state = UITestInitialState(arguments: ["UITEST_SCREEN=\(key)"])
+            #expect(state.selectedTab == .home)
+            #expect(state.homePath.count == 1)
+        }
+    }
+
+    @Test func exactCaptureRoutesResolveIndependentSheetAlertAndMeetingStates() {
+        let email = UITestInitialState(arguments: ["UITEST_SCREEN=email-auth"])
+        #expect(email.homePath.count == 1)
+
+        let application = UITestInitialState(arguments: ["UITEST_SCREEN=apply"])
+        #expect(application.homePath.count == 1)
+
+        let chatList = UITestInitialState(arguments: ["UITEST_SCREEN=chat-list"])
+        #expect(chatList.selectedTab == .meetings)
+        #expect(chatList.meetingsInitialSegment == .ongoing)
+
+        let applied = UITestInitialState(arguments: ["UITEST_SCREEN=chat-list-applied"])
+        #expect(applied.selectedTab == .meetings)
+        #expect(applied.meetingsInitialSegment == .applied)
+
+        let leave = UITestInitialState(arguments: ["UITEST_SCREEN=leave"])
+        #expect(leave.homePath.count == 1)
+    }
+
+    @Test func tourismParserKeepsListAndDetailContractsSeparate() throws {
+        let listJSON = #"""
+        {"data":{"contents":[{
+          "contentId":2299341,"contentTypeId":39,"title":"달기약수터 백숙거리",
+          "address":"경상북도 청송군","thumbnailUrl":"https://cdn.example/list.jpg",
+          "latitude":"36.4278","longitude":129.0489
+        }]}}
+        """#
+        let list = try TourismAPIResponseParser.places(from: Data(listJSON.utf8))
+        #expect(list.count == 1)
+        #expect(list[0].type == .restaurant)
+        #expect(list[0].phone == "정보 없음")
+        #expect(list[0].thumbnailURL?.absoluteString == "https://cdn.example/list.jpg")
+
+        let detailJSON = #"""
+        {"data":{
+          "contentId":"2299341","contentTypeName":"음식점","title":"달기약수터 백숙거리",
+          "addr1":"경상북도 청송군","mapY":36.4278,"mapX":129.0489,"zipCode":"37411",
+          "tel":"054-873-7777","telName":"관광안내","homepage":"https://example.com",
+          "overview":"백숙 거리 소개","images":[{"imageUrl":"https://cdn.example/a.jpg"}],
+          "menuImages":["https://cdn.example/menu.jpg"]
+        }}
+        """#
+        let detail = try TourismAPIResponseParser.place(from: Data(detailJSON.utf8))
+        #expect(detail.phone == "054-873-7777")
+        #expect(detail.summary == "백숙 거리 소개")
+        #expect(detail.imageURLs.count == 1)
+        #expect(detail.menuImageURLs.count == 1)
+        #expect(detail.showsMenuImages)
+    }
+
+    @Test func tourismClientRequestsListAndDetailEndpointsWithBearerToken() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AuthURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let sessionStore = InMemoryAuthSessionStore()
+        try sessionStore.save(AuthTokens(accessToken: "tourism-access", refreshToken: "tourism-refresh"))
+        var requestedPaths: [String] = []
+
+        AuthURLProtocolStub.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer tourism-access")
+            requestedPaths.append(request.url?.path ?? "")
+
+            let body: String
+            if request.url?.path == "/api/v1/tourism-contents" {
+                body = #"{"data":{"contents":[{"contentId":"101","title":"첨성대","address":"경상북도 경주시"}]}}"#
+            } else {
+                body = #"{"data":{"contentId":"101","title":"첨성대","address":"경상북도 경주시"}}"#
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+        defer { AuthURLProtocolStub.handler = nil }
+
+        let client = TourismAPIClient(
+            configuration: AuthAPIConfiguration(baseURL: URL(string: "https://api.example.test")!),
+            session: session,
+            sessionStore: sessionStore
+        )
+        _ = try await client.places()
+        _ = try await client.place(id: "101")
+
+        #expect(requestedPaths == [
+            "/api/v1/tourism-contents",
+            "/api/v1/tourism-contents/101"
+        ])
+    }
+
+    @Test func changeLogLegalDocumentsKeepRequiredFlagsAndVersions() {
+        #expect(LegalDocumentKind.service.content.isRequired)
+        #expect(LegalDocumentKind.service.content.version == "v1.2")
+        #expect(LegalDocumentKind.privacy.content.isRequired)
+        #expect(LegalDocumentKind.privacy.content.version == "v1.4")
+        #expect(!LegalDocumentKind.location.content.isRequired)
+        #expect(!LegalDocumentKind.marketing.content.isRequired)
+        #expect(LegalDocumentKind.allCases.allSatisfy { !$0.content.sections.isEmpty })
+    }
+
+    @Test func placeDetailsExposeMenuImagesOnlyForRestaurants() {
+        let restaurant = TourismPlaceCatalog.places.first(where: { $0.type == .restaurant })
+        let nonRestaurants = TourismPlaceCatalog.places.filter { $0.type != .restaurant }
+
+        #expect(restaurant?.showsMenuImages == true)
+        #expect(nonRestaurants.allSatisfy { !$0.showsMenuImages })
+        #expect(TourismPlaceCatalog.places.allSatisfy { !$0.address.isEmpty && !$0.phone.isEmpty })
+    }
+
+    @Test func recruitmentDataSeparatesRecruitmentAndCourseConditions() {
+        let trip = MockData.trips[0]
+        let thread = MockData.chatThread(forTripID: trip.id)
+
+        #expect(trip.title != MockData.course(for: trip.courseID)?.title)
+        #expect((20...100).contains(trip.minimumAge))
+        #expect((20...100).contains(trip.maximumAge))
+        #expect(thread?.tripTitle == trip.title)
+        #expect(thread?.courseName == MockData.course(for: trip.courseID)?.title)
+        #expect(thread?.ageRange == trip.ageRangeText)
+    }
+
+    @Test func pushTokenRegistrationStateTracksRefreshBoundary() {
+        #expect(MoyeoPushTokenRegistrationState.pendingToken(cachedToken: nil, registeredToken: nil) == nil)
+        #expect(
+            MoyeoPushTokenRegistrationState.pendingToken(cachedToken: "token-a", registeredToken: "token-a") == nil
+        )
+        #expect(
+            MoyeoPushTokenRegistrationState.pendingToken(cachedToken: "token-b", registeredToken: "token-a")
+                == "token-b"
+        )
+    }
 }
 
 private struct AuthIdentityTestProvider: AuthIdentityProviding {
@@ -1131,6 +1287,21 @@ private struct AuthFCMTokenTestProvider: AuthFCMTokenProviding {
     let token: String?
 
     func currentToken() async -> String? { token }
+}
+
+private final class RecordingFCMTokenTestProvider: AuthFCMTokenProviding {
+    let token: String?
+    private(set) var registeredToken: String?
+
+    init(token: String?) {
+        self.token = token
+    }
+
+    func currentToken() async -> String? { token }
+
+    func markRegisteredWithBackend(_ token: String?) {
+        registeredToken = token
+    }
 }
 
 private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
@@ -1356,4 +1527,28 @@ private struct AssetCatalogAppearance: Decodable, Equatable {
         appearance: "luminosity",
         value: "dark"
     )
+}
+
+/// 이메일 로그인·가입 입력 규칙 (화면에서 분리한 정책)
+@Suite
+struct EmailCredentialsPolicyTests {
+    @Test func emailCredentialsPolicyBlocksMismatchedSignUp() {
+        // 가입 모드에서는 비밀번호와 확인이 같아야 제출할 수 있다
+        #expect(!EmailCredentialsPolicy.canSubmit(
+            email: "moyeo@example.com", password: "password", passwordConfirmation: "different", isRegistration: true))
+        #expect(EmailCredentialsPolicy.canSubmit(
+            email: "moyeo@example.com", password: "password", passwordConfirmation: "password", isRegistration: true))
+        // 로그인 모드에서는 확인 칸을 보지 않는다
+        #expect(EmailCredentialsPolicy.canSubmit(
+            email: "moyeo@example.com", password: "password", passwordConfirmation: "", isRegistration: false))
+        // 이메일 형식과 최소 길이
+        #expect(!EmailCredentialsPolicy.canSubmit(
+            email: "moyeo", password: "password", passwordConfirmation: "password", isRegistration: true))
+        #expect(!EmailCredentialsPolicy.canSubmit(
+            email: "moyeo@example.com", password: "12345", passwordConfirmation: "12345", isRegistration: true))
+        // 경고는 확인 칸에 입력이 있고 값이 다를 때만 보인다
+        #expect(!EmailCredentialsPolicy.showsPasswordMismatch(password: "password", passwordConfirmation: ""))
+        #expect(EmailCredentialsPolicy.showsPasswordMismatch(password: "password", passwordConfirmation: "diff"))
+        #expect(!EmailCredentialsPolicy.showsPasswordMismatch(password: "password", passwordConfirmation: "password"))
+    }
 }

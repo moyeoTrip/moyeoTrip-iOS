@@ -621,16 +621,18 @@ private struct ExploreRecruitmentMeta {
 }
 
 private extension TravelCourse {
+    /// 탐색 목록의 배지는 화면기획·웹·안드로이드와 같은 두 가지(진행중 / 확정)만 쓴다.
+    /// 모집중·마감임박·출발확정 세 갈래는 모집 상세에서만 쓰는 표기다.
     var exploreRecruitmentMeta: ExploreRecruitmentMeta {
         if let trip = MockData.trip(forCourseID: id) {
             return ExploreRecruitmentMeta(
-                statusText: trip.status.rawValue,
+                statusText: trip.status == .confirmed ? "확정" : "진행중",
                 peopleText: "\(trip.joined)/\(trip.capacity)명"
             )
         }
 
         return ExploreRecruitmentMeta(
-            statusText: "모집중",
+            statusText: "진행중",
             peopleText: peopleText
         )
     }

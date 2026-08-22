@@ -355,3 +355,73 @@ struct ProgressBar: View {
         .frame(height: 5)
     }
 }
+
+/// 체크박스는 항상 왼쪽에 둔다. 플랫폼 기본 토글은 iOS에서만 다르게 생기고,
+/// 화면기획·웹·Android가 모두 왼쪽 체크박스라서 정합성이 깨진다.
+struct MoyeoCheckRow: View {
+    let title: String
+    var subtitle: String?
+    var tint: Color = MoyeoTheme.forest
+    @Binding var isOn: Bool
+    var accessibilityIdentifier: String?
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(isOn ? tint : MoyeoTheme.text400)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier ?? "")
+        .accessibilityValue(isOn ? "선택됨" : "선택 안 됨")
+    }
+}
+
+/// 코스 출처 배지.
+///
+/// 등록 코스는 자물쇠를 함께 그려 "경로가 고정"임을 배지에서 바로 읽게 한다.
+/// 글자만 다르면 두 출처가 같은 성질처럼 보인다.
+struct CourseSourceBadge: View {
+    let source: CourseSource
+
+    private var isLinked: Bool { source == .linked }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: isLinked ? "lock.fill" : "arrow.triangle.2.circlepath")
+                .font(.system(size: 10, weight: .bold))
+            Text(source.title)
+                .font(MoyeoTypography.chip)
+        }
+        .foregroundStyle(isLinked ? MoyeoTheme.muted : MoyeoTheme.onLeaf)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(isLinked ? MoyeoTheme.subtleBackground : MoyeoTheme.leaf)
+        .overlay(
+            Capsule().stroke(isLinked ? MoyeoTheme.softLine : MoyeoTheme.forest.opacity(0.5))
+        )
+        .clipShape(Capsule())
+        .accessibilityIdentifier("courseSourceBadge.\(source.rawValue)")
+    }
+}

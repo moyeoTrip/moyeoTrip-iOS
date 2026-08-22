@@ -47,9 +47,6 @@ struct KoreanBirthdateField: View {
                     Text(Self.displayFormatter.string(from: selectedDate))
                         .font(MoyeoTypography.cardTitle)
                         .foregroundStyle(MoyeoTheme.ink)
-                    Text("연도 · 월 · 일 순서로 선택해요")
-                        .font(MoyeoTypography.cardMeta)
-                        .foregroundStyle(MoyeoTheme.muted)
                 }
 
                 Spacer(minLength: 8)

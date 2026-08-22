@@ -10,6 +10,9 @@ import FirebaseMessaging
 
 extension Notification.Name {
     static let moyeoPushNotificationOpened = Notification.Name("moyeo.pushNotificationOpened")
+    static let moyeoPushNotificationReceived = Notification.Name("moyeo.pushNotificationReceived")
+    static let moyeoPushTokenDidRefresh = Notification.Name("moyeo.pushTokenDidRefresh")
+    static let moyeoPushRegistrationFailed = Notification.Name("moyeo.pushRegistrationFailed")
 }
 
 enum MoyeoPushDestination: String, Equatable {
@@ -40,14 +43,29 @@ enum MoyeoPushDestination: String, Equatable {
     }
 }
 
+enum MoyeoPushTokenRegistrationState {
+    static func pendingToken(cachedToken: String?, registeredToken: String?) -> String? {
+        guard let cachedToken, !cachedToken.isEmpty, cachedToken != registeredToken else { return nil }
+        return cachedToken
+    }
+}
+
 final class MoyeoPushNotificationManager: NSObject {
     static let shared = MoyeoPushNotificationManager()
 
     private let tokenDefaultsKey = "moyeo.fcmToken"
+    private let registeredTokenDefaultsKey = "moyeo.registeredFCMToken"
     private var isConfigured = false
 
     var cachedToken: String? {
         UserDefaults.standard.string(forKey: tokenDefaultsKey)
+    }
+
+    var tokenAwaitingBackendRegistration: String? {
+        MoyeoPushTokenRegistrationState.pendingToken(
+            cachedToken: cachedToken,
+            registeredToken: UserDefaults.standard.string(forKey: registeredTokenDefaultsKey)
+        )
     }
 
     func configure() {
@@ -102,8 +120,26 @@ final class MoyeoPushNotificationManager: NSObject {
         #endif
     }
 
+    func markTokenRegisteredWithBackend(_ token: String?) {
+        guard let token, !token.isEmpty else { return }
+        UserDefaults.standard.set(token, forKey: registeredTokenDefaultsKey)
+    }
+
+    func handleBackgroundNotification(_ userInfo: [AnyHashable: Any]) {
+        NotificationCenter.default.post(
+            name: .moyeoPushNotificationReceived,
+            object: MoyeoPushDestination(userInfo: userInfo),
+            userInfo: userInfo
+        )
+    }
+
     private func store(token: String) {
+        guard !token.isEmpty else { return }
+        let didChange = cachedToken != token
         UserDefaults.standard.set(token, forKey: tokenDefaultsKey)
+        if didChange {
+            NotificationCenter.default.post(name: .moyeoPushTokenDidRefresh, object: token)
+        }
     }
 
     private func publishOpen(userInfo: [AnyHashable: Any]) {
@@ -159,5 +195,21 @@ final class MoyeoAppDelegate: NSObject, UIApplicationDelegate {
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         MoyeoPushNotificationManager.shared.setAPNSToken(deviceToken)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        NotificationCenter.default.post(name: .moyeoPushRegistrationFailed, object: error)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        MoyeoPushNotificationManager.shared.handleBackgroundNotification(userInfo)
+        completionHandler(.newData)
     }
 }

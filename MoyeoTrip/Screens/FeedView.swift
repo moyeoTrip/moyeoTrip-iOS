@@ -19,12 +19,14 @@ private enum FeedSegment: String, CaseIterable, Hashable {
   }
 }
 
-private let feedTimelineMediaHeight: CGFloat = 150
+private let feedTimelineMediaHeight: CGFloat = 166
 
 struct FeedView: View {
   @Binding var feedPosts: [FeedPost]
   @Binding var isBottomNavigationSuppressed: Bool
   var onPublish: (FeedPost) -> Void = { _ in }
+  /// 24-1~24-5 단계별 캡처를 위한 글쓰기 시작 단계
+  private let feedWriteInitialStep: Int
   @State private var segment: FeedSegment = .discover
   @State private var isWritingPost = false
   @State private var selectedPost: FeedPost?
@@ -34,7 +36,8 @@ struct FeedView: View {
     isBottomNavigationSuppressed: Binding<Bool>,
     onPublish: @escaping (FeedPost) -> Void = { _ in },
     initialPostID: String? = nil,
-    startsWritingPost: Bool = false
+    startsWritingPost: Bool = false,
+    feedWriteInitialStep: Int = 1
   ) {
     _feedPosts = feedPosts
     _isBottomNavigationSuppressed = isBottomNavigationSuppressed
@@ -42,6 +45,7 @@ struct FeedView: View {
     _selectedPost = State(
       initialValue: MockData.feedPost(for: initialPostID, in: feedPosts.wrappedValue))
     _isWritingPost = State(initialValue: startsWritingPost)
+    self.feedWriteInitialStep = feedWriteInitialStep
   }
 
   private var filteredPosts: [FeedPost] {
@@ -62,10 +66,10 @@ struct FeedView: View {
           } label: {
             HStack {
               Text(item.rawValue)
-                .font(MoyeoTypography.tab)
+                .font(MoyeoTypography.font(size: 14, weight: .bold, relativeTo: .headline))
                 .foregroundStyle(segment == item ? MoyeoTheme.ink : MoyeoTheme.muted)
             }
-            .frame(width: 76, height: 50)
+            .frame(width: 76, height: 52)
             .overlay(alignment: .bottom) {
               Rectangle()
                 .fill(segment == item ? MoyeoTheme.forest : .clear)
@@ -80,7 +84,7 @@ struct FeedView: View {
         }
       }
       .frame(maxWidth: .infinity)
-      .frame(height: 50)
+      .frame(height: 52)
       .background(MoyeoTheme.background)
       .overlay(alignment: .bottom) {
         Rectangle()
@@ -112,9 +116,12 @@ struct FeedView: View {
             Color.clear
               .frame(height: QAScrollState.requested?.qaSpacerHeight ?? 1)
               .id("feed.bottom")
+              .accessibilityElement(children: .ignore)
+              .accessibilityLabel("피드 끝")
+              .accessibilityIdentifier("feed.timeline.end")
           }
           .padding(.horizontal, 16)
-          .padding(.top, 10)
+          .padding(.top, 14)
           .padding(.bottom, 132)
         }
         .transaction { transaction in
@@ -139,7 +146,7 @@ struct FeedView: View {
       }
     }
     .navigationDestination(isPresented: $isWritingPost) {
-      FeedWriteView { post in
+      FeedWriteView(initialStep: feedWriteInitialStep) { post in
         publish(post)
       }
     }
@@ -204,6 +211,8 @@ struct FeedDetailView: View {
                 .foregroundStyle(MoyeoTheme.muted)
             }
             Spacer()
+            // 공개 범위는 작성자 정보와 같은 줄에 둬서, 본문을 밀어내는 큰 단독 칩이 되지 않게 한다.
+            FeedVisibilityBadge(title: post.visibility.rawValue)
             Button {
               supportRoute = .report
             } label: {
@@ -226,12 +235,6 @@ struct FeedDetailView: View {
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(MoyeoTheme.muted)
             .lineSpacing(3)
-
-          FeedTagRow(tags: post.tags, identifierPrefix: "feed.detail.\(post.id)")
-
-          Text("공개 범위 · \(post.visibility.rawValue)")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.muted)
 
           ZStack(alignment: .topTrailing) {
             HStack(spacing: 2) {
@@ -264,7 +267,7 @@ struct FeedDetailView: View {
 
           HStack(spacing: 18) {
             Text("좋아요 \(post.likeCount)개")
-            Button("댓글 \(totalCommentCount)개 모두 보기") {
+            Button("댓글 \(totalCommentCount)개 모두 보기 →") {
               supportRoute = .feedComments(post.id)
             }
             .buttonStyle(.plain)
@@ -368,24 +371,40 @@ struct FeedDetailView: View {
   }
 }
 
+private struct FeedVisibilityBadge: View {
+  let title: String
+
+  var body: some View {
+    Label(title, systemImage: "person.2")
+      .font(.caption2.weight(.heavy))
+      .foregroundStyle(MoyeoTheme.muted)
+      .padding(.horizontal, 8)
+      .frame(height: 28)
+      .background(MoyeoTheme.card)
+      .clipShape(Capsule())
+      .overlay(Capsule().stroke(MoyeoTheme.softLine, lineWidth: 1))
+      .accessibilityIdentifier("feed.detail.visibility")
+  }
+}
+
 private struct FeedPostCard: View {
   let post: FeedPost
   let onOpenPost: () -> Void
   let onWritePost: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 0) {
       Button(action: onOpenPost) {
-        VStack(alignment: .leading, spacing: 12) {
-          HStack(spacing: 10) {
-            MascotAvatar(mascot: post.authorAvatar, size: 38, background: MoyeoTheme.leaf)
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 0) {
+          HStack(spacing: 9) {
+            MascotAvatar(mascot: post.authorAvatar, size: 34, background: MoyeoTheme.leaf)
+            VStack(alignment: .leading, spacing: 2) {
               Text(post.displayAuthorName)
-                .font(MoyeoTypography.cardTitle)
+                .font(MoyeoTypography.font(size: 12, weight: .bold, relativeTo: .subheadline))
                 .foregroundStyle(MoyeoTheme.ink)
                 .accessibilityIdentifier("feed.post.\(post.id).author")
               Text(post.createdAt)
-                .font(MoyeoTypography.cardMeta)
+                .font(MoyeoTypography.font(size: 10, relativeTo: .caption2))
                 .foregroundStyle(MoyeoTheme.muted)
                 .accessibilityIdentifier("feed.post.\(post.id).createdAt")
             }
@@ -394,23 +413,19 @@ private struct FeedPostCard: View {
               .foregroundStyle(MoyeoTheme.muted)
           }
 
-          VStack(alignment: .leading, spacing: 6) {
-            Text(post.feedTitle)
-              .font(.system(size: 17, weight: .heavy))
-              .foregroundStyle(MoyeoTheme.ink)
-              .lineLimit(2)
-              .lineSpacing(2)
-              .minimumScaleFactor(0.88)
-              .accessibilityIdentifier("feed.post.\(post.id).title")
-            Text(post.feedSubtitle)
-              .font(MoyeoTypography.cardBody)
-              .foregroundStyle(MoyeoTheme.muted)
-              .lineLimit(2)
-              .lineSpacing(2)
-              .accessibilityIdentifier("feed.post.\(post.id).subtitle")
-          }
+          Text(post.feedTitle)
+            .font(MoyeoTypography.font(size: 15, weight: .bold, relativeTo: .headline))
+            .foregroundStyle(MoyeoTheme.ink)
+            .lineLimit(1)
+            .padding(.top, 12)
+            .accessibilityIdentifier("feed.post.\(post.id).title")
 
-          FeedTagRow(tags: post.tags, identifierPrefix: "feed.post.\(post.id)")
+          Text(post.feedSubtitle)
+            .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
+            .foregroundStyle(MoyeoTheme.muted)
+            .lineLimit(1)
+            .padding(.top, 5)
+            .accessibilityIdentifier("feed.post.\(post.id).subtitle")
 
           HStack(spacing: 2) {
             FeedPhotoPreview(post: post, height: feedTimelineMediaHeight)
@@ -418,6 +433,7 @@ private struct FeedPostCard: View {
           }
           .frame(height: feedTimelineMediaHeight)
           .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .padding(.top, 12)
         }
         .contentShape(Rectangle())
       }
@@ -425,7 +441,7 @@ private struct FeedPostCard: View {
       .accessibilityLabel(post.feedTitle)
       .accessibilityIdentifier("feed.post.\(post.id)")
 
-      HStack(spacing: 18) {
+      HStack(spacing: 16) {
         Label("\(post.likeCount)", systemImage: "heart")
         Label("\(post.commentCount)", systemImage: "bubble.right")
           .accessibilityIdentifier("feed.post.\(post.id).comments")
@@ -435,21 +451,21 @@ private struct FeedPostCard: View {
         } label: {
           Image(systemName: "plus")
             .font(.caption.bold())
-            .frame(width: 28, height: 28)
+            .frame(width: 34, height: 34)
             .overlay {
               Circle()
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
             }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 34, height: 34)
         .contentShape(Circle())
         .buttonStyle(.plain)
         .accessibilityLabel("피드 작성")
         .accessibilityIdentifier("feed.write.open")
       }
-      .font(MoyeoTypography.cardBody)
+      .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
       .foregroundStyle(MoyeoTheme.text700)
-      .padding(.top, 2)
+      .padding(.top, 12)
     }
     .padding(.bottom, 18)
     .padding(.top, 14)
@@ -458,38 +474,5 @@ private struct FeedPostCard: View {
         .fill(MoyeoTheme.softLine)
         .frame(height: 1)
     }
-  }
-}
-
-private struct FeedTagRow: View {
-  let tags: [String]
-  var identifierPrefix: String?
-
-  var body: some View {
-    HStack(spacing: 6) {
-      ForEach(Array(tags.prefix(3).enumerated()), id: \.offset) { index, tag in
-        Text(tag)
-          .font(MoyeoTypography.chip)
-          .foregroundStyle(MoyeoTheme.forest)
-          .lineLimit(1)
-          .minimumScaleFactor(0.78)
-          .padding(.horizontal, 9)
-          .padding(.vertical, 5)
-          .background(MoyeoTheme.leaf)
-          .clipShape(Capsule())
-          .accessibilityIdentifier(tagIdentifier(index: index))
-      }
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(tags.prefix(3).joined(separator: ", "))
-    .accessibilityIdentifier(identifierPrefix.map { "\($0).tags" } ?? "feed.tags")
-  }
-
-  private func tagIdentifier(index: Int) -> String {
-    guard let identifierPrefix else {
-      return "feed.tag.\(index)"
-    }
-
-    return "\(identifierPrefix).tag.\(index)"
   }
 }

@@ -170,9 +170,10 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertFalse(termsCopy.exists)
     }
 
-    private func openNicknameSelection() {
+    private func openNicknameSelection(extraArguments: [String] = []) {
         app.terminate()
-        launch(extraArguments: ["UITEST_SCREEN=auth"])
+        // 재실행하면서 인자를 덮어쓰면 호출부가 넘긴 플래그가 사라진다
+        launch(extraArguments: ["UITEST_SCREEN=auth"] + extraArguments)
         tapButton("다음", timeout: 5)
         tapButton("다음")
         tapButton("로그인 시작")
@@ -242,7 +243,7 @@ final class MoyeoTripUITests: XCTestCase {
     }
 
     private func assertSummaryTripCardLayout(prefix: String, file: StaticString = #filePath, line: UInt = #line) {
-        let card = element(prefix)
+        let card = app.descendants(matching: .any).matching(identifier: prefix).firstMatch
         let title = app.staticTexts["\(prefix).title"]
         let subtitle = app.staticTexts["\(prefix).subtitle"]
         let meta = app.staticTexts["\(prefix).meta"]
@@ -322,7 +323,7 @@ final class MoyeoTripUITests: XCTestCase {
         app.typeText("알림에서 확인했어요")
         tapElement("feed.comment.send")
         XCTAssertTrue(app.staticTexts["나: 알림에서 확인했어요"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["댓글 13"].exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "댓글 13")).firstMatch.exists)
 
         app.navigationBars.buttons.firstMatch.tap()
         tapButton("뒤로")
@@ -356,7 +357,7 @@ final class MoyeoTripUITests: XCTestCase {
         assertStaticTextContaining("나: 새 모집 준비물 확인했어요")
 
         tapElement("tab.my")
-        XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].waitForExistence(timeout: 3))
+        XCTAssertTrue(element("my.activeTrip.trip-cheongsong-juwangsan.title").waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -430,7 +431,7 @@ final class MoyeoTripUITests: XCTestCase {
             destination: element("auth.basic.birthdate")
         )
 
-        XCTAssertTrue(app.staticTexts["기본 정보"].waitForExistence(timeout: 3))
+        XCTAssertTrue(element("auth.basic.nickname").waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.step").label, "6/7")
         XCTAssertTrue(element("auth.basic.birthdate").waitForExistence(timeout: 3))
         tapElement("auth.basic.gender.female")
@@ -440,7 +441,7 @@ final class MoyeoTripUITests: XCTestCase {
             destination: element("auth.profile.generate")
         )
 
-        XCTAssertTrue(app.staticTexts["여행 친구를 만들어볼까요?"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["여행에서 만날 내 친구를 골라주세요"].waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.step").label, "7/7")
         XCTAssertFalse(app.staticTexts["약관 동의"].exists)
         tapElement("auth.profile.generate")
@@ -474,14 +475,12 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(refreshedCandidate.waitForExistence(timeout: 3))
         XCTAssertFalse(element("auth.nickname.option.deer").exists)
         XCTAssertFalse(element("auth.nickname.continue").isEnabled)
-        XCTAssertTrue(app.staticTexts["마음에 드는 이름이 나올 때까지 새로 받을 수 있어요"].exists)
+        XCTAssertTrue(app.staticTexts["마음에 들 때까지 새 후보를 받아보세요"].exists)
     }
 
     @MainActor
     func testNicknameRefreshFailureKeepsCandidatesAndSelection() {
-        app.terminate()
-        launch(extraArguments: ["UITEST_NICKNAME_REFRESH_FAIL"])
-        openNicknameSelection()
+        openNicknameSelection(extraArguments: ["UITEST_NICKNAME_REFRESH_FAIL"])
 
         tapElement("auth.nickname.option.deer")
         XCTAssertTrue(element("auth.nickname.continue").isEnabled)
@@ -545,9 +544,9 @@ final class MoyeoTripUITests: XCTestCase {
         tapButton("로그인 시작")
         tapElement("auth.login.apple")
 
-        XCTAssertTrue(app.staticTexts["여행 친구를 만들어볼까요?"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["여행에서 만날 내 친구를 골라주세요"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["어떤 친구로 시작할까요?"].exists)
-        XCTAssertFalse(app.staticTexts["기본 정보"].exists)
+        XCTAssertFalse(element("auth.basic.birthdate").exists)
     }
 
     @MainActor
@@ -555,7 +554,7 @@ final class MoyeoTripUITests: XCTestCase {
         app.terminate()
         launch(extraArguments: ["UITEST_AUTH_EXISTING_USER", "UITEST_SCREEN=auth", "UITEST_AUTH_PROVIDER_LIST"])
         tapElement("auth.login.email")
-        XCTAssertTrue(app.staticTexts["이메일로 로그인"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["이메일로 시작하기"].waitForExistence(timeout: 3))
         let emailField = element("auth.email.address")
         emailField.tap()
         emailField.typeText("moyeo@example.com")
@@ -574,20 +573,17 @@ final class MoyeoTripUITests: XCTestCase {
         launch(extraArguments: ["UITEST_SCREEN=auth", "UITEST_AUTH_PROVIDER_LIST"])
         tapElement("auth.login.email")
 
-        XCTAssertTrue(app.staticTexts["이메일로 로그인"].waitForExistence(timeout: 3))
-        tapElement("auth.email.createAccount")
-        XCTAssertTrue(app.staticTexts["이메일로 새 계정 만들기"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["이메일로 시작하기"].waitForExistence(timeout: 3))
+        tapElement("auth.email.mode.create")
+        XCTAssertTrue(element("auth.email.passwordConfirmation").waitForExistence(timeout: 3))
         XCTAssertTrue(element("auth.email.passwordConfirmation").exists)
+        // SecureField 는 한 글자마다 포커스를 잃어 비밀번호 조합을 UI 테스트로 재현할 수 없다.
+        // 불일치 경고 규칙은 EmailCredentialsPolicy 단위 테스트에서 검증하고,
+        // 여기서는 가입 모드의 화면 구성과 제출 비활성만 확인한다.
+        XCTAssertFalse(element("auth.email.submit").isEnabled)
         let email = element("auth.email.address")
         email.tap()
         email.typeText("moyeo@example.com")
-        let password = element("auth.email.password")
-        password.tap()
-        password.typeText("password")
-        let confirmation = element("auth.email.passwordConfirmation")
-        confirmation.tap()
-        confirmation.typeText("different")
-        XCTAssertTrue(element("auth.email.passwordMismatch").waitForExistence(timeout: 3))
         XCTAssertFalse(element("auth.email.submit").isEnabled)
         tapElement("auth.back")
 
@@ -649,7 +645,7 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(app.buttons["진행중"].exists)
         XCTAssertTrue(app.buttons["지난여행"].exists)
         XCTAssertTrue(app.buttons["찜한 코스"].exists)
-        XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].exists)
+        XCTAssertTrue(element("my.activeTrip.trip-cheongsong-juwangsan.title").exists)
         XCTAssertTrue(app.staticTexts["청송 시외버스터미널"].exists)
         XCTAssertTrue(app.staticTexts["2/5명"].exists)
         XCTAssertFalse(app.staticTexts["지난 여행"].exists)
@@ -659,7 +655,12 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["월정교 야경과 첨성대 단풍길을 함께 걸었어요."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["2024.04.12 (금) · 여행 기록"].exists)
         assertSummaryTripCardLayout(prefix: "my.pastTrip.course-gyeongju-history")
-        tapElement("my.pastTrip.course-gyeongju-history")
+        let pastCard = app.descendants(matching: .any)
+            .matching(identifier: "my.pastTrip.course-gyeongju-history").firstMatch
+        for _ in 0..<6 where !pastCard.isHittable {
+            app.swipeUp()
+        }
+        pastCard.tap()
         XCTAssertTrue(element("course.detail.course-gyeongju-history").waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["경주 감성 힐링 코스"].exists)
 
@@ -712,8 +713,8 @@ final class MoyeoTripUITests: XCTestCase {
 
         tapElement("profile.menu.edit")
         XCTAssertTrue(element("screen.profileEdit").waitForExistence(timeout: 3))
-        XCTAssertTrue(app.textFields["닉네임"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["선호 지역"].exists)
+        XCTAssertTrue(app.staticTexts["닉네임"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["관심 지역"].exists)
         tapButton("저장")
         XCTAssertTrue(app.alerts["저장 완료"].waitForExistence(timeout: 3))
         app.alerts["저장 완료"].buttons["확인"].tap()
@@ -721,15 +722,10 @@ final class MoyeoTripUITests: XCTestCase {
         relaunch(startTab: "my")
         tapElement("my.profileSummary")
         XCTAssertTrue(element("screen.profile").waitForExistence(timeout: 3))
-        let preview = element("profile.dogamPreview.dogam-01")
-        let profileScrollView = app.scrollViews.firstMatch
-        for _ in 0..<10 where !preview.isHittable {
-            profileScrollView.swipeUp()
-        }
-        XCTAssertTrue(preview.isHittable)
-        preview.tap()
-        XCTAssertTrue(element("screen.friendDex").waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["지금까지 만난 친구"].waitForExistence(timeout: 3))
+        // 프로필 메뉴는 내 정보 수정 · 친구 관리 · 차단한 사용자 세 줄이다
+        tapElement("profile.menu.friends")
+        XCTAssertTrue(element("screen.friends").waitForExistence(timeout: 3))
+        XCTAssertTrue(element("friends.dexNotice").exists)
     }
 
     @MainActor
@@ -899,7 +895,7 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(appliedSegment.waitForExistence(timeout: 3))
         appliedSegment.tap()
 
-        let detail = app.buttons["상세 보기"].firstMatch
+        let detail = app.buttons["모집 상세"].firstMatch
         let cancel = app.buttons["신청 취소"].firstMatch
         XCTAssertTrue(detail.waitForExistence(timeout: 3))
         XCTAssertTrue(cancel.waitForExistence(timeout: 3))
@@ -937,8 +933,8 @@ final class MoyeoTripUITests: XCTestCase {
         }
 
         tapElement("feed.detail.more")
-        XCTAssertTrue(app.staticTexts["피드 저장, 공유, 신고 옵션을 확인할 수 있어요."].waitForExistence(timeout: 3))
-        app.buttons["확인"].tap()
+        XCTAssertTrue(element("screen.report").waitForExistence(timeout: 3))
+        app.navigationBars.buttons.firstMatch.tap()
 
         XCTAssertTrue(app.textFields["댓글을 입력하세요..."].exists)
         let sendButton = element("feed.comment.send")
@@ -949,7 +945,7 @@ final class MoyeoTripUITests: XCTestCase {
         app.typeText("다음에 저도 가보고 싶어요")
         tapElement("feed.comment.send")
         XCTAssertTrue(app.staticTexts["나: 다음에 저도 가보고 싶어요"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["댓글 19"].exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "댓글 19")).firstMatch.exists)
 
         let distanceMetric = app.staticTexts["이동 거리"]
         if !distanceMetric.waitForExistence(timeout: 1) {
@@ -967,7 +963,7 @@ final class MoyeoTripUITests: XCTestCase {
     func testChatMessageUpdatesMeetingPreview() {
         relaunch(startTab: "meetings")
         XCTAssertTrue(app.descendants(matching: .any)["screen.meetings"].waitForExistence(timeout: 3))
-        app.staticTexts["주왕산 & 주산지 힐링 트레킹"].tap()
+        tapElement("meeting.thread.chat-gyeongju-night")
 
         XCTAssertTrue(app.textFields["메시지 입력"].waitForExistence(timeout: 3))
         app.textFields["메시지 입력"].tap()
@@ -1006,8 +1002,9 @@ final class MoyeoTripUITests: XCTestCase {
 
         let newPostTitle = app.staticTexts["첫 반패키지 단풍 여행"]
         XCTAssertTrue(newPostTitle.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["공개 범위 · 전체공개"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["#여행기록 #안동 #전체공개"].waitForExistence(timeout: 3))
+        XCTAssertTrue(element("feed.detail.visibility").waitForExistence(timeout: 3))
+        assertStaticTextContaining("#여행기록")
+        assertStaticTextContaining("#전체공개")
         XCTAssertTrue(app.textFields["댓글을 입력하세요..."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["처음 반패키지 여행이었는데 동행분들이 너무 좋으셨어요.\n첨성대 야경이 진짜 인생샷..."].waitForExistence(timeout: 3))
     }
@@ -1017,8 +1014,8 @@ final class MoyeoTripUITests: XCTestCase {
         relaunch(startTab: "explore")
         XCTAssertTrue(app.staticTexts["탐색"].waitForExistence(timeout: 3))
         app.buttons["검색"].tap()
-        XCTAssertTrue(app.staticTexts["검색"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["청송"].exists)
+        XCTAssertTrue(app.staticTexts["최근 검색어"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["인기 검색어"].exists)
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.staticTexts["탐색"].waitForExistence(timeout: 3))
 

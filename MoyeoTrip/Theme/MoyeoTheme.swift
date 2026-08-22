@@ -11,8 +11,22 @@ enum MoyeoTheme {
     static let primary300 = Color(hex: "#58A574")
     static let primary400 = Color(hex: "#4E996A")
     static let coral = Color(hex: "#FF7550")
+    // primary-50 — 연한 브랜드 틴트. 다크에서는 배경보다 살짝 밝은 초록 틴트여야
+    // 카드로 읽힌다(#07110E는 배경과 구분되지 않았다).
     static let leaf = Color(uiColor: UIColor { trait in
-        trait.userInterfaceStyle == .dark ? UIColor(hex: "#07110E") : UIColor(hex: "#F0F8F4")
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#12251C") : UIColor(hex: "#F0F8F4")
+    })
+    /// 선택 카드용 표면. `leaf`보다 한 단계 선명해, 테두리만으로 선택을 알리지 않는다.
+    static let selectionSurface = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#193B2B") : UIColor(hex: "#E2F3E8")
+    })
+    /// primary-600 — 배경 위의 브랜드 글자·외곽선 색. 다크에서는 밝은 초록으로 뒤집힌다.
+    static let brandText = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#7EC49B") : UIColor(hex: "#1F7346")
+    })
+    /// primary-700 — leaf 위에 얹는 글자색.
+    static let onLeaf = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#B4DDC3") : UIColor(hex: "#155735")
     })
     static let mint = Color(hex: "#BFE9D2")
     static let river = Color(hex: "#3E9BCF")
@@ -53,6 +67,14 @@ enum MoyeoTheme {
     })
     static let elevatedCard = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#1F2B25") : UIColor(hex: "#FFFFFF")
+    })
+    /// 내가 보낸 채팅 말풍선 (chat-mine). leaf(primary-50)와는 다른 톤이다.
+    static let chatMine = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#163B2A") : UIColor(hex: "#E5F4E8")
+    })
+    /// 시스템 안내 메시지 말풍선.
+    static let systemMessage = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#1C3728") : UIColor(hex: "#E7F3E7")
     })
     static let mapGreen = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#263B31") : UIColor(hex: "#E4F0E7")

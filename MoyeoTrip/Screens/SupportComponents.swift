@@ -7,11 +7,24 @@ import SwiftUI
 
 struct SupportList<Content: View>: View {
     let title: String
+    let spacing: CGFloat
+    /// 헤더 오른쪽 텍스트 버튼 (예: 알림의 "모두 읽음")
+    let trailingTitle: String?
+    let trailingAction: (() -> Void)?
     let content: Content
     @Environment(\.dismiss) private var dismiss
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(
+        title: String,
+        spacing: CGFloat = 16,
+        trailingTitle: String? = nil,
+        trailingAction: (() -> Void)? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
+        self.spacing = spacing
+        self.trailingTitle = trailingTitle
+        self.trailingAction = trailingAction
         self.content = content()
     }
 
@@ -37,7 +50,16 @@ struct SupportList<Content: View>: View {
 
                 Spacer()
 
-                Color.clear.frame(width: 40, height: 40)
+                if let trailingTitle, let trailingAction {
+                    Button(trailingTitle, action: trailingAction)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.forest)
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 10)
+                        .accessibilityIdentifier("support.list.trailingAction")
+                } else {
+                    Color.clear.frame(width: 40, height: 40)
+                }
             }
             .frame(height: 56)
             .padding(.horizontal, 8)
@@ -49,7 +71,7 @@ struct SupportList<Content: View>: View {
             }
 
             ScrollView {
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: spacing) {
                     content
                 }
                 .padding(.horizontal, 18)

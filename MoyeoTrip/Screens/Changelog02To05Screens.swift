@@ -16,6 +16,9 @@ private struct ChangelogComment: Identifiable {
   let badge: String
   let body: String
   let time: String
+  var likes: Int = 0
+  /// 대댓글. 댓글 구조가 검수되려면 답글까지 보여야 한다.
+  var replies: [ChangelogComment] = []
 
   var id: String { "\(name).\(body)" }
 }
@@ -32,6 +35,12 @@ struct ChatSideMenuView: View {
   let thread: ChatThread
   @State private var notificationsEnabled = true
   @State private var route: SupportRoute?
+  @State private var showsLeaveConfirmation: Bool
+
+  init(thread: ChatThread, startsWithLeaveConfirmation: Bool = false) {
+    self.thread = thread
+    _showsLeaveConfirmation = State(initialValue: startsWithLeaveConfirmation)
+  }
 
   private let members = [
     ChangelogPerson(mascot: "🐻", name: "숲속여행자", detail: "매너 4.8 · 여행 8회", role: "호스트"),
@@ -48,11 +57,25 @@ struct ChatSideMenuView: View {
           Text(thread.tripTitle)
             .font(MoyeoTypography.cardTitle)
             .foregroundStyle(MoyeoTheme.ink)
+          Label(thread.courseDisplayName, systemImage: "map.fill")
+            .font(.caption.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.text700)
           Text("5/25(토) 당일치기 · 08:00 – 18:00")
           Text("07:50 청송 시외버스터미널 정문 앞 집합")
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+              sideConditionPill(thread.priceDisplayText, icon: "wonsign.circle")
+              sideConditionPill(
+                thread.recruitmentDeadline.isEmpty ? "마감 확인" : "마감 \(thread.recruitmentDeadline)",
+                icon: "clock"
+              )
+              sideConditionPill(thread.ageRangeDisplayText, icon: "person.2")
+              sideConditionPill(thread.genderDisplayText, icon: "person.crop.circle")
+            }
+          }
           HStack(spacing: 8) {
-            changelogSecondaryButton("모집 상세", icon: "doc.text") {}
-            changelogSecondaryButton("여행 경로", icon: "map") {}
+            changelogSecondaryButton("모집 상세") {}
+            changelogSecondaryButton("여행 경로") {}
           }
           .padding(.top, 6)
         }
@@ -65,7 +88,7 @@ struct ChatSideMenuView: View {
 
         VStack(alignment: .leading, spacing: 4) {
           HStack {
-            Text("동행자 (members.count)")
+            Text("동행자 \(members.count)")
               .font(MoyeoTypography.cardTitle)
             Spacer()
             Text("최대 5명 · 대기 1명")
@@ -135,7 +158,9 @@ struct ChatSideMenuView: View {
           subtitle: "나가면 대기 중인 다음 신청자가 자동으로 합류해요",
           icon: "rectangle.portrait.and.arrow.right",
           isDanger: true
-        ) {}
+        ) {
+          showsLeaveConfirmation = true
+        }
       }
       .padding(.bottom, 28)
     }
@@ -143,11 +168,28 @@ struct ChatSideMenuView: View {
     .navigationTitle("모임 정보")
     .navigationBarTitleDisplayMode(.inline)
     .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
+    .alert("채팅방에서 나갈까요?", isPresented: $showsLeaveConfirmation) {
+      Button("취소", role: .cancel) {}
+      Button("나가기", role: .destructive) {}
+    } message: {
+      Text("나가면 대기 중인 다음 신청자가 자동으로 합류하고, 이 채팅 기록에는 다시 들어올 수 없어요.")
+    }
     .accessibilityIdentifier("screen.chatMenu")
   }
 
   private var sectionDivider: some View {
     Rectangle().fill(MoyeoTheme.subtleBackground).frame(height: 8)
+  }
+
+  private func sideConditionPill(_ title: String, icon: String) -> some View {
+    Label(title, systemImage: icon)
+      .font(.caption2.weight(.heavy))
+      .foregroundStyle(MoyeoTheme.text700)
+      .padding(.horizontal, 9)
+      .frame(height: 26)
+      .background(MoyeoTheme.subtleBackground)
+      .overlay(Capsule().stroke(MoyeoTheme.softLine))
+      .clipShape(Capsule())
   }
 
   private func menuButton(
@@ -181,6 +223,7 @@ struct ChatSideMenuView: View {
 struct ChatAttachmentMenuView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.moyeoIsOffline) private var isOffline
+  @Environment(\.colorScheme) private var colorScheme
   @State private var opensSpecialMessages = false
 
   private let items = [
@@ -193,6 +236,24 @@ struct ChatAttachmentMenuView: View {
   ]
 
   var body: some View {
+    // 시트는 화면 바닥에 붙는다. 가운데 떠 있으면 바텀시트로 읽히지 않는다.
+    VStack(alignment: .leading, spacing: 0) {
+      Spacer(minLength: 0)
+      sheet
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // 바텀시트 뒤의 대화 화면은 항상 읽을 수 없을 만큼만 어둡게 남겨 둔다.
+    // 투명한 네비게이션 배경을 그대로 쓰면 라이트 모드에서 흰 화면으로 비어 보인다.
+    .background(
+      MoyeoTheme.ink
+        .opacity(colorScheme == .dark ? 0.56 : 0.40)
+        .ignoresSafeArea()
+    )
+    .navigationDestination(isPresented: $opensSpecialMessages) { SpecialMessageCardsView() }
+    .accessibilityIdentifier("screen.chatAttach")
+  }
+
+  private var sheet: some View {
     VStack(alignment: .leading, spacing: 0) {
       Capsule()
         .fill(MoyeoTheme.softLine)
@@ -238,18 +299,27 @@ struct ChatAttachmentMenuView: View {
         }
       }
       .padding(.top, 16)
-      Button("닫기") { dismiss() }
-        .font(.subheadline.weight(.bold))
-        .frame(maxWidth: .infinity, minHeight: 48)
-        .background(MoyeoTheme.subtleBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.top, 16)
+      Button { dismiss() } label: {
+        Text("닫기")
+          .font(.subheadline.weight(.bold))
+          .foregroundStyle(MoyeoTheme.ink)
+          .frame(maxWidth: .infinity, minHeight: 48)
+          .background(MoyeoTheme.subtleBackground)
+          .clipShape(RoundedRectangle(cornerRadius: 12))
+      }
+      .buttonStyle(.plain)
+      .padding(.top, 16)
+      .accessibilityIdentifier("chatAttach.close")
     }
     .padding(.horizontal, 20)
     .padding(.bottom, 28)
-    .background(MoyeoTheme.card.ignoresSafeArea())
-    .navigationDestination(isPresented: $opensSpecialMessages) { SpecialMessageCardsView() }
-    .accessibilityIdentifier("screen.chatAttach")
+    .padding(.top, 2)
+    .frame(maxWidth: .infinity)
+    .background(
+      MoyeoTheme.card
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .ignoresSafeArea(edges: .bottom)
+    )
   }
 }
 
@@ -312,7 +382,26 @@ struct FriendsManagementView: View {
               friendRow(item)
             }
           }
-          infoCard("함께 여행한 친구는 친구가 아니어도 도감에 남아요. 친구 신청은 피드를 구독하고 싶을 때만 하면 돼요.")
+          HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "bookmark.fill")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(MoyeoTheme.onLeaf)
+            VStack(alignment: .leading, spacing: 6) {
+              Text("함께 여행한 친구는 친구가 아니어도 도감에 남아요. 친구 신청은 피드를 구독하고 싶을 때만 하면 돼요.")
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.onLeaf)
+                .fixedSize(horizontal: false, vertical: true)
+              Text("도감 열어보기 →")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.onLeaf)
+            }
+            Spacer(minLength: 0)
+          }
+          .padding(13)
+          .background(MoyeoTheme.leaf)
+          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.forest.opacity(0.35)))
+          .accessibilityIdentifier("friends.dexNotice")
             .padding(.top, 16)
         }
         .padding(.horizontal, 18)
@@ -365,6 +454,7 @@ struct FriendsManagementView: View {
 }
 
 struct TripMessageView: View {
+  @Environment(\.dismiss) private var dismiss
   @State private var messages = ["우직한 곰 7821": "핑크뮬리 사진 잘 찍어주셔서 고마워요!"]
   @State private var draftByName: [String: String] = [:]
   @State private var route: SupportRoute?
@@ -388,11 +478,43 @@ struct TripMessageView: View {
         }
       }
       .padding(18)
-      .padding(.bottom, 28)
+      .padding(.bottom, 12)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle("여행 마무리")
     .navigationBarTitleDisplayMode(.inline)
+    .safeAreaInset(edge: .bottom) {
+      HStack(spacing: 8) {
+        Button("나중에") { dismiss() }
+          .font(.subheadline.weight(.bold))
+          .foregroundStyle(MoyeoTheme.ink)
+          .frame(width: 84, height: 50)
+          .accessibilityIdentifier("tripMessage.later")
+        Button {
+          // 입력해 둔 한 줄을 모두 저장하고 도감으로 넘어간다
+          for (name, draft) in draftByName {
+            let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { messages[name] = value }
+          }
+          dismiss()
+        } label: {
+          Text("메시지 남기고 도감 보기")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(MoyeoTheme.forest)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("tripMessage.saveAndOpenDex")
+      }
+      .padding(.horizontal, 18)
+      .padding(.top, 8)
+      .padding(.bottom, 12)
+      .background(MoyeoTheme.card)
+      .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
+    }
     .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
     .accessibilityIdentifier("screen.tripMessage")
   }
@@ -432,12 +554,6 @@ struct TripMessageView: View {
             }
           }
         }
-        Button("메시지 남기기") {
-          let value = draftByName[mate.1, default: ""].trimmingCharacters(
-            in: .whitespacesAndNewlines)
-          if !value.isEmpty { messages[mate.1] = value }
-        }
-        .buttonStyle(.borderedProminent).tint(MoyeoTheme.forest).frame(minHeight: 44)
       }
     }
     .padding(14)
@@ -456,50 +572,70 @@ struct ReportView: View {
   private let reasons = ["스팸 · 도박", "성희롱 · 불쾌한 언행", "돈거래 유도", "허위 정보", "부적절한 내용", "기타"]
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        Text("신고 사유를 알려주세요").font(MoyeoTypography.sectionTitle)
+    VStack(spacing: 0) {
+      Spacer(minLength: 0)
+      VStack(alignment: .leading, spacing: 10) {
+        Capsule()
+          .fill(MoyeoTheme.softLine)
+          .frame(width: 36, height: 4)
+          .frame(maxWidth: .infinity)
+          .padding(.bottom, 4)
+        Text("신고 사유를 알려주세요")
+          .font(MoyeoTypography.sectionTitle)
         Label("해당 메시지 · “계좌로 먼저 보내주시면…”", systemImage: "bubble.left")
-          .font(.caption).padding(12).frame(maxWidth: .infinity, alignment: .leading)
-          .background(MoyeoTheme.subtleBackground).clipShape(RoundedRectangle(cornerRadius: 10))
+          .font(.caption)
+          .padding(.horizontal, 12)
+          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+          .background(MoyeoTheme.subtleBackground)
+          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         ForEach(reasons, id: \.self) { item in
-          Button {
+          ChangelogRadioOption(title: item, isSelected: reason == item) {
             reason = item
-          } label: {
-            HStack {
-              Image(systemName: reason == item ? "checkmark.circle.fill" : "circle")
-              Text(item).font(.subheadline.weight(reason == item ? .bold : .regular))
-              Spacer()
-            }
-            .foregroundStyle(reason == item ? MoyeoTheme.forest : MoyeoTheme.ink)
-            .padding(.horizontal, 13).frame(minHeight: 46)
-            .background(reason == item ? MoyeoTheme.leaf : MoyeoTheme.background)
-            .clipShape(RoundedRectangle(cornerRadius: 11))
-            .overlay(
-              RoundedRectangle(cornerRadius: 11).stroke(
-                reason == item ? MoyeoTheme.forest : MoyeoTheme.softLine))
-          }.buttonStyle(.plain)
+          }
         }
-        Toggle("이 유저를 차단할게요", isOn: $blocksUser)
-          .font(.subheadline.weight(.bold)).tint(MoyeoTheme.forest).frame(minHeight: 48)
+        MoyeoCheckRow(
+          title: "이 유저를 차단할게요",
+          isOn: $blocksUser,
+          accessibilityIdentifier: "report.blockUser"
+        )
         if blocksUser {
           Text("차단하면 이 유저가 만들었거나 참여한 모집이 홈·탐색에서 모두 숨겨져요.")
-            .font(.caption).foregroundStyle(MoyeoTheme.muted)
+            .font(.caption2)
+            .foregroundStyle(MoyeoTheme.muted)
         }
+        // 취소는 좁은 중립 글자, 신고하기는 넓은 채움 — 둘을 같은 너비로 두면 위계가 사라진다 (화면기획)
         HStack(spacing: 8) {
-          Button("취소") { dismiss() }.buttonStyle(.bordered).frame(
-            maxWidth: .infinity, minHeight: 48)
-          Button("신고하기") { dismiss() }.buttonStyle(.borderedProminent).tint(MoyeoTheme.coral).frame(
-            maxWidth: .infinity, minHeight: 48)
+          Button("취소") { dismiss() }
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(MoyeoTheme.ink)
+            .frame(width: 62, height: 48)
+            .accessibilityIdentifier("report.cancel")
+          Button { dismiss() } label: {
+            Text("신고하기")
+              .font(.subheadline.weight(.heavy))
+              .foregroundStyle(.white)
+              .frame(maxWidth: .infinity)
+              .frame(height: 48)
+              .background(MoyeoTheme.coral)
+              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("report.submit")
         }
-        Text("24시간 이내에 검토해 드릴게요.").font(.caption2).foregroundStyle(MoyeoTheme.text400).frame(
-          maxWidth: .infinity)
+        Text("24시간 이내에 검토해 드릴게요.")
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.text400)
+          .frame(maxWidth: .infinity)
+          .padding(.top, 1)
       }
-      .padding(20)
+      .padding(.horizontal, 20)
+      .padding(.top, 12)
+      .padding(.bottom, 28)
+      .background(MoyeoTheme.card)
+      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
-    .background(MoyeoTheme.card.ignoresSafeArea())
-    .navigationTitle("신고")
-    .navigationBarTitleDisplayMode(.inline)
+    .background(MoyeoTheme.ink.opacity(0.56).ignoresSafeArea())
+    .toolbar(.hidden, for: .navigationBar)
     .accessibilityIdentifier("screen.report")
   }
 }
@@ -524,8 +660,17 @@ struct BlockedUsersView: View {
               Text(user.detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
             }
             Spacer()
-            Button("차단 해제") { blocked.removeAll { $0.name == user.name } }.buttonStyle(.bordered)
-              .controlSize(.small)
+            Button {
+              blocked.removeAll { $0.name == user.name }
+            } label: {
+              Text("차단 해제")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.ink)
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
+            }
+            .buttonStyle(.plain)
           }.frame(minHeight: 64)
         }
         Text("차단을 해제하면 서로의 모집·피드를 다시 볼 수 있어요. 해제 전에 한 번 더 확인해요.")
@@ -582,16 +727,12 @@ struct CoursePublishView: View {
             caption: "다녀온 사람만 쓸 수 있는 한 줄이 코스의 값어치예요."
           )
           .padding(.top, 16)
-          Toggle(isOn: $showsNickname) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text("내 닉네임을 함께 보여주기")
-                .font(MoyeoTypography.font(size: 13, weight: .bold, relativeTo: .subheadline))
-              Text("끄면 익명 여행자 코스로 올라가요.")
-                .font(MoyeoTypography.font(size: 11, relativeTo: .caption2))
-                .foregroundStyle(MoyeoTheme.muted)
-            }
-          }
-          .tint(MoyeoTheme.forest)
+          MoyeoCheckRow(
+            title: "내 닉네임을 함께 보여주기",
+            subtitle: "끄면 익명 여행자 코스로 올라가요.",
+            isOn: $showsNickname,
+            accessibilityIdentifier: "coursePublish.showsNickname"
+          )
           .padding(13)
           .background(MoyeoTheme.card)
           .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -717,7 +858,6 @@ struct CoursePublishView: View {
 
 struct TripDayView: View {
   let thread: ChatThread
-  @State private var sharesLocation = true
   @State private var draft = ""
   @State private var messages: [ChatMessage]
   @State private var route: SupportRoute?
@@ -737,7 +877,6 @@ struct TripDayView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
 
       tripProgress
-      locationSharing
 
       ScrollView {
         VStack(spacing: 14) {
@@ -863,30 +1002,6 @@ struct TripDayView: View {
     .accessibilityIdentifier("tripDay.progress")
   }
 
-  private var locationSharing: some View {
-    HStack(spacing: 10) {
-      Image(systemName: "map")
-        .font(.caption)
-        .foregroundStyle(sharesLocation ? MoyeoTheme.forest : MoyeoTheme.muted)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(sharesLocation ? "3명이 위치를 공유 중이에요" : "위치 공유 꺼짐")
-          .font(MoyeoTypography.font(size: 12, weight: .bold, relativeTo: .caption))
-        Text("여행이 끝나면 자동으로 꺼져요")
-          .font(MoyeoTypography.font(size: 10.5, relativeTo: .caption2))
-          .foregroundStyle(MoyeoTheme.muted)
-      }
-      Spacer()
-      Toggle("위치 공유", isOn: $sharesLocation)
-        .labelsHidden()
-        .tint(MoyeoTheme.forest)
-        .accessibilityIdentifier("tripDay.locationSharing")
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 10)
-    .background(MoyeoTheme.card)
-    .overlay(alignment: .bottom) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
-  }
-
   private func dayStep(_ title: String, _ number: Int, done: Bool) -> some View {
     VStack(spacing: 5) {
       Group {
@@ -962,107 +1077,222 @@ private struct TripDayLocationCard: View {
 struct NotificationDetailView: View {
   @State private var mode = "모든 메시지"
   @State private var quietHours = true
-  @State private var mutedTrips = Set(["포항·영덕 동해 드라이브"])
+  @State private var quietDays = Set(["월", "화", "수", "목", "금"])
   private let modes = ["모든 메시지", "멘션·답글만", "받지 않기"]
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
-        settingsCard("알림 범위") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("알림 범위")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.ink)
+          Text("모임이 여러 개면 알림이 금방 쌓여요. 받고 싶은 만큼만 켜두세요.")
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.muted)
+            .fixedSize(horizontal: false, vertical: true)
           ForEach(modes, id: \.self) { item in
-            Button {
+            ChangelogRadioOption(
+              title: item,
+              detail: modeDetail(for: item),
+              isSelected: mode == item
+            ) {
               mode = item
-            } label: {
-              HStack {
-                Text(item)
-                Spacer()
-                Image(systemName: mode == item ? "checkmark.circle.fill" : "circle")
-              }
-              .foregroundStyle(mode == item ? MoyeoTheme.forest : MoyeoTheme.ink).frame(
-                minHeight: 48)
-            }.buttonStyle(.plain)
+            }
           }
         }
         settingsCard("방해금지 시간대") {
-          Toggle("22:30부터 07:00까지", isOn: $quietHours).tint(MoyeoTheme.forest).frame(minHeight: 52)
-          Text("월 · 화 · 수 · 목 · 금 · 토 · 일").font(.caption).foregroundStyle(MoyeoTheme.muted)
-        }
-        settingsCard("모임별 알림") {
-          ForEach(["주왕산 & 주산지 힐링 트레킹", "안동 하회마을 하루여행", "포항·영덕 동해 드라이브"], id: \.self) { title in
-            Toggle(
-              title,
-              isOn: Binding(
-                get: { !mutedTrips.contains(title) },
-                set: { enabled in
-                  if enabled { mutedTrips.remove(title) } else { mutedTrips.insert(title) }
-                })
-            )
-            .font(.subheadline.weight(.semibold)).tint(MoyeoTheme.forest).frame(minHeight: 52)
+          MoyeoCheckRow(
+            title: "방해금지 시간대",
+            subtitle: "이 시간엔 소리·진동 없이 조용히 쌓여요",
+            isOn: $quietHours,
+            accessibilityIdentifier: "notificationDetail.quietHours"
+          )
+          if quietHours {
+            HStack(spacing: 10) {
+              quietHourField(label: "시작", value: "22:30")
+              quietHourField(label: "종료", value: "07:00")
+            }
+            VStack(alignment: .leading, spacing: 6) {
+              Text("요일").font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+              HStack(spacing: 6) {
+                ForEach(["월", "화", "수", "목", "금", "토", "일"], id: \.self) { day in
+                  let on = quietDays.contains(day)
+                  Button {
+                    if on { quietDays.remove(day) } else { quietDays.insert(day) }
+                  } label: {
+                    Text(day)
+                      .font(.caption.weight(.heavy))
+                      .foregroundStyle(on ? MoyeoTheme.onLeaf : MoyeoTheme.muted)
+                      .frame(maxWidth: .infinity)
+                      .frame(height: 38)
+                      .background(on ? MoyeoTheme.leaf : MoyeoTheme.card)
+                      .clipShape(RoundedRectangle(cornerRadius: 10))
+                      .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                          .stroke(on ? MoyeoTheme.forest : MoyeoTheme.line))
+                  }
+                  .buttonStyle(.plain)
+                }
+              }
+            }
+            Text("집합 30분 전 알림처럼 여행 당일 안내는 방해금지 시간에도 전달돼요.")
+              .font(.caption2).foregroundStyle(MoyeoTheme.muted)
+              .fixedSize(horizontal: false, vertical: true)
           }
         }
         infoCard("방해금지 중에도 여행 당일 일정 변경과 안전 관련 알림은 받을 수 있어요.")
       }.padding(18).padding(.bottom, 28)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
-    .navigationTitle("알림 세부 설정")
+    .navigationTitle("채팅 알림")
     .navigationBarTitleDisplayMode(.inline)
     .accessibilityIdentifier("screen.notificationDetail")
+  }
+
+  private func modeDetail(for mode: String) -> String {
+    switch mode {
+    case "모든 메시지": "모임의 모든 대화를 알려드려요"
+    case "멘션·답글만": "나를 부르거나 내 메시지에 답할 때만"
+    default: "앱을 열었을 때만 확인해요"
+    }
   }
 }
 
 struct AccountDeleteView: View {
   let onDeleted: () -> Void
+  @Environment(\.dismiss) private var dismiss
   @State private var reason = ""
   @State private var acknowledgesDeletion = false
   @State private var showsFinalConfirmation = false
   @State private var isDeleting = false
   @State private var errorMessage: String?
-  private let reasons = ["원하는 여행을 찾기 어려워요", "알림이 너무 많아요", "개인정보가 걱정돼요", "잠시 쉬고 싶어요", "기타"]
+  // 화면기획과 같은 사유·삭제범위·참여 목록
+  private let reasons = ["여행을 자주 가지 않게 됐어요", "마음에 드는 모집이 없어요", "불쾌한 경험이 있었어요", "알림이 너무 많아요", "기타"]
+  private let joinedTrips = ["주왕산 & 주산지 힐링 트레킹 · D-2", "포항·영덕 동해 드라이브 · D-9"]
+  private let deletionScope = [
+    "피드·도감·친구·여행 기록이 모두 삭제돼요",
+    "내가 공개한 여행자 코스는 남지만 닉네임은 지워져요",
+    "30일 안에 다시 로그인하면 계정을 되살릴 수 있어요",
+    "30일이 지나면 완전히 삭제되고 되돌릴 수 없어요"
+  ]
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
-        Text("탈퇴 전에 확인해주세요").font(MoyeoTypography.screenTitle)
-        warningCard("참여 중인 여행이 있다면 먼저 취소하거나 호스트 권한을 넘겨야 해요.")
-        settingsCard("떠나는 이유") {
-          ForEach(reasons, id: \.self) { item in
-            Button {
-              reason = item
-            } label: {
-              HStack {
-                Image(systemName: reason == item ? "checkmark.circle.fill" : "circle")
-                Text(item)
-                Spacer()
-              }
-              .foregroundStyle(reason == item ? MoyeoTheme.forest : MoyeoTheme.ink).frame(
-                minHeight: 46)
-            }.buttonStyle(.plain)
+    ScrollViewReader { proxy in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+        // 참여 중인 여행을 목록으로 보여준다 — 어떤 여행을 정리해야 하는지 이 화면에서 알아야 한다 (화면기획)
+        VStack(alignment: .leading, spacing: 10) {
+          Label("참여 중인 여행이 \(joinedTrips.count)개 있어요", systemImage: "person.2.fill")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.warningText)
+          Text("탈퇴하면 동행자들에게 갑자기 빈자리가 생겨요. 나가기 처리를 먼저 해주세요.")
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.warningText)
+            .fixedSize(horizontal: false, vertical: true)
+          ForEach(joinedTrips, id: \.self) { trip in
+            HStack(spacing: 8) {
+              Image(systemName: "calendar")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(MoyeoTheme.warningText)
+              Text(trip)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(MoyeoTheme.ink)
+              Spacer(minLength: 0)
+              Text("관리 →")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.warningText)
+            }
+            .padding(11)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
           }
         }
-        VStack(alignment: .leading, spacing: 9) {
-          Label("30일 동안 탈퇴 대기 상태가 돼요", systemImage: "clock.arrow.circlepath")
-          Label("30일 안에 다시 로그인하면 계정을 되살릴 수 있어요", systemImage: "arrow.uturn.backward.circle")
-          Label("30일 뒤 프로필·도감·로그인 연결 정보가 삭제돼요", systemImage: "trash")
-          Label("이미 공개한 코스와 작성한 신고 기록은 정책에 따라 남을 수 있어요", systemImage: "doc.text")
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoyeoTheme.warningBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityIdentifier("accountDelete.joinedTrips")
+
+        VStack(alignment: .leading, spacing: 4) {
+          Text("떠나는 이유를 알려주세요").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+          Text("서비스를 고치는 데만 쓰여요. (필수)").font(.caption).foregroundStyle(MoyeoTheme.muted)
         }
-        .font(.subheadline).foregroundStyle(MoyeoTheme.text700).padding(14).background(
-          MoyeoTheme.card
-        ).clipShape(RoundedRectangle(cornerRadius: 12))
-        Toggle("삭제 범위와 30일 대기 정책을 확인했어요", isOn: $acknowledgesDeletion)
-          .font(.subheadline.weight(.bold)).tint(MoyeoTheme.coral).frame(minHeight: 50)
+        VStack(spacing: 8) {
+          ForEach(reasons, id: \.self) { item in
+            ChangelogRadioOption(title: item, isSelected: reason == item) {
+              reason = item
+            }
+          }
+        }
+        // 삭제 범위는 화면기획과 같은 4줄
+        VStack(alignment: .leading, spacing: 8) {
+          Text("탈퇴하면 이렇게 돼요").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+          ForEach(deletionScope, id: \.self) { line in
+            HStack(alignment: .top, spacing: 8) {
+              Circle().fill(MoyeoTheme.text400).frame(width: 4, height: 4).padding(.top, 7)
+              Text(line)
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.text700)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          MoyeoCheckRow(
+            title: "삭제 범위와 30일 대기 정책을 확인했어요",
+            tint: MoyeoTheme.coral,
+            isOn: $acknowledgesDeletion,
+            accessibilityIdentifier: "accountDelete.acknowledge"
+          )
+          .id("accountDelete.captureBottom")
+          if isDeleting { ProgressView("탈퇴 요청을 처리하고 있어요").frame(maxWidth: .infinity) }
+        }.padding(18).padding(.bottom, 12)
+      }
+      .background(MoyeoTheme.background.ignoresSafeArea())
+      .navigationTitle("계정 탈퇴")
+      .navigationBarTitleDisplayMode(.inline)
+      .onAppear {
+        guard UITestScrollDriver.requestedPage > 1 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+          proxy.scrollTo("accountDelete.captureBottom", anchor: .bottom)
+        }
+      }
+      .safeAreaInset(edge: .bottom) {
+      // 화면기획은 돌아가기 / 탈퇴하기 두 버튼을 하단에 고정한다
+      HStack(spacing: 8) {
+        Button("돌아가기") { dismiss() }
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .frame(width: 96, height: 50)
+          .accessibilityIdentifier("accountDelete.back")
+        // 비활성 CTA는 화면기획·웹·안드로이드처럼 회색 채움으로 (붉은 버튼을 흐리게만 두면 눌릴 것처럼 보인다)
+        let canDelete = !reason.isEmpty && acknowledgesDeletion && !isDeleting
         Button {
           showsFinalConfirmation = true
         } label: {
-          Text("계정 탈퇴 요청").frame(maxWidth: .infinity, minHeight: 50)
-        }.buttonStyle(.borderedProminent).tint(MoyeoTheme.coral).disabled(
-          reason.isEmpty || !acknowledgesDeletion || isDeleting)
-        if isDeleting { ProgressView("탈퇴 요청을 처리하고 있어요").frame(maxWidth: .infinity) }
-      }.padding(18).padding(.bottom, 30)
-    }
-    .background(MoyeoTheme.background.ignoresSafeArea())
-    .navigationTitle("계정 탈퇴")
-    .navigationBarTitleDisplayMode(.inline)
-    .alert("30일 후 계정이 삭제돼요", isPresented: $showsFinalConfirmation) {
+          Text("탈퇴하기")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(canDelete ? .white : MoyeoTheme.muted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(canDelete ? MoyeoTheme.coral : MoyeoTheme.subtleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canDelete)
+        .accessibilityIdentifier("accountDelete.submit")
+      }
+      .padding(.horizontal, 18)
+      .padding(.top, 8)
+      .padding(.bottom, 12)
+      .background(MoyeoTheme.card)
+      .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
+      }
+      .alert("30일 후 계정이 삭제돼요", isPresented: $showsFinalConfirmation) {
       Button("취소", role: .cancel) {}
       Button("탈퇴 요청", role: .destructive) { deleteAccount() }
     } message: {
@@ -1076,7 +1306,8 @@ struct AccountDeleteView: View {
     } message: {
       Text(errorMessage ?? "")
     }
-    .accessibilityIdentifier("screen.accountDelete")
+      .accessibilityIdentifier("screen.accountDelete")
+    }
   }
 
   private func deleteAccount() {
@@ -1100,34 +1331,69 @@ struct SystemNoticeView: View {
   var body: some View {
     VStack(spacing: 18) {
       Spacer()
-      Image(
-        systemName: mode == .maintenance
-          ? "wrench.and.screwdriver.fill" : "exclamationmark.triangle.fill"
-      )
-      .font(.system(size: 42, weight: .semibold)).foregroundStyle(
-        mode == .maintenance ? MoyeoTheme.forest : MoyeoTheme.coral
-      )
-      .frame(width: 80, height: 80).background(
-        mode == .maintenance ? MoyeoTheme.leaf : MoyeoTheme.coral.opacity(0.12)
-      ).clipShape(Circle())
-      Text(mode == .maintenance ? "더 나은 여행을 위해\n잠시 정비하고 있어요" : "페이지를 불러오지 못했어요")
+      Image(systemName: mode == .maintenance ? "gearshape.fill" : "arrow.clockwise")
+        .font(.system(size: 38, weight: .semibold))
+        .foregroundStyle(mode == .maintenance ? MoyeoTheme.warningText : MoyeoTheme.coral)
+        .frame(width: 92, height: 92)
+        .background(mode == .maintenance ? MoyeoTheme.warningBackground : MoyeoTheme.coral.opacity(0.14))
+        .clipShape(Circle())
+      Text(mode == .maintenance ? "잠시 점검 중이에요" : "무언가 살짝\n잘못됐어요")
         .font(MoyeoTypography.screenTitle).multilineTextAlignment(.center)
       Text(
         mode == .maintenance
-          ? "예상 종료 시각은 오늘 오전 04:30이에요.\n10분마다 자동으로 다시 확인할게요." : "잠시 뒤 새로고침하거나 이전 화면으로 돌아가주세요."
+          ? "더 안정적인 서비스를 위해 정비하고 있어요."
+          : "잠시 후 다시 시도해주세요. 계속 이러면 문의해주세요."
       )
       .font(.subheadline).foregroundStyle(MoyeoTheme.muted).multilineTextAlignment(.center)
       .lineSpacing(4)
-      if mode == .error {
-        Button("새로고침") { retryCount += 1 }.buttonStyle(.borderedProminent).tint(MoyeoTheme.forest)
-          .frame(minWidth: 180, minHeight: 48)
-        Button("돌아가기") {}.buttonStyle(.bordered).frame(minWidth: 180, minHeight: 48)
-      } else {
-        Text("자동 확인 \(retryCount + 1)회째").font(.caption).foregroundStyle(MoyeoTheme.text400)
+      if mode == .maintenance {
+        // 점검 중 제약을 목록으로 알려준다 (화면기획)
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(["예상 종료 · 오늘 오전 4:00", "점검 중에는 모집·채팅이 열리지 않아요"], id: \.self) { line in
+            HStack(alignment: .top, spacing: 8) {
+              Circle().fill(MoyeoTheme.text400).frame(width: 4, height: 4).padding(.top, 7)
+              Text(line)
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.text700)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
       }
       Spacer()
-      Text(mode == .maintenance ? "공지사항에서 점검 소식을 확인할 수 있어요." : "오류 코드 · MT-500-01")
-        .font(.caption2).foregroundStyle(MoyeoTheme.text400).padding(.bottom, 20)
+      VStack(spacing: 8) {
+        Button {
+          retryCount += 1
+        } label: {
+          Text(mode == .maintenance ? "지금 확인" : "새로고침")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(MoyeoTheme.forest)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        if mode == .error {
+          Button {} label: {
+            Text("돌아가기")
+              .font(.subheadline.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.ink)
+              .frame(maxWidth: .infinity)
+              .frame(height: 50)
+              .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
+          }
+          .buttonStyle(.plain)
+        }
+        Text(mode == .maintenance ? "10분마다 자동으로 다시 확인해요" : "ERR-500 · 2026-08-17 14:22")
+          .font(.caption2).foregroundStyle(MoyeoTheme.text400).monospacedDigit()
+      }
+      .padding(.bottom, 20)
     }
     .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MoyeoTheme.background.ignoresSafeArea())
@@ -1152,12 +1418,24 @@ struct FeedCommentsView: View {
 
   private let comments = [
     ChangelogComment(
-      mascot: "🐻", name: "숲속여행자", badge: "작성자", body: "사진 속 월정교 야경이 정말 예쁘네요!", time: "방금"),
+      mascot: "🐰", name: "엉뚱한 토끼 1457", badge: "함께 간 친구",
+      body: "이날 진짜 좋았어요! 주산지 물안개 사진 저도 올릴게요 📷", time: "2시간 전", likes: 4,
+      replies: [
+        ChangelogComment(
+          mascot: "🐻", name: "숲속여행자", badge: "작성자",
+          body: "토끼님 사진이 훨씬 잘 나왔어요 ㅎㅎ", time: "1시간 전")
+      ]),
     ChangelogComment(
-      mascot: "🦌", name: "따스한 사슴 3492", badge: "함께 간 친구", body: "그날 바람까지 생각나요. 다음에도 같이 가요.",
-      time: "12분 전"),
+      mascot: "🐢", name: "잔잔한 거북이 9032", badge: "함께 간 친구",
+      body: "달기약수탕 백숙 진짜 맛있었죠", time: "3시간 전", likes: 2),
     ChangelogComment(
-      mascot: "🐰", name: "달빛 토끼 6142", badge: "", body: "저도 이 코스로 걸어보고 싶어요.", time: "1시간 전")
+      mascot: "🕊", name: "고요한 두루미 1130", badge: "",
+      body: "이 코스 저도 가보고 싶네요. 당일치기로 충분할까요?", time: "5시간 전", likes: 1,
+      replies: [
+        ChangelogComment(
+          mascot: "🐻", name: "숲속여행자", badge: "작성자",
+          body: "네 08시 출발이면 여유로워요!", time: "4시간 전")
+      ])
   ]
 
   var body: some View {
@@ -1166,10 +1444,20 @@ struct FeedCommentsView: View {
         LazyVStack(spacing: 0) {
           ForEach(comments) { item in
             commentRow(item)
+            // 대댓글은 들여쓰기로 부모와의 관계를 보여준다
+            ForEach(item.replies) { reply in
+              commentRow(reply, compact: true)
+                .padding(.leading, 32)
+            }
           }
           ForEach(submitted, id: \.self) { item in
             commentRow(ChangelogComment(mascot: "🦌", name: "나", badge: "", body: item, time: "방금"))
           }
+          Text("함께 간 친구의 댓글이 먼저 보여요")
+            .font(.caption2)
+            .foregroundStyle(MoyeoTheme.text400)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 14)
         }.padding(.horizontal, 18)
       }
       HStack(spacing: 8) {
@@ -1180,21 +1468,21 @@ struct FeedCommentsView: View {
           submit()
         } label: {
           Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 44, height: 44)
-            .background(MoyeoTheme.river).clipShape(Circle())
+            .background(MoyeoTheme.forest).clipShape(Circle())
         }.buttonStyle(.plain).disabled(
           comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }.padding(12).background(MoyeoTheme.card)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
-    .navigationTitle("댓글 \(post.commentCount + submitted.count)개")
+    .navigationTitle("댓글 \(post.commentCount + submitted.count)")
     .navigationBarTitleDisplayMode(.inline)
     .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
     .accessibilityIdentifier("screen.feedComments")
   }
 
-  private func commentRow(_ item: ChangelogComment) -> some View {
+  private func commentRow(_ item: ChangelogComment, compact: Bool = false) -> some View {
     HStack(alignment: .top, spacing: 11) {
-      MascotAvatar(mascot: item.mascot, size: 38, background: MoyeoTheme.leaf)
+      MascotAvatar(mascot: item.mascot, size: compact ? 30 : 38, background: MoyeoTheme.leaf)
       VStack(alignment: .leading, spacing: 5) {
         HStack(spacing: 6) {
           Text(item.name).font(.subheadline.weight(.bold))
@@ -1209,8 +1497,12 @@ struct FeedCommentsView: View {
           Text(item.time).font(.caption2).foregroundStyle(MoyeoTheme.text400)
         }
         Text(item.body).font(.subheadline).foregroundStyle(MoyeoTheme.ink)
-        HStack(spacing: 18) {
-          Button("답글") {}
+        HStack(spacing: 14) {
+          HStack(spacing: 4) {
+            Image(systemName: "heart").font(.system(size: 12, weight: .semibold))
+            if item.likes > 0 { Text("\(item.likes)") }
+          }
+          Button("답글 달기") {}
           Button("신고") { route = .report }
         }.font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted).frame(minHeight: 30)
       }
@@ -1227,13 +1519,70 @@ struct FeedCommentsView: View {
   }
 }
 
-private func changelogSecondaryButton(_ title: String, icon: String, action: @escaping () -> Void)
+/// 보조 진입 버튼. 화면기획은 아이콘 없이 초록 외곽선 + 초록 글자다.
+/// `icon` 은 호출부 호환을 위해 남겨두지만 그리지 않는다.
+private func changelogSecondaryButton(_ title: String, icon: String = "", action: @escaping () -> Void)
   -> some View {
   Button(action: action) {
-    Label(title, systemImage: icon).font(.caption.weight(.bold)).frame(
-      maxWidth: .infinity, minHeight: 42)
+    Text(title)
+      .font(.subheadline.weight(.heavy))
+      .foregroundStyle(MoyeoTheme.brandText)
+      .frame(maxWidth: .infinity)
+      .frame(height: 46)
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.forest))
   }
-  .buttonStyle(.bordered).tint(MoyeoTheme.forest)
+  .buttonStyle(.plain)
+}
+
+/// 선택 항목은 한 덩어리로 붙이지 않고, 눌릴 영역을 분명히 한 카드로 분리한다.
+/// 알림 범위·탈퇴 사유·신고 사유가 같은 상호작용 규칙을 공유한다.
+private struct ChangelogRadioOption: View {
+  let title: String
+  let detail: String?
+  let isSelected: Bool
+  let action: () -> Void
+
+  init(
+    title: String,
+    detail: String? = nil,
+    isSelected: Bool,
+    action: @escaping () -> Void
+  ) {
+    self.title = title
+    self.detail = detail
+    self.isSelected = isSelected
+    self.action = action
+  }
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 10) {
+        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.text400)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.subheadline.weight(isSelected ? .heavy : .semibold))
+            .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.ink)
+          if let detail {
+            Text(detail)
+              .font(.caption2)
+              .foregroundStyle(MoyeoTheme.muted)
+          }
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity, minHeight: detail == nil ? 48 : 64, alignment: .leading)
+      .background(isSelected ? MoyeoTheme.selectionSurface : MoyeoTheme.card)
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(isSelected ? MoyeoTheme.forest : MoyeoTheme.line, lineWidth: 1)
+      }
+    }
+    .buttonStyle(.plain)
+  }
 }
 
 private func infoCard(_ text: String) -> some View {
@@ -1285,11 +1634,26 @@ private func changelogField(_ title: String, value: String) -> some View {
   }
 }
 
+private func quietHourField(label: String, value: String) -> some View {
+  VStack(alignment: .leading, spacing: 6) {
+    Text(label).font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+    Text(value)
+      .font(.subheadline.weight(.bold))
+      .foregroundStyle(MoyeoTheme.ink)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 13)
+      .frame(height: 48)
+      .background(MoyeoTheme.subtleBackground)
+      .clipShape(RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
+  }
+}
+
 private func settingsCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
   -> some View {
   VStack(alignment: .leading, spacing: 6) {
     Text(title).font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted)
-    VStack(spacing: 0) { content() }.padding(.horizontal, 14).background(MoyeoTheme.card).clipShape(
+    VStack(alignment: .leading, spacing: 10) { content() }.padding(14).background(MoyeoTheme.card).clipShape(
       RoundedRectangle(cornerRadius: 12)
     ).overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
   }

@@ -5,6 +5,9 @@
 
 import SwiftUI
 
+// The detail screen keeps its local presentation components beside the owning view.
+// swiftlint:disable file_length
+
 struct TripDetailView: View {
     let trip: TripRecruitment
     var isApplied = false
@@ -33,8 +36,8 @@ struct TripDetailView: View {
                                 onBack: {
                                     dismiss()
                                 },
-                                onOpenChat: {
-                                    selectedThread = threadProvider(trip)
+                                onRefresh: {
+                                    feedbackMessage = "최신 모집 정보를 확인했어요."
                                 }
                             )
                             if let feedbackMessage {
@@ -118,7 +121,7 @@ private struct TripDetailFeedbackBanner: View {
 private struct TripDetailHero: View {
     let trip: TripRecruitment
     let onBack: () -> Void
-    let onOpenChat: () -> Void
+    let onRefresh: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -144,11 +147,7 @@ private struct TripDetailHero: View {
                 HStack {
                     HeroIconButton(systemImage: "chevron.left", label: "뒤로", action: onBack)
                     Spacer()
-                    Text("모집 상세")
-                        .font(.headline.weight(.heavy))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    HeroIconButton(systemImage: "bubble.left.fill", label: "채팅", action: onOpenChat)
+                    HeroIconButton(systemImage: "arrow.clockwise", label: "새로고침", action: onRefresh)
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 56)
@@ -158,10 +157,6 @@ private struct TripDetailHero: View {
                     .font(.caption.weight(.heavy))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.42))
-                    .clipShape(Capsule())
                     .padding(.leading, 20)
                     .padding(.bottom, 48)
             }
@@ -179,10 +174,10 @@ private struct HeroIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.headline.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(.black.opacity(0.26))
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(MoyeoTheme.ink)
+                .frame(width: 38, height: 38)
+                .background(MoyeoTheme.card.opacity(0.92))
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
@@ -203,9 +198,36 @@ private struct TripDetailPanel: View {
                     }
                 }
                 Text(trip.title)
-                    .font(.title3.weight(.heavy))
+                    .font(MoyeoTypography.font(size: 23, weight: .bold, relativeTo: .title2))
                     .foregroundStyle(MoyeoTheme.ink)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if let course = MockData.course(for: trip.courseID) {
+                    NavigationLink {
+                        CourseDetailView(course: course)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "map.fill")
+                                .foregroundStyle(MoyeoTheme.muted)
+                            Text(course.title)
+                                .font(.caption.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.ink)
+                                .lineLimit(1)
+                            Spacer()
+                            Pill(text: trip.courseSource.title, tint: MoyeoTheme.primary300)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(MoyeoTheme.text400)
+                        }
+                        .padding(.horizontal, 11)
+                        .frame(minHeight: 42)
+                        .background(MoyeoTheme.subtleBackground)
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.softLine))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("trip.detail.course")
+                }
 
                 Text(trip.detailMetaText)
                     .font(.subheadline)
@@ -263,6 +285,22 @@ private struct TripDetailPanel: View {
             .padding(14)
             .background(MoyeoTheme.subtleBackground)
             .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+
+            // 조건 4종은 한 카드 안에서 2x2 — 4줄로 세우면 카드만 길어진다 (웹 기준)
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    DetailInfoRow(icon: "wonsign.circle", title: "예상 비용", value: trip.price)
+                    DetailInfoRow(icon: "clock", title: "모집 마감", value: trip.recruitmentDeadline)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    DetailInfoRow(icon: "person.2", title: "나이대", value: trip.ageRangeText)
+                    DetailInfoRow(icon: "person.crop.circle", title: "성별", value: trip.genderRestriction)
+                }
+            }
+            .padding(14)
+            .background(MoyeoTheme.subtleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .accessibilityIdentifier("trip.detail.conditions")
 
             HStack(spacing: 12) {
                 MascotAvatar(mascot: trip.hostAvatar, size: 44, background: MoyeoTheme.leaf)
@@ -332,21 +370,25 @@ private struct DetailInfoRow: View {
     let title: String
     let value: String
 
+    // 2x2 배치에서는 라벨 위 / 값 아래로 읽어야 좁은 폭에서 값이 잘리지 않는다
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(MoyeoTheme.muted)
-                .frame(width: 22)
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.muted)
-                .frame(width: 54, alignment: .leading)
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+                Text(value)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

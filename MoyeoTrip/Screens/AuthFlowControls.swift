@@ -5,6 +5,9 @@
 
 import SwiftUI
 
+// This file contains the shared controls for the complete seven-step auth flow.
+// swiftlint:disable file_length
+
 struct AuthInlineError: View {
     let message: String
     let accessibilityIdentifier: String
@@ -31,14 +34,14 @@ struct AuthSecureField: View {
     let title: String
     @Binding var text: String
     let accessibilityIdentifier: String
+    /// 비밀번호 확인 칸은 자동완성을 요청하지 않는다. 암호 관리자는 본 비밀번호 칸만 채우고,
+    /// 확인 칸에 자동완성 오버레이가 뜨면 입력 포커스를 가져가 버린다.
+    var contentType: UITextContentType? = .password
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "lock.fill")
-                .foregroundStyle(MoyeoTheme.forest)
-                .frame(width: 22)
             SecureField(title, text: $text)
-                .textContentType(.password)
+                .textContentType(contentType)
                 .foregroundStyle(MoyeoTheme.ink)
                 .accessibilityIdentifier(accessibilityIdentifier)
         }
@@ -225,6 +228,7 @@ struct AuthChoiceButton: View {
     let systemImage: String
     var tint: Color = MoyeoTheme.forest
     var accessibilityIdentifier: String?
+    var detailAction: (() -> Void)?
     let isSelected: Bool
     let action: () -> Void
 
@@ -308,10 +312,7 @@ struct AuthNicknameCandidateButton: View {
                 }
 
                 Spacer()
-
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.text400)
+                // 선택은 외곽선과 배경 틴트로만 표시한다 — 다른 플랫폼에 없는 라디오 원형은 두지 않는다
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -394,45 +395,56 @@ struct AuthTermButton: View {
     let title: String
     let subtitle: String
     var isRequired = false
+    var showsRequirement = true
     var accessibilityIdentifier: String?
+    var detailAction: (() -> Void)?
     let isSelected: Bool
     let action: () -> Void
 
+    // 약관은 항목마다 카드를 두지 않고 한 줄씩 수직으로 쌓는다 (화면기획 기준).
+    // 카드가 6개 겹치면 필수/선택 위계가 읽히지 않는다.
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.text400)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button(action: action) {
+                    HStack(spacing: 8) {
+                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.text400)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
                         Text(title)
                             .font(.subheadline.weight(.heavy))
                             .foregroundStyle(MoyeoTheme.ink)
-                        if isRequired {
-                            Text("필수")
-                                .font(.caption2.weight(.heavy))
-                                .foregroundStyle(MoyeoTheme.coral)
-                        }
-                    }
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(MoyeoTheme.muted)
-                }
 
-                Spacer()
+                        if showsRequirement {
+                            Text(isRequired ? "(필수)" : "(선택)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(MoyeoTheme.muted)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+
+                if let detailAction {
+                    Button(action: detailAction) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(MoyeoTheme.text400)
+                            .frame(width: 36)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(title) 내용 보기")
+                    .accessibilityIdentifier("\(accessibilityIdentifier ?? "auth.terms").detail")
+                }
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
-            }
+            Divider().overlay(MoyeoTheme.softLine)
         }
-        .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier ?? "")
     }
 }
@@ -491,10 +503,77 @@ struct AuthAnimalPreview: View {
 
 struct AuthSectionTitle: View {
     let title: String
+    var isRequired = false
+
     var body: some View {
-        Text(title)
-            .font(.subheadline.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.ink)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.subheadline.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.ink)
+            if isRequired {
+                Text("*")
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.coral)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 06 단계 상단의 닉네임 카드 — 앞 단계에서 고른 친구를 다시 보여준다.
+struct AuthSelectedNicknameCard: View {
+    let nickname: String?
+    let candidate: AuthNicknameCandidate?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(candidate?.animalEmoji ?? "🦌")
+                .font(.system(size: 26))
+                .frame(width: 48, height: 48)
+                .background((candidate?.swatchColor ?? MoyeoTheme.forest).opacity(0.18))
+                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(nickname ?? "따스한 사슴 3492")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.ink)
+                Text("새 친구가 옆에 앉았어요")
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityIdentifier("auth.basic.nickname")
+    }
+}
+
+/// 생년월일 아래 안내 — 공개되는 것은 나이대뿐임을 알려준다.
+struct AuthAgeBandNote: View {
+    let birthdate: AuthBirthdate?
+
+    var body: some View {
+        Text(noteText)
+            .font(.caption2)
+            .foregroundStyle(MoyeoTheme.muted)
+            .accessibilityIdentifier("auth.basic.ageBand")
+    }
+
+    private var noteText: String {
+        guard let band = ageBandLabel else { return "나이대만 공개됩니다" }
+        return "나이대만 공개됩니다 (\(band))"
+    }
+
+    private var ageBandLabel: String? {
+        guard let birthdate else { return nil }
+        let calendar = Calendar(identifier: .gregorian)
+        guard let age = calendar.dateComponents([.year], from: birthdate.date, to: Date()).year,
+              age >= 10 else { return nil }
+        let decade = (age / 10) * 10
+        let remainder = age % 10
+        let phase = remainder <= 3 ? "초반" : (remainder <= 6 ? "중반" : "후반")
+        return "\(decade)대 \(phase)"
     }
 }

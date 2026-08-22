@@ -30,9 +30,12 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
 
     @MainActor
     func testDirectLaunchOpensCourseTripAndChatScreens() {
-        launch(screen: "course-detail:course-andong-hahoe")
-        XCTAssertTrue(element("course.detail.course-andong-hahoe").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.staticTexts["안동 하회마을 하루 코스"].exists)
+        launch(screen: "course-detail:course-cheongsong-juwangsan")
+        XCTAssertTrue(element("course.detail.course-cheongsong-juwangsan").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].exists)
+        XCTAssertTrue(element("course.publishingSource").exists)
+        app.swipeUp()
+        XCTAssertTrue(element("course.route.preview").waitForExistence(timeout: 2))
 
         relaunch(screen: "trip-detail:trip-ulleung-island")
         XCTAssertTrue(app.staticTexts["모집 상세"].waitForExistence(timeout: 4))
@@ -41,6 +44,29 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         relaunch(screen: "chat:chat-cheongsong-juwangsan")
         XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.textFields["메시지 입력"].exists)
+    }
+
+    @MainActor
+    func testFeedTimelineScrollsThroughTheLastMockPost() {
+        launch(arguments: ["UITEST_TAB=feed"])
+        XCTAssertTrue(element("screen.feed").waitForExistence(timeout: 4))
+
+        let endMarker = element("feed.timeline.end")
+        for _ in 0..<6 where !endMarker.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(endMarker.isHittable, "피드의 마지막 항목 뒤까지 스크롤할 수 있어야 합니다.")
+    }
+
+    @MainActor
+    func testFeedWriteDirectLaunchIsStableInLightMode() {
+        launch(screen: "feed-write-1", arguments: ["UITEST_FORCE_LIGHT"])
+        XCTAssertTrue(element("screen.feedWrite.step1").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["STEP 1 · 코스 확인"].exists)
+
+        relaunch(screen: "feed-write-5", arguments: ["UITEST_FORCE_LIGHT"])
+        XCTAssertTrue(element("screen.feedWrite.step5").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["STEP 5 · 최종 확인"].exists)
     }
 
     @MainActor
@@ -53,8 +79,8 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["코스 선택"].exists)
 
         relaunch(screen: "search")
-        XCTAssertTrue(app.staticTexts["검색"].waitForExistence(timeout: 4))
-        XCTAssertTrue(app.buttons["청송"].exists)
+        XCTAssertTrue(app.staticTexts["최근 검색어"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["인기 검색어"].exists)
 
         relaunch(screen: "explore-map")
         XCTAssertTrue(app.staticTexts["지도 탐색"].waitForExistence(timeout: 4))
@@ -142,7 +168,7 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         XCTAssertTrue(element("screen.tripDay").waitForExistence(timeout: 4))
         assertStaticTextContaining("현재 방문지 2/4 · 주왕산")
         assertStaticTextContaining("다음 일정 ·")
-        assertStaticTextContaining("3명이 위치를 공유 중이에요")
+        // 여행 중 위치 공유는 기획에서 빠졌다
         assertStaticTextContaining("오늘 여행이 시작됐어요")
         assertStaticTextContaining("주산지 주차장")
 
@@ -155,6 +181,58 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         assertDirectScreen("system-maintenance", identifier: "screen.systemMaintenance")
         assertDirectScreen("system-error", identifier: "screen.systemError")
         assertDirectScreen("feed-comments", identifier: "screen.feedComments")
+    }
+
+    @MainActor
+    func testChangeLog0607ScreensOpenWithEntrySpecificActions() {
+        assertDirectScreen("place-search", identifier: "screen.placeSearch")
+        assertDirectScreen("place-detail", identifier: "screen.placeDetail.CT2299341")
+
+        relaunch(screen: "create-people")
+        XCTAssertTrue(app.staticTexts["나이대 제한"].waitForExistence(timeout: 4))
+        assertStaticTextContaining("25 ~ 35세")
+
+        relaunch(screen: "terms-privacy")
+        XCTAssertTrue(element("screen.terms.privacy.signup").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["동의하고 돌아가기"].exists)
+
+        relaunch(screen: "terms-settings")
+        XCTAssertTrue(element("screen.terms.service.settings").waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["동의하고 돌아가기"].exists)
+    }
+
+    @MainActor
+    func testExactCaptureContractOpensIndependentSheetAlertAndLists() {
+        launch(screen: "email-auth")
+        XCTAssertTrue(element("auth.email.address").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["이메일로 시작하기"].exists)
+
+        relaunch(screen: "apply")
+        XCTAssertTrue(element("screen.applicationSheet").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["함께 가기 신청"].exists)
+
+        relaunch(screen: "chat-list")
+        XCTAssertTrue(element("screen.meetings").waitForExistence(timeout: 4))
+        XCTAssertTrue(element("meeting.thread.chat-cheongsong-juwangsan").exists)
+
+        relaunch(screen: "chat-list-applied")
+        XCTAssertTrue(element("meeting.applied.trip-cheongsong-juwangsan").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["승인 대기"].exists)
+
+        relaunch(screen: "leave")
+        XCTAssertTrue(app.staticTexts["호스트가 나가면\n이 모임은 종료돼요"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["모임 종료"].exists)
+
+        relaunch(screen: "terms-marketing")
+        XCTAssertTrue(element("screen.terms.marketing.signup").waitForExistence(timeout: 4))
+    }
+
+    @MainActor
+    func testOfflineChatDirectCaptureIncludesDeterministicPendingMessage() {
+        launch(screen: "chat:chat-cheongsong-juwangsan", arguments: ["UITEST_OFFLINE_CHAT"])
+        XCTAssertTrue(element("offline.chat.banner").waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["연결되면 보내주세요"].exists)
+        XCTAssertTrue(app.staticTexts["전송 대기"].exists)
     }
 
     private func launch(screen: String) {
@@ -180,6 +258,12 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         app.terminate()
         _ = app.wait(for: .notRunning, timeout: 3)
         launch(screen: screen)
+    }
+
+    private func relaunch(screen: String, arguments: [String]) {
+        app.terminate()
+        _ = app.wait(for: .notRunning, timeout: 3)
+        launch(screen: screen, arguments: arguments)
     }
 
     private func relaunch(arguments: [String]) {

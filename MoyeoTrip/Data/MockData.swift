@@ -32,7 +32,13 @@ extension MockData {
             mascot: "🌲",
             mood: .forest,
             tags: ["자연", "히든명소", "추천"],
-            stops: ["주왕산국립공원", "용연폭포", "주산지"]
+            stops: ["주왕산국립공원", "용연폭포", "주산지"],
+            publishingInfo: CoursePublishingInfo(
+                travelerName: "숲속여행자",
+                travelerAvatar: "🐻",
+                publishedAt: "2026.05.25 여행 후 공개",
+                tripCount: 3
+            )
         ),
         TravelCourse(
             id: "course-andong-hahoe",
@@ -124,14 +130,14 @@ extension MockData {
         TripRecruitment(
             id: "trip-cheongsong-juwangsan",
             courseID: "course-cheongsong-juwangsan",
-            title: "주왕산 & 주산지 힐링 트레킹",
+            title: "30대끼리 느긋하게 힐링 여행가요~",
             region: "청송",
             coverMascot: "🌲",
             hostName: "숲속 사슴 2417",
             hostAvatar: "🦌",
-            schedule: "2026.06.06 (토) 08:00",
+            schedule: "2026.05.25 (토) 08:00",
             meetupPoint: "청송 시외버스터미널",
-            price: "1인 18,000원",
+            price: "1인 45,000원",
             capacity: 5,
             joined: 2,
             minimumParticipants: 3,
@@ -139,7 +145,7 @@ extension MockData {
             summary: "주왕산 숲길을 천천히 걷고 주산지 물그림자까지 둘러보는 당일 모임이에요.",
             vibe: "초보도 따라오기 쉬운 속도, 쉬는 시간을 넉넉히 두는 조용한 분위기",
             tags: ["자연", "트레킹", "초보가능"],
-            route: ["청송 시외버스터미널", "주왕산국립공원", "용연폭포", "주산지"],
+            route: ["청송 시외버스터미널", "주왕산 국립공원", "주산지", "달기약수탕"],
             participants: Array(participants.prefix(2))
         ),
         TripRecruitment(
@@ -174,10 +180,10 @@ extension MockData {
             schedule: "2026.06.05 (금) 14:00",
             meetupPoint: "경주역 2번 출구",
             price: "1인 64,000원",
-            capacity: 6,
-            joined: 5,
+            capacity: 8,
+            joined: 4,
             minimumParticipants: 3,
-            status: .almostFull,
+            status: .open,
             summary: "첨성대와 월정교, 동궁과 월지 야경을 단풍 시즌에 맞춰 천천히 둘러봐요.",
             vibe: "사진을 좋아하지만 이동은 느긋하게, 저녁 이후 야경 시간을 충분히 남겨요",
             tags: ["야경", "단풍", "1박2일"],
@@ -567,13 +573,13 @@ extension MockData {
         ),
         ChatThread(
             id: "chat-cheongsong-juwangsan",
-            tripTitle: "주왕산 & 주산지 힐링 트레킹",
+            tripTitle: "30대끼리 느긋하게 힐링 여행가요~",
             region: "청송",
             mascot: "🌲",
             lastMessage: "숲속여행자: 주산지 물안개 시간에 맞춰 출발해요.",
             updatedAt: "09:32",
             unreadCount: 0,
-            statusSummary: "2/5명 · 마감 D-1",
+            statusSummary: "2/5명 · 마감 D-3",
             statusDetail: "1명만 더 모이면 출발 확정",
             members: Array(participants.prefix(2)),
             messages: [
@@ -602,7 +608,14 @@ extension MockData {
                     isMine: false
                 )
             ],
-            isReadOnly: false
+            isReadOnly: false,
+            tripID: "trip-cheongsong-juwangsan",
+            courseName: "주왕산 & 주산지 힐링 트레킹",
+            price: "1인 45,000원",
+            recruitmentDeadline: "D-3",
+            ageRange: "25~35세",
+            genderRestriction: "성별 무관",
+            scheduleSummary: "5/25(토) 08:00–18:00 · 당일치기"
         ),
         ChatThread(
             id: "chat-yeongju-buseoksa",
@@ -705,8 +718,9 @@ extension MockData {
             commentCount: 18,
             mood: .forest,
             title: "주왕산 & 주산지 힐링 트레킹",
-            subtitle: "청송 · 방금 다녀온 숲길 기록",
-            detailBody: "주왕산 & 주산지 힐링 트레킹 경로가 한눈에 남아서 다음 사람에게도 추천하기 좋았어요."
+            // 부제는 "장소 · #해시태그" 한 줄로 조립된다 (지역은 feedSubtitle 이 앞에 붙인다)
+            subtitle: "#주왕산 #주산지 #숲길",
+            detailBody: "정말 아름다운 코스였어요! 함께해주신 분들 감사해요 😊"
         ),
         FeedPost(
             id: "feed-02",

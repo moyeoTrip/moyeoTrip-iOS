@@ -120,19 +120,27 @@ struct ContentView: View {
     private let currentUserService: AuthCurrentUserService
     private let initialFeedPostID: String?
     private let initialFeedStartsWriting: Bool
+    private let initialFeedWriteStep: Int
     private let exploreStartsInMap: Bool
+    private let meetingsInitialSegment: MeetingSegment
     private let forcedColorScheme: ColorScheme?
+    private let keepsSplashVisibleForCapture: Bool
     private let splashHoldNanoseconds: UInt64 = 1_150_000_000
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
         let launchState = UITestInitialState(arguments: arguments)
+        let keepsSplashVisibleForCapture = arguments.contains("UITEST_MODE")
+            && arguments.contains("UITEST_SCREEN=splash")
+        UITestCaptureSeed.prepare(arguments: arguments)
         let currentUserService = AuthCurrentUserService()
         self.currentUserService = currentUserService
         _connectivity = StateObject(wrappedValue: MoyeoConnectivity(arguments: arguments))
 
         _selectedTab = State(initialValue: launchState.selectedTab)
-        _isShowingSplash = State(initialValue: !arguments.contains("UITEST_MODE"))
+        _isShowingSplash = State(
+            initialValue: !arguments.contains("UITEST_MODE") || keepsSplashVisibleForCapture
+        )
         _profile = State(
             initialValue: currentUserService.cachedProfile().map(MockData.profile.applying) ?? MockData.profile
         )
@@ -145,8 +153,18 @@ struct ContentView: View {
         _myPath = State(initialValue: launchState.myPath)
         initialFeedPostID = launchState.feedPostID
         initialFeedStartsWriting = launchState.feedStartsWriting
+        initialFeedWriteStep = launchState.feedWriteInitialStep
         exploreStartsInMap = launchState.exploreStartsInMap
-        forcedColorScheme = arguments.contains("UITEST_FORCE_DARK") ? .dark : nil
+        meetingsInitialSegment = launchState.meetingsInitialSegment
+        // 번호별 비교 캡처는 다크/라이트 두 테마를 모두 찍는다 — 양쪽 모두 명시 인자를 받는다
+        if arguments.contains("UITEST_FORCE_DARK") {
+            forcedColorScheme = .dark
+        } else if arguments.contains("UITEST_FORCE_LIGHT") {
+            forcedColorScheme = .light
+        } else {
+            forcedColorScheme = nil
+        }
+        self.keepsSplashVisibleForCapture = keepsSplashVisibleForCapture
     }
 
     var body: some View {
@@ -169,8 +187,12 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(MoyeoTheme.background.ignoresSafeArea())
         .preferredColorScheme(forcedColorScheme)
+        .onAppear {
+            // 긴 화면의 스크롤 페이지 캡처 (UITEST_SCROLL_PAGE=N)
+            UITestScrollDriver.applyIfRequested()
+        }
         .task {
-            guard isShowingSplash else { return }
+            guard isShowingSplash, !keepsSplashVisibleForCapture else { return }
 
             try? await Task.sleep(nanoseconds: splashHoldNanoseconds)
             withAnimation(UITestRuntime.reducesVisualAnimations ? nil : .easeInOut(duration: 0.42)) {
@@ -259,7 +281,7 @@ struct ContentView: View {
         case .meetings:
             return meetingsPath.isEmpty
         case .feed:
-            return feedPath.isEmpty && !isBottomNavigationSuppressed
+            return !initialFeedStartsWriting && feedPath.isEmpty && !isBottomNavigationSuppressed
         case .my:
             return myPath.isEmpty
         }
@@ -291,18 +313,27 @@ struct ContentView: View {
             NavigationStack(path: $meetingsPath) {
                 MeetingsView(
                     chatThreads: $chatThreads,
-                    tripContext: tripContext
+                    tripContext: tripContext,
+                    initialSegment: meetingsInitialSegment
                 )
             }
         case .feed:
-            NavigationStack(path: $feedPath) {
-                FeedView(
-                    feedPosts: $feedPosts,
-                    isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
-                    onPublish: registerFeedPost,
-                    initialPostID: initialFeedPostID,
-                    startsWritingPost: initialFeedStartsWriting
-                )
+            if initialFeedStartsWriting {
+                NavigationStack {
+                    FeedWriteView(initialStep: initialFeedWriteStep) { post in
+                        registerFeedPost(post)
+                    }
+                }
+            } else {
+                NavigationStack(path: $feedPath) {
+                    FeedView(
+                        feedPosts: $feedPosts,
+                        isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
+                        onPublish: registerFeedPost,
+                        initialPostID: initialFeedPostID,
+                        feedWriteInitialStep: initialFeedWriteStep
+                    )
+                }
             }
         case .my:
             NavigationStack(path: $myPath) {
