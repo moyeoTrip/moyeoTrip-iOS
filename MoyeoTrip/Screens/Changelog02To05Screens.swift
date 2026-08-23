@@ -1,7 +1,7 @@
 // swiftlint:disable file_length
 import SwiftUI
 
-private struct ChangelogPerson: Identifiable {
+struct ChangelogPerson: Identifiable {
   let mascot: String
   let name: String
   let detail: String
@@ -33,22 +33,86 @@ enum FriendManagementSegment: String, CaseIterable, Identifiable {
 
 struct ChatSideMenuView: View {
   let thread: ChatThread
-  @State private var notificationsEnabled = true
   @State private var route: SupportRoute?
   @State private var showsLeaveConfirmation: Bool
+  /// changeLog14 — 멤버 ⋯ 가 여는 멤버 시트(20-1a 액션 → 20-1b 사유 입력)의 요청
+  @State private var memberSheet: MemberSheetRequest?
 
-  init(thread: ChatThread, startsWithLeaveConfirmation: Bool = false) {
+  init(
+    thread: ChatThread,
+    startsWithLeaveConfirmation: Bool = false,
+    startsWithMemberActions: Bool = false,
+    startsWithMemberRemoval: Bool = false
+  ) {
     self.thread = thread
     _showsLeaveConfirmation = State(initialValue: startsWithLeaveConfirmation)
+    // 직접 실행 캡처(member-actions / member-remove)는 기획과 같은 대상(너구리)으로
+    // 해당 단계의 시트를 연 채 시작한다.
+    let initialStage: MemberSheetStage? =
+      startsWithMemberRemoval ? .reason : (startsWithMemberActions ? .actions : nil)
+    _memberSheet = State(
+      initialValue: initialStage.flatMap { stage in
+        ChatMenuBody.defaultMembers.last.map {
+          MemberSheetRequest(member: $0, initialStage: stage)
+        }
+      })
   }
 
-  private let members = [
+  var body: some View {
+    ChatMenuBody(
+      thread: thread,
+      onOpenRoute: { route = $0 },
+      onLeave: { showsLeaveConfirmation = true },
+      onMemberMore: { memberSheet = MemberSheetRequest(member: $0, initialStage: .actions) }
+    )
+    .navigationTitle("모임 정보")
+    .navigationBarTitleDisplayMode(.inline)
+    .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
+    // changeLog14 — 경고 팝업은 화면기획의 좌측 정렬 카드다. 시스템 알림창은 그 모양이 아니라
+    // 31 모임 종료 경고와 같은 팝업(LeaveConfirmationDialog)을 이전 화면 위에 얹는다.
+    .overlay {
+      if showsLeaveConfirmation {
+        LeaveConfirmationDialog(onCancel: { showsLeaveConfirmation = false })
+      }
+    }
+    // 시스템 시트는 부분 높이에서 화면 바닥에 붙지 않고 떠 보인다 —
+    // 화면기획(20-1a·20-1b)처럼 바닥에 붙는 커스텀 바텀시트 오버레이로 그린다.
+    .overlay {
+      if let request = memberSheet {
+        ZStack(alignment: .bottom) {
+          MoyeoTheme.overlayScrim
+            .ignoresSafeArea()
+            .onTapGesture { memberSheet = nil }
+          MemberSheetFlow(
+            member: request.member,
+            initialStage: request.initialStage,
+            onClose: { memberSheet = nil }
+          )
+        }
+      }
+    }
+    .accessibilityIdentifier("screen.chatMenu")
+  }
+}
+
+/// changeLog14 — 20-1 채팅방 사이드 메뉴 본문. 오버레이(20-1a · 20-1b · 31)의 배경이
+/// 빈 딤이 아니라 실제 이 화면과 같은 코드를 쓰도록 화면 껍데기와 분리했다.
+struct ChatMenuBody: View {
+  let thread: ChatThread
+  var onOpenRoute: (SupportRoute) -> Void = { _ in }
+  var onLeave: () -> Void = {}
+  var onMemberMore: (ChangelogPerson) -> Void = { _ in }
+  @State private var notificationsEnabled = true
+
+  static let defaultMembers = [
     ChangelogPerson(mascot: "🐻", name: "숲속여행자", detail: "매너 4.8 · 여행 8회", role: "호스트"),
     ChangelogPerson(mascot: "🦌", name: "따스한 사슴 3492", detail: "매너 4.8 · 여행 8회", role: "나"),
     ChangelogPerson(mascot: "🐰", name: "엉뚱한 토끼 1457", detail: "매너 4.8 · 여행 8회", role: ""),
     ChangelogPerson(mascot: "🐢", name: "잔잔한 거북이 9032", detail: "매너 4.8 · 여행 8회", role: ""),
     ChangelogPerson(mascot: "🦝", name: "호기심 많은 너구리 9027", detail: "매너 4.8 · 여행 8회", role: "")
   ]
+
+  private var members: [ChangelogPerson] { Self.defaultMembers }
 
   var body: some View {
     ScrollView {
@@ -114,14 +178,23 @@ struct ChatSideMenuView: View {
                   .background(MoyeoTheme.leaf)
                   .clipShape(Capsule())
               } else {
-                Image(systemName: "ellipsis")
-                  .frame(width: 44, height: 44)
-                  .foregroundStyle(MoyeoTheme.muted)
+                // changeLog14 — 역할 없는 멤버의 ⋯ 가 20-1a 멤버 액션 시트를 연다
+                Button {
+                  onMemberMore(member)
+                } label: {
+                  Image(systemName: "ellipsis")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(member.name) 더보기")
+                .accessibilityIdentifier("chatMenu.member.more.\(member.name)")
               }
             }
             .frame(minHeight: 54)
           }
-          Text("호스트는 멤버 우측 더보기에서 내보내기를 할 수 있어요. 내보낸 자리는 대기 순서대로 자동으로 채워져요.")
+          Text("호스트는 멤버 우측 더보기에서 내보내기를 할 수 있어요. 사유 입력은 필수이고, 내보낸 자리는 대기 순서대로 자동으로 채워져요.")
             .font(.caption2)
             .foregroundStyle(MoyeoTheme.text400)
             .fixedSize(horizontal: false, vertical: true)
@@ -131,10 +204,10 @@ struct ChatSideMenuView: View {
 
         sectionDivider
         menuButton("공지", subtitle: "고정 2개 · 전체 4개", icon: "note.text") {
-          route = .noticeHistory(thread.id)
+          onOpenRoute(.noticeHistory(thread.id))
         }
         menuButton("공유된 항목", subtitle: "사진 12 · 장소 4 · 투표 2", icon: "photo.on.rectangle") {
-          route = .specialMessages
+          onOpenRoute(.specialMessages)
         }
         HStack(spacing: 12) {
           Image(systemName: "bell")
@@ -150,7 +223,7 @@ struct ChatSideMenuView: View {
         .frame(minHeight: 56)
         .padding(.horizontal, 18)
         menuButton("신고 · 차단", subtitle: "부적절한 대화나 멤버를 신고해요", icon: "flag") {
-          route = .report
+          onOpenRoute(.report)
         }
         sectionDivider
         menuButton(
@@ -159,22 +232,12 @@ struct ChatSideMenuView: View {
           icon: "rectangle.portrait.and.arrow.right",
           isDanger: true
         ) {
-          showsLeaveConfirmation = true
+          onLeave()
         }
       }
       .padding(.bottom, 28)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
-    .navigationTitle("모임 정보")
-    .navigationBarTitleDisplayMode(.inline)
-    .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
-    .alert("채팅방에서 나갈까요?", isPresented: $showsLeaveConfirmation) {
-      Button("취소", role: .cancel) {}
-      Button("나가기", role: .destructive) {}
-    } message: {
-      Text("나가면 대기 중인 다음 신청자가 자동으로 합류하고, 이 채팅 기록에는 다시 들어올 수 없어요.")
-    }
-    .accessibilityIdentifier("screen.chatMenu")
   }
 
   private var sectionDivider: some View {
@@ -220,10 +283,311 @@ struct ChatSideMenuView: View {
   }
 }
 
+/// changeLog14 — 멤버 시트의 단계. ⋯ 는 액션 시트(20-1a)가 먼저고,
+/// 내보내기를 고르면 사유 입력(20-1b)으로 전환된다.
+enum MemberSheetStage {
+  case actions
+  case reason
+}
+
+private struct MemberSheetRequest: Identifiable {
+  let member: ChangelogPerson
+  let initialStage: MemberSheetStage
+
+  var id: String { member.id }
+}
+
+/// 20-1a 멤버 액션 → 20-1b 사유 입력을 한 시트 안에서 전환한다.
+/// 시트를 닫았다 다시 열면 액션 단계부터 시작한다.
+/// 화면 바닥에 붙는 커스텀 바텀시트 — 시스템 시트는 부분 높이에서 떠 보인다.
+private struct MemberSheetFlow: View {
+  let member: ChangelogPerson
+  let onClose: () -> Void
+  @State private var stage: MemberSheetStage
+
+  init(member: ChangelogPerson, initialStage: MemberSheetStage, onClose: @escaping () -> Void = {}) {
+    self.member = member
+    self.onClose = onClose
+    _stage = State(initialValue: initialStage)
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Capsule()
+        .fill(MoyeoTheme.line)
+        .frame(width: 40, height: 5)
+        .padding(.top, 10)
+      switch stage {
+      case .actions:
+        MemberActionsSheet(member: member, onRemove: { stage = .reason }, onClose: onClose)
+      case .reason:
+        MemberRemoveSheet(member: member, onClose: onClose)
+          .frame(maxHeight: 560)
+      }
+    }
+    .frame(maxWidth: .infinity)
+    // changeLog14 — 시트 표면은 카드 표면(`card`)이다. `background`는 다크에서
+    // 화면 배경과 같은 값이라 시트 경계가 사라진다. 라이트에서는 두 값이 같다.
+    .background {
+      UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
+        .fill(MoyeoTheme.card)
+        .ignoresSafeArea(edges: .bottom)
+    }
+    .transition(.move(edge: .bottom))
+  }
+}
+
+/// 20-1a 멤버 액션 시트 (changeLog14) — 멤버 요약 + 친구 요청 + 내보내기(호스트 전용).
+private struct MemberActionsSheet: View {
+  let member: ChangelogPerson
+  let onRemove: () -> Void
+  let onClose: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 12) {
+        MascotAvatar(mascot: member.mascot, size: 44, background: MoyeoTheme.leaf)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(member.name)
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.ink)
+          Text("\(member.detail) · 어제 합류")
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.muted)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.bottom, 14)
+
+      Divider().overlay(MoyeoTheme.softLine)
+
+      actionRow(
+        title: "친구 요청하기",
+        icon: "person.crop.circle",
+        tint: MoyeoTheme.ink,
+        identifier: "member-actions-friend"
+      ) {}
+
+      Divider().overlay(MoyeoTheme.softLine)
+
+      // danger 톤 — 이 행만 호스트에게 보인다 (기획 20-1a)
+      actionRow(
+        title: "내보내기",
+        icon: "exclamationmark.triangle",
+        tint: MoyeoTheme.coral,
+        identifier: "member-actions-remove",
+        action: onRemove
+      )
+
+      Text("내보내기는 호스트에게만 보여요.")
+        .font(.caption2)
+        .foregroundStyle(MoyeoTheme.text400)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+
+      Button {
+        onClose()
+      } label: {
+        Text("닫기")
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.brandText)
+          .frame(maxWidth: .infinity)
+          .frame(height: 50)
+          .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .stroke(MoyeoTheme.forest, lineWidth: 1)
+          }
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("member-actions-close")
+    }
+    .padding(20)
+    .padding(.top, 6)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityIdentifier("member-actions-sheet")
+  }
+
+  private func actionRow(
+    title: String,
+    icon: String,
+    tint: Color,
+    identifier: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      HStack(spacing: 12) {
+        Image(systemName: icon)
+          .font(.system(size: 17, weight: .semibold))
+          .frame(width: 24)
+        Text(title)
+          .font(.subheadline.weight(.bold))
+        Spacer(minLength: 0)
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.text400)
+      }
+      .foregroundStyle(tint)
+      .frame(minHeight: 54)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier(identifier)
+  }
+}
+
+/// 20-1b 멤버 내보내기 (changeLog14) — 호스트가 사유(10자 이상)를 입력해야 내보낼 수 있다.
+/// 이 사유가 그대로 상대의 13-1 내보내기 안내에 보인다.
+private struct MemberRemoveSheet: View {
+  let member: ChangelogPerson
+  let onClose: () -> Void
+  @State private var reason = ""
+
+  private let policies = [
+    "내보내면 이 모임에 다시 신청할 수 없어요.",
+    // changeLog14 — 강퇴는 접근을 끊는 것이지 기록을 지우는 것이 아니다
+    "내보내는 즉시 채팅방에서 제외돼요. 이미 남긴 대화는 채팅방에 그대로 남아요.",
+    "사유는 상대에게 알림으로 전달돼요."
+  ]
+
+  /// changeLog12 진입 상태 원칙 — 사유 10자 미만이면 내보내기 비활성
+  private var canSubmit: Bool {
+    reason.trimmingCharacters(in: .whitespacesAndNewlines).count >= 10
+  }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 0) {
+        Text("멤버 내보내기")
+          .font(.title3.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+        Text("내보낸 자리는 대기 큐에서 자동으로 채워져요.")
+          .font(.footnote)
+          .foregroundStyle(MoyeoTheme.muted)
+          .padding(.top, 6)
+
+        HStack(spacing: 12) {
+          MascotAvatar(mascot: member.mascot, size: 44, background: MoyeoTheme.leaf)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(member.name)
+              .font(.subheadline.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.ink)
+            Text("\(member.detail) · 어제 합류")
+              .font(.caption)
+              .foregroundStyle(MoyeoTheme.muted)
+          }
+          Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.top, 16)
+
+        HStack(spacing: 3) {
+          Text("내보내는 사유")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.ink)
+          Text("*")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.coral)
+        }
+        .padding(.top, 18)
+
+        VStack(alignment: .leading, spacing: 0) {
+          ZStack(alignment: .topLeading) {
+            if reason.isEmpty {
+              Text("사유를 남겨주세요. 상대에게 알림으로 그대로 전달돼요. (10자 이상)")
+                .font(.subheadline)
+                .foregroundStyle(MoyeoTheme.text400)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
+                .padding(.leading, 5)
+            }
+            TextEditor(text: $reason)
+              .font(.subheadline)
+              .foregroundStyle(MoyeoTheme.ink)
+              .scrollContentBackground(.hidden)
+              .frame(minHeight: 96)
+              .onChange(of: reason) { _, value in
+                if value.count > 200 { reason = String(value.prefix(200)) }
+              }
+              .accessibilityIdentifier("member-remove-reason")
+          }
+          Text("\(reason.count)/200")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(MoyeoTheme.text400)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(10)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(MoyeoTheme.line, lineWidth: 1)
+        }
+        .padding(.top, 10)
+
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(policies, id: \.self) { line in
+            HStack(alignment: .top, spacing: 8) {
+              Circle()
+                .fill(MoyeoTheme.text400)
+                .frame(width: 4, height: 4)
+                .padding(.top, 7)
+              Text(line)
+                .font(.footnote)
+                .foregroundStyle(MoyeoTheme.text700)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.top, 16)
+      }
+      .padding(.horizontal, 20)
+      .padding(.top, 22)
+    }
+    .safeAreaInset(edge: .bottom) {
+      HStack(spacing: 8) {
+        Button("취소") { onClose() }
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .frame(width: 96, height: 50)
+          .accessibilityIdentifier("member-remove-cancel")
+        // 비활성 CTA는 회색 채움 (계정 탈퇴와 같은 관례) — 활성화되면 danger 톤
+        Button {
+          onClose()
+        } label: {
+          Text("내보내기")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(canSubmit ? .white : MoyeoTheme.muted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(canSubmit ? MoyeoTheme.coral : MoyeoTheme.subtleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSubmit)
+        .accessibilityIdentifier("member-remove-submit")
+      }
+      .padding(.horizontal, 20)
+      .padding(.top, 8)
+      .padding(.bottom, 12)
+      .background(MoyeoTheme.card)
+    }
+    // 시트 표면은 카드 표면이다 — 다크에서 화면 배경과 같은 값이면 경계가 사라진다.
+    // 크기·딤은 감싸는 MemberSheetFlow 가 한 곳에서 정한다.
+    .background(MoyeoTheme.card)
+    .accessibilityIdentifier("member-remove-sheet")
+  }
+}
+
 struct ChatAttachmentMenuView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.moyeoIsOffline) private var isOffline
-  @Environment(\.colorScheme) private var colorScheme
   @State private var opensSpecialMessages = false
 
   private let items = [
@@ -242,13 +606,10 @@ struct ChatAttachmentMenuView: View {
       sheet
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    // 바텀시트 뒤의 대화 화면은 항상 읽을 수 없을 만큼만 어둡게 남겨 둔다.
-    // 투명한 네비게이션 배경을 그대로 쓰면 라이트 모드에서 흰 화면으로 비어 보인다.
-    .background(
-      MoyeoTheme.ink
-        .opacity(colorScheme == .dark ? 0.56 : 0.40)
-        .ignoresSafeArea()
-    )
+    // changeLog14 — 바텀시트 뒤에는 채팅 버블 실루엣이 아니라 실제 채팅방 본문을 깐다.
+    // 빈 딤을 쓰면 라이트 모드에서 흰 화면으로 비어 보인다.
+    .background(ChatRoomOverlayBackdrop())
+    .toolbar(.hidden, for: .navigationBar)
     .navigationDestination(isPresented: $opensSpecialMessages) { SpecialMessageCardsView() }
     .accessibilityIdentifier("screen.chatAttach")
   }
@@ -616,7 +977,7 @@ struct ReportView: View {
               .foregroundStyle(.white)
               .frame(maxWidth: .infinity)
               .frame(height: 48)
-              .background(MoyeoTheme.coral)
+              .background(MoyeoTheme.dangerRed)
               .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
           }
           .buttonStyle(.plain)
@@ -634,7 +995,8 @@ struct ReportView: View {
       .background(MoyeoTheme.card)
       .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
-    .background(MoyeoTheme.ink.opacity(0.56).ignoresSafeArea())
+    // changeLog14 — 빈 딤 대신 실제 채팅방 본문을 깔고 그 위에 스크림을 얹는다
+    .background(ChatRoomOverlayBackdrop())
     .toolbar(.hidden, for: .navigationBar)
     .accessibilityIdentifier("screen.report")
   }
@@ -1141,7 +1503,7 @@ struct NotificationDetailView: View {
               .fixedSize(horizontal: false, vertical: true)
           }
         }
-        infoCard("방해금지 중에도 여행 당일 일정 변경과 안전 관련 알림은 받을 수 있어요.")
+        // 화면기획에는 하단 안내 배너가 없다. 방해금지 예외 안내는 카드 안 문구로 이미 한 번 나온다.
       }.padding(18).padding(.bottom, 28)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
@@ -1414,7 +1776,6 @@ struct FeedCommentsView: View {
   let post: FeedPost
   @State private var comment = ""
   @State private var submitted: [String] = []
-  @State private var route: SupportRoute?
 
   private let comments = [
     ChangelogComment(
@@ -1442,6 +1803,8 @@ struct FeedCommentsView: View {
     VStack(spacing: 0) {
       ScrollView {
         LazyVStack(spacing: 0) {
+          // 어떤 피드의 댓글인지 — 화면기획 23-1 상단 원글 요약
+          originalPostSummary
           ForEach(comments) { item in
             commentRow(item)
             // 대댓글은 들여쓰기로 부모와의 관계를 보여준다
@@ -1476,8 +1839,31 @@ struct FeedCommentsView: View {
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle("댓글 \(post.commentCount + submitted.count)")
     .navigationBarTitleDisplayMode(.inline)
-    .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
     .accessibilityIdentifier("screen.feedComments")
+  }
+
+  private var originalPostSummary: some View {
+    HStack(spacing: 10) {
+      MoyeoPhotoTile(mascot: "", mood: post.mood, height: 40, cornerRadius: 10)
+        .frame(width: 40)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(post.feedTitle)
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .lineLimit(1)
+        Text("\(post.authorName) · 좋아요 \(post.likeCount)")
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.muted)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.top, 10)
+    .padding(.bottom, 12)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MoyeoTheme.softLine).frame(height: 1)
+    }
+    .accessibilityIdentifier("feedComments.originalPost")
   }
 
   private func commentRow(_ item: ChangelogComment, compact: Bool = false) -> some View {
@@ -1502,8 +1888,8 @@ struct FeedCommentsView: View {
             Image(systemName: "heart").font(.system(size: 12, weight: .semibold))
             if item.likes > 0 { Text("\(item.likes)") }
           }
+          // 화면기획 23-1의 댓글 행 액션은 좋아요와 답글 달기 둘이다 (신고는 더보기에 없다)
           Button("답글 달기") {}
-          Button("신고") { route = .report }
         }.font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted).frame(minHeight: 30)
       }
     }.padding(.vertical, 12).overlay(alignment: .bottom) {

@@ -72,7 +72,7 @@ struct TripConfirmedView: View {
   private var confirmedCopy: some View {
     VStack(spacing: 2) {
       Text(
-        "5월 22일 마감까지 \(Text("\(max(trip.joined, trip.minimumParticipants))명").foregroundColor(MoyeoTheme.forest))이 모였어요."
+        "5월 22일 마감까지 \(Text("\(trip.confirmedMemberCount)명").foregroundColor(MoyeoTheme.forest))이 모였어요."
       )
       Text("이제 함께 떠나기만 하면 돼요.")
     }
@@ -152,18 +152,19 @@ private struct ConfirmedTripCard: View {
           .foregroundStyle(MoyeoTheme.forest)
       }
       confirmedRow(icon: "calendar", text: scheduleText)
-      confirmedRow(icon: "mappin.and.ellipse", text: "07:50 \(trip.meetupPoint)")
+      // 집합 표기는 "07:50 청송 시외버스터미널 정문 앞"까지다 (화면기획 20-4 · 15와 같은 값)
+      confirmedRow(icon: "mappin.and.ellipse", text: trip.detailMeetupText)
       confirmedRow(
         icon: "person.2.fill",
         text: "\(max(trip.joined, trip.minimumParticipants))명 · 최소 \(trip.minimumParticipants)명 충족"
       )
       HStack(spacing: -7) {
-        ForEach(Array(trip.participants.prefix(4).enumerated()), id: \.offset) { _, member in
+        ForEach(Array(trip.confirmedRoster.prefix(4).enumerated()), id: \.offset) { _, member in
           MascotAvatar(mascot: member.avatar, size: 30, background: MoyeoTheme.card)
             .overlay(Circle().stroke(MoyeoTheme.card, lineWidth: 2))
         }
-        if trip.joined > 4 {
-          Text("+\(trip.joined - 4)")
+        if trip.confirmedMemberCount > 4 {
+          Text("+\(trip.confirmedMemberCount - 4)")
             .font(MoyeoTypography.font(size: 11, weight: .bold, relativeTo: .caption2))
             .foregroundStyle(MoyeoTheme.text700)
             .frame(width: 30, height: 30)
@@ -197,6 +198,25 @@ private struct ConfirmedTripCard: View {
       .font(MoyeoTypography.font(size: 12.5, weight: .bold, relativeTo: .caption))
       .foregroundStyle(MoyeoTheme.ink)
       .lineLimit(2)
+  }
+}
+
+extension TripRecruitment {
+  /// 화면기획 20-4 — 확정 시점에는 정원이 채워진 상태로 보여준다("5명이 모였어요").
+  /// 카드의 "3명 · 최소 3명 충족"은 최소 인원 충족 표기라 기획과 같은 값을 유지한다.
+  var confirmedMemberCount: Int {
+    max(joined, capacity)
+  }
+
+  /// 확정 멤버 아바타. 목데이터의 참여자가 부족하면 공통 참여자 목록에서 채운다.
+  var confirmedRoster: [Participant] {
+    var roster = participants
+    for member in MockData.participants where roster.count < confirmedMemberCount {
+      if !roster.contains(where: { $0.id == member.id }) {
+        roster.append(member)
+      }
+    }
+    return Array(roster.prefix(confirmedMemberCount))
   }
 }
 

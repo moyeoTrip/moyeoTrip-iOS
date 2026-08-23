@@ -359,6 +359,8 @@ struct AuthPrimaryButton: View {
 }
 
 struct AuthSecondaryButton: View {
+    /// 활성 보조 CTA는 화면기획·웹·안드로이드처럼 아웃라인(카드 배경 + 초록 테두리 + 진한 초록 글자)이다.
+    /// leaf 채움 + forest 글자는 대비가 낮아 같은 버튼이 iOS에서만 비활성처럼 읽혔다.
     @Environment(\.isEnabled) private var isEnabled
 
     let title: String
@@ -371,11 +373,15 @@ struct AuthSecondaryButton: View {
         Button(action: action) {
             Text(title)
                 .font(.subheadline.weight(.heavy))
-                .foregroundStyle(isEnabled ? MoyeoTheme.forest : MoyeoTheme.muted)
+                .foregroundStyle(isEnabled ? MoyeoTheme.onLeaf : MoyeoTheme.muted)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(isEnabled ? MoyeoTheme.leaf : MoyeoTheme.subtleBackground)
+                .background(isEnabled ? MoyeoTheme.card : MoyeoTheme.subtleBackground)
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                        .stroke(isEnabled ? MoyeoTheme.forest : MoyeoTheme.line, lineWidth: 1)
+                }
                 .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
         }
         .buttonStyle(.plain)

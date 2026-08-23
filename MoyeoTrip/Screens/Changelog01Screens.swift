@@ -75,6 +75,24 @@ struct RecruitmentDraft: Hashable {
         }
     }
 
+    /// 리뷰(17-7) 요약 카드용 성별 조건 표기 — 제한이 없으면 "성별 제한 없음"으로 읽는다.
+    var genderSummary: String {
+        switch genderRestriction {
+        case RecruitmentGenderCondition.women.rawValue, RecruitmentGenderCondition.men.rawValue:
+            return genderRestriction
+        default:
+            return "성별 제한 없음"
+        }
+    }
+
+    /// 리뷰(17-7) 요약 카드용 마감 표기 — "5/22(목) 23:59 · D-3" 형태.
+    var deadlineSummary: String {
+        let parts = deadline.split(separator: " ").map(String.init)
+        guard parts.count >= 5 else { return deadline }
+        let compact = compactDate(parts.prefix(4).joined(separator: " "))
+        return "\(compact) \(parts[4]) · D-3"
+    }
+
     private func compactDate(_ value: String) -> String {
         let parts = value.split(separator: " ")
         guard parts.count >= 4,
@@ -243,21 +261,27 @@ private struct CreationHeader: View {
 struct CreationStepDots: View {
     let current: Int
     private let labels = ["코스", "일정", "인원", "세부", "리뷰"]
-    private let icons = ["point.topleft.down.to.point.bottomright.curvepath", "calendar", "person.2", "doc.text", "star.fill"]
+    private let icons = ["point.topleft.down.to.point.bottomright.curvepath", "calendar", "person.2", "doc.text", "star"]
 
     var body: some View {
+        // 화면기획 17-x 공용 진행 단계 — 완료: 초록 테두리 원 + 초록 체크,
+        // 현재: 틴트 원 + 초록 아이콘 + 초록 테두리, 미래: 회색 원 + 회색 아이콘.
         HStack {
             ForEach(labels.indices, id: \.self) { index in
+                let isDone = index + 1 < current
+                let isCurrent = index + 1 == current
                 VStack(spacing: 5) {
-                    Image(systemName: index + 1 < current ? "checkmark" : icons[index])
+                    Image(systemName: isDone ? "checkmark" : icons[index])
                         .font(.caption.weight(.bold))
                         .frame(width: 34, height: 34)
-                        .foregroundStyle(index + 1 <= current ? MoyeoTheme.primary300 : MoyeoTheme.text400)
-                        .overlay(Circle().stroke(index + 1 <= current ? MoyeoTheme.primary300 : MoyeoTheme.line))
+                        .foregroundStyle(isDone || isCurrent ? MoyeoTheme.brandText : MoyeoTheme.text400)
+                        .background(isCurrent ? MoyeoTheme.leaf : MoyeoTheme.card)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(isDone || isCurrent ? MoyeoTheme.brandText : MoyeoTheme.line))
                     Text(labels[index])
                         .font(MoyeoTypography.font(size: 10, weight: .bold, relativeTo: .caption2))
                 }
-                .foregroundStyle(index + 1 <= current ? MoyeoTheme.primary300 : MoyeoTheme.text400)
+                .foregroundStyle(isDone || isCurrent ? MoyeoTheme.brandText : MoyeoTheme.text400)
                 .frame(maxWidth: .infinity)
             }
         }
@@ -763,11 +787,6 @@ private struct RecruitmentPeopleView: View {
                             set: { draft.genderRestriction = $0.rawValue }
                         )
                     )
-                    if draft.genderRestriction != RecruitmentGenderCondition.any.rawValue {
-                        Text("수락되는 인원은 같은 성별로 한정돼요.")
-                            .font(.caption)
-                            .foregroundStyle(MoyeoTheme.muted)
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -776,10 +795,14 @@ private struct RecruitmentPeopleView: View {
                     DesignField(
                         label: "",
                         icon: "person.2",
-                        value: "\(draft.minimumAge) ~ \(draft.maximumAge)세",
-                        detail: "최소·최대 모두 20~100세 사이에서 정할 수 있어요. 조건에 맞지 않는 사용자에게는 신청 버튼이 비활성으로 보여요."
+                        value: "\(draft.minimumAge) ~ \(draft.maximumAge)세"
                     )
-                    .accessibilityIdentifier("createPeople.ageCaption")
+                    // 화면기획 17-4 — 설명은 행 안이 아니라 행 아래 캡션이다
+                    Text("최소·최대 모두 20~100세 사이에서 정할 수 있어요. 조건에 맞지 않는 사용자에게는 신청 버튼이 비활성으로 보여요.")
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("createPeople.ageCaption")
                 }
             }
             .padding(20)
@@ -878,22 +901,27 @@ struct RecruitmentMeetingView: View {
                     LabelledSearchField(text: $search, prompt: "장소 검색 (TourAPI)")
                         .padding(12)
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(["터미널 정문 앞", "2번 출구", "주차장 입구"], id: \.self) { option in
-                            Button(option) { detail = option }
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(detail == option ? MoyeoTheme.primary300 : MoyeoTheme.ink)
-                                .padding(.horizontal, 12)
-                                .frame(height: 34)
-                                .background(detail == option ? MoyeoTheme.leaf : MoyeoTheme.card)
-                                .overlay(RoundedRectangle(cornerRadius: 17).stroke(detail == option ? MoyeoTheme.primary300 : MoyeoTheme.line))
-                                .clipShape(RoundedRectangle(cornerRadius: 17))
-                        }
-                    }
-                }
                 DesignField(label: "집합 장소 *", icon: "mappin.and.ellipse", value: draft.meeting.name)
-                DesignField(label: "상세 안내", icon: "signpost.right", value: detail)
+                // changeLog15 — 상세 안내는 추천 칩이 아니라 자유 텍스트 입력이다.
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("상세 안내")
+                        .font(.caption.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.text700)
+                    HStack(spacing: 10) {
+                        Image(systemName: "doc.text")
+                            .foregroundStyle(MoyeoTheme.muted)
+                        TextField("만나는 위치를 자세히 남겨주세요 (예: 터미널 정문 앞)", text: $detail)
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                            .textInputAutocapitalization(.never)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 50)
+                    .background(MoyeoTheme.card)
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.line))
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                }
+                .accessibilityIdentifier("createMeeting.detailInput")
                 DesignSummaryLine(String(format: "좌표 (자동 저장)   %.6f, %.6f", draft.meeting.latitude, draft.meeting.longitude))
                 DesignField(label: "집합 시간", icon: "clock", value: draft.meeting.meetingTime)
                 DesignInfoBox(icon: "bell.fill", text: "집합 시간 30분 전에 모든 멤버에게 알림이 가고, 채팅방 상단 공지에도 자동으로 올라가요.")
@@ -1002,9 +1030,9 @@ struct RecruitmentSummaryView: View {
                     SummaryRow("mappin.and.ellipse", "집합", "\(draft.meeting.meetingTime) \(draft.meeting.name) \(draft.meeting.detail)")
                     SummaryRow("map", "좌표", String(format: "%.6f, %.6f", draft.meeting.latitude, draft.meeting.longitude))
                     SummaryRow("person.2", "인원", "최소 \(draft.minimumParticipants)명 · 최대 \(draft.capacity)명")
-                    SummaryRow("slider.horizontal.3", "조건", "\(draft.minimumAge)~\(draft.maximumAge)세 · \(draft.genderRestriction)")
-                    SummaryRow("wonsign.circle", "비용", draft.estimatedCost)
-                    SummaryRow("clock", "마감", draft.deadline)
+                    SummaryRow("slider.horizontal.3", "조건", "\(draft.minimumAge)~\(draft.maximumAge)세 · \(draft.genderSummary)")
+                    SummaryRow("wonsign.circle", "비용", "\(draft.estimatedCost) (예상)")
+                    SummaryRow("clock", "마감", draft.deadlineSummary)
                 }
                 .padding(16)
                 .background(MoyeoTheme.card)
@@ -1014,10 +1042,11 @@ struct RecruitmentSummaryView: View {
                     icon: draft.source == .custom ? "sparkles" : "lock.fill",
                     text: draft.source == .custom
                         ? "호스트가 직접 만든 코스예요. 여행이 확정되기 전까지 방문지·시간·순서를 자유롭게 고칠 수 있고, 수정하면 멤버 모두에게 알림이 가요."
-                        : "서비스에 등록된 코스를 그대로 가져왔어요. 경로(방문지·순서)는 수정할 수 없고, 일정·집합 장소·인원 조건은 마감 전까지 바꿀 수 있어요.",
+                        : "서비스에 등록된 코스를 그대로 가져왔어요. **경로(방문지·순서)는 수정할 수 없고**, 일정·집합 장소·인원 조건은 마감 전까지 바꿀 수 있어요.",
                     neutral: draft.source == .linked
                 )
-                DesignInfoBox(icon: "bubble.left.fill", text: "최소 \(draft.minimumParticipants)명이 모이면 채팅방이 자동으로 열리고, 마감일까지 못 채우면 자연스럽게 소멸돼요.")
+                // 화면기획 17-7 — 두 번째 안내 카드는 아이콘 없이 텍스트만 둔다
+                DesignInfoBox(icon: nil, text: "최소 \(draft.minimumParticipants)명이 모이면 채팅방이 자동으로 열리고, 마감일까지 못 채우면 자연스럽게 소멸돼요.")
             }
             .padding(20)
         }
@@ -1087,12 +1116,13 @@ struct CourseRouteEditView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         VStack(alignment: .leading) {
-                            Text(trip.title).font(.subheadline.weight(.heavy))
-                            Text("\(trip.schedule) · \(trip.joined)/\(trip.capacity)명").font(.caption).foregroundStyle(MoyeoTheme.muted)
+                            // 화면기획 18-x — 헤더는 모집 이름이 아니라 코스 이름이다
+                            Text(headerTitle).font(.subheadline.weight(.heavy))
+                            Text(headerSubtitle).font(.caption).foregroundStyle(MoyeoTheme.muted)
                         }
                         Spacer()
                         // 등록 코스는 자물쇠를 함께 보여 "경로 고정"을 배지에서 바로 읽게 한다
-                        CourseSourceBadge(source: trip.courseSource)
+                        CourseSourceBadge(source: displaySource)
                     }
                     policyNotice
                     RouteSchematic(stops: stops)
@@ -1136,7 +1166,31 @@ struct CourseRouteEditView: View {
                     next: { dismiss() }
                 )
             case .tripConfirmed:
-                CreationFooter(backTitle: "", nextTitle: "공지로 알리기", back: {}, next: { showNoticeComposer = true })
+                // 화면기획 18-3 — 공지로 알리기(외곽선) + 비활성 경로 수정 두 버튼
+                HStack(spacing: 14) {
+                    Button("공지로 알리기") { showNoticeComposer = true }
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.brandText)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(MoyeoTheme.card)
+                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.forest))
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        .accessibilityIdentifier("courseEdit.notifyByNotice")
+                    Button("경로 수정") {}
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.text400)
+                        .padding(.horizontal, 18)
+                        .frame(height: 50)
+                        .background(MoyeoTheme.subtleBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        .disabled(true)
+                        .accessibilityIdentifier("courseEdit.editDisabled")
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(MoyeoTheme.card)
+                .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
             }
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
@@ -1146,6 +1200,33 @@ struct CourseRouteEditView: View {
             Button("확인") {}
         } message: { Text("확정된 여행의 변경 사항은 경로를 수정하지 않고 공지로 안내해요.") }
         .accessibilityIdentifier("screen.courseEdit.\(state.rawValue)")
+    }
+
+    /// 화면기획 18-x 헤더 타이틀 — 코스 이름 (모집 이름이 아니다)
+    private var headerTitle: String {
+        MockData.course(for: trip.courseID)?.title ?? trip.title
+    }
+
+    /// 화면기획 18-x 헤더 부제 — "5/25(토) 당일치기 · 방문지 4개 · 2/5명"
+    private var headerSubtitle: String {
+        "\(compactScheduleText) · 방문지 \(stops.count)개 · \(trip.joined)/\(trip.capacity)명"
+    }
+
+    private var compactScheduleText: String {
+        // "2026.05.25 (토) 08:00" → "5/25(토) 당일치기"
+        let kind = trip.scheduleDetails?.kind ?? .dayTrip
+        let parts = trip.schedule.split(separator: " ").map(String.init)
+        guard parts.count >= 2 else { return trip.schedule }
+        let dateParts = parts[0].split(separator: ".").map(String.init)
+        guard dateParts.count >= 3, let month = Int(dateParts[1]), let day = Int(dateParts[2]) else {
+            return trip.schedule
+        }
+        return "\(month)/\(day)\(parts[1]) \(kind.rawValue)"
+    }
+
+    /// 배지는 아트보드별 상태를 따른다 — 등록 코스 잠금(18-2)만 등록된 코스, 나머지는 호스트 직접 코스
+    private var displaySource: CourseSource {
+        state == .linkedLocked ? .linked : .custom
     }
 
     @ViewBuilder private var policyNotice: some View {
@@ -1212,16 +1293,15 @@ struct NoticeHistoryView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // 화면기획은 하단 고정 CTA다 (툴바 + 아이콘이 아니라)
-            if thread.isCurrentUserHost {
-                AuthPrimaryButton(title: "새 공지 작성 (호스트)", accessibilityIdentifier: "noticeHistory.create") {
-                    showComposer = true
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
-                .padding(.bottom, 28)
-                .background(MoyeoTheme.card)
+            // 화면기획은 하단 고정 CTA다 (툴바 + 아이콘이 아니라).
+            // 20-3은 호스트 시점 화면이라 기획·웹·안드로이드 모두 버튼을 항상 보여준다.
+            AuthPrimaryButton(title: "＋ 새 공지 작성 (호스트)", accessibilityIdentifier: "noticeHistory.create") {
+                showComposer = true
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+            .padding(.bottom, 28)
+            .background(MoyeoTheme.card)
         }
         .alert("새 공지", isPresented: $showComposer) {
             Button("작성") { createNotice() }
@@ -1242,7 +1322,7 @@ struct NoticeHistoryView: View {
         TripNotice(
             id: "notice-meet",
             title: "집합 장소 · 시간",
-            body: "5/25(토) 07:50 청송 시외버스터미널 정문 앞\n정각에 출발해요. 늦으면 채팅방에 남겨주세요!",
+            body: "5/25(토) 07:50 청송 시외버스터미널 정문 앞\n08:00 정각에 출발해요. 늦으면 채팅방에 남겨주세요!",
             createdAt: "5월 20일 오후 2:14",
             isPinned: true
         ),
@@ -1251,13 +1331,6 @@ struct NoticeHistoryView: View {
             title: "준비물",
             body: "편한 운동화, 얇은 바람막이, 물 500ml 정도면 충분해요.",
             createdAt: "5월 21일 오전 10:02",
-            isPinned: true
-        ),
-        TripNotice(
-            id: "notice-route",
-            title: "경로가 변경됐어요",
-            body: "3번째 방문지가 주산지 → 달기약수탕으로 바뀌었어요. 여행 확정(5/22) 전까지는 경로가 바뀔 수 있어요.",
-            createdAt: "5월 19일 오후 6:40",
             isPinned: true
         ),
         TripNotice(
@@ -1345,7 +1418,7 @@ private struct NoticeCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             HStack(spacing: 6) {
-                Text("숙속여행자 (호스트)")
+                Text("숲속여행자 (호스트)")
                 Text("·")
                 Text(notice.createdAt).monospacedDigit()
                 Spacer(minLength: 0)
@@ -1363,26 +1436,33 @@ private struct NoticeCard: View {
     }
 }
 
+/// 집합 장소 공지의 지도 미리보기 (화면기획 20-3).
+/// 경로선을 그리면 선 그래프처럼 읽힌다 — 집합 한 지점이므로 지도면 + 가운데 핀만 둔다.
 private struct NoticeRoutePreview: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
                 MoyeoTheme.mapGreen
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: proxy.size.height * 0.64))
-                    path.addCurve(
-                        to: CGPoint(x: proxy.size.width, y: proxy.size.height * 0.36),
-                        control1: CGPoint(x: proxy.size.width * 0.28, y: proxy.size.height * 0.36),
-                        control2: CGPoint(x: proxy.size.width * 0.72, y: proxy.size.height * 0.78)
-                    )
+                    path.move(to: CGPoint(x: 0, y: proxy.size.height * 0.72))
+                    path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height * 0.72))
+                    path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height))
+                    path.addLine(to: CGPoint(x: 0, y: proxy.size.height))
+                    path.closeSubpath()
                 }
-                .stroke(MoyeoTheme.primary300, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                Image(systemName: "mappin.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(MoyeoTheme.forest)
-                    .position(x: proxy.size.width * 0.56, y: proxy.size.height * 0.45)
+                .fill(MoyeoTheme.mapWater.opacity(0.45))
+                Image(systemName: "mappin")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(MoyeoTheme.forest)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(.white, lineWidth: 2.5))
+                    .position(x: proxy.size.width * 0.5, y: proxy.size.height * 0.44)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("집합 장소 지도")
     }
 }
 
@@ -1447,7 +1527,8 @@ private struct ItineraryStopRow: View {
                 Button("아래로 이동", action: moveDown)
             } label: { Image(systemName: locked ? "lock.fill" : "line.3.horizontal").foregroundStyle(MoyeoTheme.muted).frame(width: 24, height: 44) }
             .disabled(locked)
-            Text("\(stop.order)").font(.caption.weight(.heavy)).foregroundStyle(.white).frame(width: 30, height: 30).background(locked ? MoyeoTheme.muted : MoyeoTheme.primary300).clipShape(Circle())
+            // 잠긴 행의 순번 원은 화면기획의 중립 회색 톤이다
+            Text("\(stop.order)").font(.caption.weight(.heavy)).foregroundStyle(.white).frame(width: 30, height: 30).background(locked ? MoyeoTheme.text400 : MoyeoTheme.primary300).clipShape(Circle())
             VStack(alignment: .leading, spacing: 3) {
                 HStack { Text(stop.time).foregroundStyle(MoyeoTheme.primary300); Text(stop.name).foregroundStyle(MoyeoTheme.ink) }.font(.caption.weight(.heavy))
                 Text(stop.memo).font(.caption2).foregroundStyle(MoyeoTheme.muted)
@@ -1497,14 +1578,18 @@ private struct DesignSummaryLine: View {
 }
 
 private struct DesignInfoBox: View {
-    let icon: String
+    /// nil이면 아이콘 없이 텍스트만 그린다 (17-7 두 번째 카드)
+    let icon: String?
     let text: String
     var neutral = false
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon).foregroundStyle(neutral ? MoyeoTheme.muted : MoyeoTheme.primary300)
+            if let icon {
+                Image(systemName: icon).foregroundStyle(neutral ? MoyeoTheme.muted : MoyeoTheme.primary300)
+            }
             // 틴트 표면은 테마 토큰으로 — 밝은 값을 박아두면 다크에서 카드만 하얗게 남는다
-            Text(text).font(.caption).foregroundStyle(neutral ? MoyeoTheme.ink : MoyeoTheme.onLeaf)
+            // `**…**` 마크다운은 그 부분만 굵게 그린다 (17-7 잠금 카드)
+            Text(.init(text)).font(.caption).foregroundStyle(neutral ? MoyeoTheme.ink : MoyeoTheme.onLeaf)
             Spacer(minLength: 0)
         }
         .padding(14)
@@ -1555,6 +1640,7 @@ private struct DesignSegment<T: Hashable & RawRepresentable>: View where T.RawVa
                 Button {
                     selected = item
                 } label: {
+                    // 화면기획 — 선택된 옵션은 틴트 배경 + 초록 텍스트 + 초록 테두리로 표시한다
                     VStack(spacing: 3) {
                         Text(item.rawValue)
                             .font(.caption.weight(.heavy))
@@ -1562,19 +1648,25 @@ private struct DesignSegment<T: Hashable & RawRepresentable>: View where T.RawVa
                         if let subtitle = subtitles[item.rawValue] {
                             Text(subtitle)
                                 .font(.caption2)
-                                .foregroundStyle(isSelected ? MoyeoTheme.onLeaf.opacity(0.85) : MoyeoTheme.text400)
+                                .foregroundStyle(isSelected ? MoyeoTheme.brandText : MoyeoTheme.text400)
                         }
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: subtitles.isEmpty ? 44 : 54)
                     .background(isSelected ? MoyeoTheme.leaf : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(MoyeoTheme.brandText, lineWidth: 1.2)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(4)
-        .background(MoyeoTheme.card)
+        .background(MoyeoTheme.subtleBackground)
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.softLine))
         .clipShape(RoundedRectangle(cornerRadius: 9))
     }

@@ -39,8 +39,10 @@ struct HostManageView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HostManageTripSummary(
                         title: trip.title,
-                        participantText: "\(approvedApplicants.count + 1)/\(trip.capacity)명",
-                        status: isRecruitmentClosed ? "모집 취소됨" : trip.status.rawValue
+                        participantText: "\(approvedApplicants.count + 1) / \(trip.capacity)명",
+                        status: isRecruitmentClosed
+                            ? "모집 취소됨"
+                            : (trip.recruitmentDeadline.isEmpty ? trip.status.rawValue : trip.recruitmentDeadline)
                     )
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
@@ -75,7 +77,8 @@ struct HostManageView: View {
                     pendingContent
                         .padding(.horizontal, 20)
 
-                    HostManageSectionTitle(title: "승인된 동행자", count: approvedApplicants.count)
+                    // 화면기획 18 — 승인된 동행자 수는 본인을 포함해 센다 (4)
+                    HostManageSectionTitle(title: "승인된 동행자", count: approvedApplicants.count + 1)
                         .padding(.horizontal, 20)
                         .padding(.top, 24)
                         .padding(.bottom, 12)
@@ -106,7 +109,7 @@ struct HostManageView: View {
             Button {
                 selectedThread = thread
             } label: {
-                Text("채팅방 들어가기")
+                Label("채팅방 들어가기", systemImage: "bubble.left")
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -156,7 +159,8 @@ struct HostManageView: View {
                 )
             }
             ForEach(Array(pendingApplicants.dropFirst())) { applicant in
-                HostCompactApplicantRow(applicant: applicant, detail: "신청 한마디 보기")
+                // 화면기획 18 — 접힌 대기자는 요약(나이·성별·매너)과 chevron만 보인다
+                HostCompactApplicantRow(applicant: applicant, detail: applicant.meta)
                     .padding(.top, 8)
             }
         }
@@ -172,7 +176,9 @@ struct HostManageView: View {
     private var routePolicyCopy: String {
         switch trip.routeEditState {
         case .editable:
-            return "여행 확정 전까지 수정할 수 있어요. 저장 시 멤버 모두에게 알려요."
+            // 화면기획 18 — "확정 전(D-3)까지 수정할 수 있어요 · 호스트 직접 코스"
+            let deadline = trip.recruitmentDeadline.isEmpty ? "마감" : trip.recruitmentDeadline
+            return "확정 전(\(deadline))까지 수정할 수 있어요 · \(trip.courseSource.title)"
         case .linkedLocked:
             return "등록 코스의 경로는 고정돼요. 집합 정보는 수정할 수 있어요."
         case .tripConfirmed:
@@ -265,29 +271,37 @@ struct HostApplicant: Identifiable, Hashable {
     let id: String
     let name: String
     let avatar: String
+    /// 화면기획 18 — 나이·성별·매너·여행 횟수 요약 (예: "31세 · 남성 · 매너 4.9 · 여행 8회")
+    let meta: String
     let note: String
 
     var participant: Participant {
         Participant(id: id, name: name, avatar: avatar)
     }
 
+    // 화면기획 18 모집 관리의 승인 대기 2명
     static let mockPending = [
         HostApplicant(
-            id: "applicant-deer",
-            name: "따스한 사슴 3492",
-            avatar: "🦌",
-            note: "사진 찍는 속도에 맞춰 천천히 걷고 싶어요."
+            id: "applicant-bear",
+            name: "우직한 곰 7821",
+            avatar: "🐻",
+            meta: "31세 · 남성 · 매너 4.9 · 여행 8회",
+            note: "단풍 보러 가요. 사진 좋아해서 풍경 잘 담아드릴 수 있어요!"
         ),
         HostApplicant(
-            id: "applicant-turtle",
-            name: "잔잔한 거북이 9032",
-            avatar: "🐢",
-            note: "초행이라 모이는 장소와 준비물을 미리 확인하고 싶어요."
+            id: "applicant-raccoon",
+            name: "호기심 많은 너구리 9027",
+            avatar: "🦝",
+            meta: "26세 · 여성 · 매너 4.7",
+            note: "야경 사진 찍는 걸 좋아해요. 잘 부탁드려요!"
         )
     ]
 
+    // 화면기획 18 — 본인 외 3명 (아바타 무리)
     static let mockApproved = [
-        HostApplicant(id: "approved-bear", name: "우직한 곰 7821", avatar: "🐻", note: "기존 참여자")
+        HostApplicant(id: "approved-deer", name: "숲속 사슴 2417", avatar: "🦌", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
+        HostApplicant(id: "approved-turtle", name: "잔잔한 거북이 9032", avatar: "🐢", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
+        HostApplicant(id: "approved-rabbit", name: "느긋한 토끼 7821", avatar: "🐰", meta: "매너 4.8 · 여행 8회", note: "기존 참여자")
     ]
 }
 
@@ -303,9 +317,12 @@ private struct HostManageSectionTitle: View {
                 .font(.subheadline.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.ink)
             Spacer()
-            Text(trailingNote ?? "\(count)명")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.muted)
+            // 화면기획 18 — 승인 대기 옆에만 자동 거절 정책을 알린다
+            if let trailingNote {
+                Text(trailingNote)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
         }
     }
 }
@@ -383,11 +400,15 @@ private struct HostApplicantHeader: View {
                 Text(applicant.name)
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(MoyeoTheme.ink)
-                Text("매너 4.8 · 최근 동행 2회")
+                Text(applicant.meta)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(MoyeoTheme.muted)
             }
             Spacer()
+            // 화면기획 18 — 대기 카드 우상단 더보기
+            Image(systemName: "ellipsis")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.text400)
         }
     }
 }
@@ -399,13 +420,16 @@ struct HostManagePill: View {
         self.text = text
     }
 
+    /// 마감 배지(D-3)는 화면기획처럼 코랄 톤으로 구분한다
+    private var isDeadline: Bool { text.hasPrefix("D-") }
+
     var body: some View {
         Text(text)
             .font(.caption.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.forest)
+            .foregroundStyle(isDeadline ? MoyeoTheme.coral : MoyeoTheme.forest)
             .padding(.horizontal, 10)
             .frame(height: 28)
-            .background(MoyeoTheme.leaf)
+            .background(isDeadline ? MoyeoTheme.coral.opacity(0.14) : MoyeoTheme.leaf)
             .clipShape(Capsule())
     }
 }

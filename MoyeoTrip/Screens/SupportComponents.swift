@@ -186,13 +186,18 @@ struct SupportEditableField: View {
 
 struct SupportIconBubble: View {
     let systemImage: String
+    /// 기본은 브랜드 초록. 강퇴 알림처럼 위험(danger) 톤이 필요하면 coral 계열로 바꾼다.
+    var tint: Color = MoyeoTheme.forest
+    var bubble: Color = MoyeoTheme.leaf
 
     var body: some View {
+        // 화면기획·웹·안드로이드의 알림 아바타는 36pt 급이다. 42pt 로 두면 8행 목록이
+        // 한 화면에 담기지 않아 iOS만 2페이지가 된다.
         Image(systemName: systemImage)
-            .font(.system(size: 17, weight: .bold))
-            .foregroundStyle(MoyeoTheme.forest)
-            .frame(width: 42, height: 42)
-            .background(MoyeoTheme.leaf)
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(tint)
+            .frame(width: 36, height: 36)
+            .background(bubble)
             .clipShape(Circle())
     }
 }

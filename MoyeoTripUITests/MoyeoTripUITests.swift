@@ -162,12 +162,20 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["모여트립에 오신 걸 환영해요"].waitForExistence(timeout: 3))
         XCTAssertTrue(element("auth.login.welcomeImage").waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.label").label, "로그인")
-        XCTAssertEqual(element("auth.header.step").label, "4/7")
+        XCTAssertEqual(element("auth.header.step").label, "4/8")
         XCTAssertTrue(element("auth.login.email").exists)
         XCTAssertTrue(element("auth.login.google").exists)
         XCTAssertTrue(element("auth.login.apple").exists)
         let termsCopy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "계속 진행하면")).firstMatch
         XCTAssertFalse(termsCopy.exists)
+    }
+
+    private func assertDefaultTravelTasteSelection() {
+        XCTAssertEqual(element("auth.taste.style.자연").value as? String, "선택됨")
+        XCTAssertEqual(element("auth.taste.style.사진").value as? String, "선택됨")
+        XCTAssertEqual(element("auth.taste.region.경주").value as? String, "선택됨")
+        XCTAssertEqual(element("auth.taste.region.안동").value as? String, "선택됨")
+        XCTAssertTrue(element("auth.taste.continue").isEnabled)
     }
 
     private func openNicknameSelection(extraArguments: [String] = []) {
@@ -387,23 +395,23 @@ final class MoyeoTripUITests: XCTestCase {
         launch(extraArguments: ["UITEST_SCREEN=auth"])
         XCTAssertTrue(element("auth.header.step").waitForExistence(timeout: 5))
 
-        assertStaticTextContaining("고민 없이 고르는 경북 코스", timeout: 5)
+        XCTAssertTrue(app.staticTexts["고민 없이 고르는\n경북 코스"].waitForExistence(timeout: 5))
         XCTAssertEqual(element("auth.header.label").label, "온보딩")
-        XCTAssertEqual(element("auth.header.step").label, "1/7")
+        XCTAssertEqual(element("auth.header.step").label, "1/8")
         performTransition(
             "onboarding-1-to-2",
             action: { tapButton("다음", timeout: 5) },
-            destination: app.staticTexts["3명이 모이면 채팅방이 열려요"]
+            destination: app.staticTexts["3명이 모이면\n채팅방이 열려요"]
         )
-        assertStaticTextContaining("3명이 모이면 채팅방이 열려요")
-        XCTAssertEqual(element("auth.header.step").label, "2/7")
+        XCTAssertTrue(app.staticTexts["3명이 모이면\n채팅방이 열려요"].exists)
+        XCTAssertEqual(element("auth.header.step").label, "2/8")
         performTransition(
             "onboarding-2-to-3",
             action: { tapButton("다음") },
-            destination: app.staticTexts["여행 뒤엔 자연스럽게 친구로"]
+            destination: app.staticTexts["여행 뒤엔\n자연스럽게 친구로"]
         )
-        assertStaticTextContaining("여행 뒤엔 자연스럽게 친구로")
-        XCTAssertEqual(element("auth.header.step").label, "3/7")
+        XCTAssertTrue(app.staticTexts["여행 뒤엔\n자연스럽게 친구로"].exists)
+        XCTAssertEqual(element("auth.header.step").label, "3/8")
         performTransition(
             "onboarding-to-login",
             action: { tapButton("로그인 시작") },
@@ -419,7 +427,7 @@ final class MoyeoTripUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["어떤 친구로 시작할까요?"].waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.label").label, "프로필 설정")
-        XCTAssertEqual(element("auth.header.step").label, "5/7")
+        XCTAssertEqual(element("auth.header.step").label, "5/8")
         XCTAssertTrue(element("auth.nickname.option.deer").exists)
         XCTAssertTrue(app.staticTexts["함께 천천히 경북을 둘러보는 여행자예요"].exists)
         XCTAssertFalse(element("auth.nickname.continue").isEnabled)
@@ -432,17 +440,26 @@ final class MoyeoTripUITests: XCTestCase {
         )
 
         XCTAssertTrue(element("auth.basic.nickname").waitForExistence(timeout: 3))
-        XCTAssertEqual(element("auth.header.step").label, "6/7")
+        XCTAssertEqual(element("auth.header.step").label, "6/8")
         XCTAssertTrue(element("auth.basic.birthdate").waitForExistence(timeout: 3))
         tapElement("auth.basic.gender.female")
+        XCTAssertEqual(element("auth.basic.continue").label, "저장하고 다음")
         performTransition(
-            "basics-to-profile-image",
+            "basics-to-taste",
             action: { tapElement("auth.basic.continue") },
+            destination: element("auth.taste.style.자연")
+        )
+
+        XCTAssertEqual(element("auth.header.step").label, "7/8")
+        assertDefaultTravelTasteSelection()
+        performTransition(
+            "taste-to-profile-image",
+            action: { tapElement("auth.taste.continue") },
             destination: element("auth.profile.generate")
         )
 
         XCTAssertTrue(app.staticTexts["여행에서 만날 내 친구를 골라주세요"].waitForExistence(timeout: 3))
-        XCTAssertEqual(element("auth.header.step").label, "7/7")
+        XCTAssertEqual(element("auth.header.step").label, "8/8")
         XCTAssertFalse(app.staticTexts["약관 동의"].exists)
         tapElement("auth.profile.generate")
         let generatingCard = element("auth.profile.generating")
@@ -639,7 +656,7 @@ final class MoyeoTripUITests: XCTestCase {
         relaunch(startTab: "my")
         XCTAssertTrue(app.staticTexts["마이"].waitForExistence(timeout: 5))
         XCTAssertTrue(element("my.profileSummary").exists)
-        XCTAssertTrue(app.staticTexts["혼자 떠나도 같이 웃을 수 있는 작은 여행을 좋아해요."].exists)
+        XCTAssertTrue(app.staticTexts["자연 속에서 힐링하는 걸 좋아해요!"].exists)
         XCTAssertTrue(app.staticTexts["매너"].exists)
         XCTAssertTrue(app.staticTexts["내 여행"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["진행중"].exists)
@@ -882,7 +899,8 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["모집에 참여됐어요"].waitForExistence(timeout: 3))
         app.buttons["application.sheet.openChat"].tap()
 
-        XCTAssertTrue(app.staticTexts["모임 신청 후 대화가 이어져요"].waitForExistence(timeout: 3))
+        // 화면기획 20 — 신청 안내 배지가 사라져 채팅방 진입은 코스 바로 확인한다
+        XCTAssertTrue(element("chat.routeSummary").waitForExistence(timeout: 3))
     }
 
     @MainActor

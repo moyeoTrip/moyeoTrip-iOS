@@ -14,15 +14,22 @@ struct FeedWriteView: View {
     var onPublish: (FeedPost) -> Void = { _ in }
 
     @State private var title = "첫 반패키지 단풍 여행"
-    @State private var memo = "처음 반패키지 여행이었는데 동행분들이 너무 좋으셨어요.\n첨성대 야경이 진짜 인생샷..."
+    // 본문은 기획·웹·안드로이드와 같은 한 문단이다 (카운터는 본문 글자수만 센다)
+    @State private var memo = "처음 반패키지 여행이었는데 동행분들이 너무 좋으셨어요. 첨성대 야경이 진짜 인생샷..."
     @State private var selectedCoverIndex = 0
     @State private var currentStep = 1
     @State private var isPublished = false
     @State private var selectedVisibility: FeedVisibility = .friendsOnly
-    @State private var selectedCourseID = MockData.courses[0].id
+    // 화면기획 24-1은 경주 감성 힐링 코스가 선택된 상태에서 시작한다 (두 번째 후보가 주왕산)
+    @State private var selectedCourseID = FeedWriteCourseCandidate.planning[0].id
 
     private let photos: [CourseMood] = [.sunrise, .forest, .coral]
     private let stepCount = 5
+
+    private var candidate: FeedWriteCourseCandidate {
+        FeedWriteCourseCandidate.planning.first { $0.id == selectedCourseID }
+            ?? FeedWriteCourseCandidate.planning[0]
+    }
 
     private var course: TravelCourse {
         MockData.course(for: selectedCourseID) ?? MockData.courses[0]
@@ -131,9 +138,11 @@ private extension FeedWriteView {
     var stepContent: some View {
         switch currentStep {
         case 1:
+            // 화면기획 24-1은 코스 후보 · 경로 · 함께 간 멤버 세 블록이다.
+            // 코스/지역/공개 요약 행(24-4·24-5의 메타 카드)은 여기서 되풀이하지 않는다.
             courseSelector
             routeCard
-            metaCard
+            membersCard
         case 2:
             photoGrid
             routeCard
@@ -164,7 +173,7 @@ private extension FeedWriteView {
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 84)
 
-            Text("\(min(title.count + memo.count, 500)) / 500")
+            Text("\(min(memo.count, 500)) / 500")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(MoyeoTheme.text400)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -199,8 +208,8 @@ private extension FeedWriteView {
 
             ScrollView(.horizontal) {
                 HStack(spacing: 10) {
-                    ForEach(MockData.courses.prefix(6)) { candidate in
-                        courseOption(candidate)
+                    ForEach(FeedWriteCourseCandidate.planning) { option in
+                        courseOption(option)
                     }
                 }
                 .padding(.trailing, 4)
@@ -209,7 +218,7 @@ private extension FeedWriteView {
         }
     }
 
-    func courseOption(_ candidate: TravelCourse) -> some View {
+    func courseOption(_ candidate: FeedWriteCourseCandidate) -> some View {
         let isSelected = candidate.id == selectedCourseID
 
         return Button {
@@ -229,7 +238,7 @@ private extension FeedWriteView {
                     .lineLimit(1)
                     .minimumScaleFactor(0.86)
 
-                Text("\(candidate.region) · \(candidate.duration)")
+                Text("\(candidate.region) · \(candidate.scheduleText)")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(MoyeoTheme.muted)
                     .lineLimit(1)
@@ -264,6 +273,15 @@ private extension FeedWriteView {
             FeedWriteRoutePreview(stops: course.stops)
                 .frame(height: 118)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            HStack(spacing: 4) {
+                Image(systemName: "mappin")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(MoyeoTheme.brandText)
+                Text(candidate.routeMetaText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
         }
         .padding(12)
         .background(MoyeoTheme.subtleBackground)
@@ -272,8 +290,11 @@ private extension FeedWriteView {
 
     var metaCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            FeedWriteMetaRow(icon: "map.fill", title: "코스", value: course.title)
-            FeedWriteMetaRow(icon: "location.fill", title: "지역", value: "\(course.region) · \(course.duration) · \(course.distance)")
+            FeedWriteMetaRow(icon: "map.fill", title: "코스", value: candidate.title)
+            FeedWriteMetaRow(
+                icon: "location.fill",
+                title: "지역",
+                value: "\(candidate.region) · \(candidate.scheduleText) · \(candidate.distanceText)")
             FeedWriteMetaRow(icon: "eye.fill", title: "공개", value: "\(selectedVisibility.rawValue) · 경로지도 포함")
 
             HStack(spacing: 12) {
@@ -303,6 +324,37 @@ private extension FeedWriteView {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
         }
+    }
+
+    /// 화면기획 24-1 — 함께 간 멤버 (4). 첫 칩이 나(따스한 사슴 3492)다.
+    var membersCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("함께 간 멤버 (\(FeedWriteView.companions.count))")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.text700)
+
+            FlexibleChipRows(items: FeedWriteView.companions) { companion in
+                HStack(spacing: 6) {
+                    MascotAvatar(mascot: companion.avatar, size: 24, background: MoyeoTheme.card)
+                    Text(companion.isMe ? "\(companion.name) (나)" : companion.name)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(companion.isMe ? MoyeoTheme.onLeaf : MoyeoTheme.text700)
+                }
+                .padding(.leading, 6)
+                .padding(.trailing, 10)
+                .frame(height: 36)
+                .background(companion.isMe ? MoyeoTheme.primary100 : MoyeoTheme.subtleBackground)
+                .clipShape(Capsule())
+            }
+        }
+        .padding(14)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(MoyeoTheme.softLine, lineWidth: 1)
+        }
+        .accessibilityIdentifier("feed.write.members")
     }
 
     var visibilityCard: some View {
@@ -436,7 +488,7 @@ private extension FeedWriteView {
     }
 
     var metaTags: [String] {
-        Array(([selectedVisibility.rawValue, "경로지도", course.region] + Array(course.tags.prefix(2))).prefix(5))
+        [selectedVisibility.rawValue, "경로지도", candidate.region] + candidate.tags
     }
 
     var photoColumns: [GridItem] {
@@ -501,9 +553,109 @@ private extension FeedVisibility {
         case .publicAll:
             return "발견 탭에서도 보이고, 경북 여행자 누구나 볼 수 있어요."
         case .friendsOnly:
-            return "팔로잉 탭과 친구 도감 친구들에게 보여줘요."
+            return "서로 친구인 사람에게만 보여요. 기본값이에요."
         case .privateOnly:
             return "나만 볼 수 있는 기록으로 저장돼요."
+        }
+    }
+}
+
+/// 화면기획 24-1 코스 후보. 기획 목데이터는 코스 이름 · 지역 · 일정 유형 ·
+/// 경로 거리와 태그를 직접 갖고 있어서, 탐색용 코스 목록과 값이 다르다.
+struct FeedWriteCourseCandidate: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let region: String
+    let scheduleText: String
+    let distanceText: String
+    let stopCount: Int
+    let dateRangeText: String
+    let tags: [String]
+    let mascot: String
+    let mood: CourseMood
+
+    var routeMetaText: String {
+        "\(region) · \(stopCount) stops · \(dateRangeText)"
+    }
+
+    static let planning: [FeedWriteCourseCandidate] = [
+        FeedWriteCourseCandidate(
+            id: "course-gyeongju-history",
+            title: "경주 감성 힐링 코스",
+            region: "경주",
+            scheduleText: "1박 2일",
+            distanceText: "42.6km",
+            stopCount: 4,
+            dateRangeText: "11/8 ~ 11/9",
+            tags: ["힐링", "야경"],
+            mascot: "🌙",
+            mood: .coral
+        ),
+        FeedWriteCourseCandidate(
+            id: "course-cheongsong-juwangsan",
+            title: "주왕산 & 주산지 힐링 트레킹",
+            region: "청송",
+            scheduleText: "당일치기",
+            distanceText: "6.2km",
+            stopCount: 3,
+            dateRangeText: "5/25",
+            tags: ["자연", "히든명소"],
+            mascot: "🌲",
+            mood: .forest
+        ),
+        FeedWriteCourseCandidate(
+            id: "course-andong-hahoe",
+            title: "안동 하회마을 하루 코스",
+            region: "안동",
+            scheduleText: "당일치기",
+            distanceText: "8.1km",
+            stopCount: 4,
+            dateRangeText: "6/9",
+            tags: ["역사", "문화"],
+            mascot: "🏡",
+            mood: .sunrise
+        )
+    ]
+}
+
+struct FeedWriteCompanion: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let avatar: String
+    var isMe = false
+}
+
+extension FeedWriteView {
+    /// 화면기획 24-1 함께 간 멤버 4명
+    static let companions: [FeedWriteCompanion] = [
+        FeedWriteCompanion(id: "me", name: "따스한 사슴 3492", avatar: "🦌", isMe: true),
+        FeedWriteCompanion(id: "bear", name: "우직한 곰 7821", avatar: "🐻"),
+        FeedWriteCompanion(id: "turtle", name: "잔잔한 거북이 9032", avatar: "🐢"),
+        FeedWriteCompanion(id: "crane", name: "고요한 두루미 1130", avatar: "🪽")
+    ]
+}
+
+/// 칩이 한 줄을 넘으면 다음 줄로 흐르게 감싼다 (화면기획의 flex-wrap)
+private struct FlexibleChipRows<Item: Identifiable, Content: View>: View {
+    let items: [Item]
+    @ViewBuilder let content: (Item) -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    ForEach(row) { item in
+                        content(item)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var rows: [[Item]] {
+        stride(from: 0, to: items.count, by: 2).map { start in
+            Array(items[start..<min(start + 2, items.count)])
         }
     }
 }
@@ -537,7 +689,7 @@ private struct FeedWriteAddPhotoTile: View {
         VStack(spacing: 6) {
             Image(systemName: "plus")
                 .font(.caption.weight(.heavy))
-            Text("사진추가")
+            Text("사진 추가")
                 .font(.caption2.weight(.semibold))
         }
         .foregroundStyle(MoyeoTheme.muted)

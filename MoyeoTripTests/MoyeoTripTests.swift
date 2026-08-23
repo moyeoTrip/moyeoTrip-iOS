@@ -1148,6 +1148,13 @@ extension MoyeoTripTests {
 
         let leave = UITestInitialState(arguments: ["UITEST_SCREEN=leave"])
         #expect(leave.homePath.count == 1)
+
+        // changeLog14 — 20-1a · 20-1b 는 20-1 사이드 메뉴 위에 뜬 시트로 직접 진입한다
+        for key in ["member-actions", "member-remove"] {
+            let state = UITestInitialState(arguments: ["UITEST_SCREEN=\(key)"])
+            #expect(state.selectedTab == .home)
+            #expect(state.homePath.count == 1)
+        }
     }
 
     @Test func tourismParserKeepsListAndDetailContractsSeparate() throws {

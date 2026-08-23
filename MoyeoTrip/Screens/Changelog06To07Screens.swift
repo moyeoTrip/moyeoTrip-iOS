@@ -73,7 +73,8 @@ enum TourismPlaceCatalog {
             postalCode: "37411", phone: "054-873-7777", phoneLabel: "달기약수터 관리사무소",
             homepage: "cheongsong.go.kr/tour",
             summary: "탄산이 섞인 달기약수로 끓여내는 백숙이 유명한 거리예요. 산행 뒤 늦은 점심 자리로 많이 찾아요.",
-            imageLabels: ["약수터", "백숙거리", "산책길"],
+            // 화면기획·웹의 기준은 갤러리 8장(1/8 · 사진 8) + 메뉴판 4장이다.
+            imageLabels: ["약수터", "백숙거리", "산책길", "약수 원탕", "가마솥", "상차림", "느티나무 쉼터", "저녁 거리"],
             menuImageLabels: ["닭백숙 정식", "오리 백숙", "한방 삼계탕", "더덕구이"]
         ),
         TourismPlace(
@@ -82,6 +83,14 @@ enum TourismPlaceCatalog {
             postalCode: "37433", phone: "054-872-7000", phoneLabel: "숙소 안내",
             homepage: "solgi-stay.example", summary: "청송 여행을 마친 뒤 쉬어가기 좋은 한옥형 숙박 시설이에요.",
             imageLabels: ["한옥 전경", "객실", "마당"], menuImageLabels: []
+        ),
+        // 화면기획·웹·안드로이드의 "청송" 검색 결과는 5곳이다. 4곳만 두면 iOS 목록만 짧아진다.
+        TourismPlace(
+            id: "CT2612178", type: .attraction, title: "청송 객주문학관",
+            address: "경상북도 청송군 진보면 청송로 6359", latitude: 36.4739, longitude: 129.0093,
+            postalCode: "37414", phone: "054-874-4001", phoneLabel: "객주문학관 안내",
+            homepage: "obju.or.kr", summary: "김주영 작가의 대하소설 「객주」를 주제로 꾸민 문학 전시관이에요. 진보면 시장 구경과 함께 보기 좋아요.",
+            imageLabels: ["전시관", "집필실", "장터 마당"], menuImageLabels: []
         )
     ]
 }
@@ -384,22 +393,26 @@ struct PlaceDetailView: View {
 
                 let labels = showsMenu ? place.menuImageLabels : place.imageLabels
                 let urls = showsMenu ? place.menuImageURLs : place.imageURLs
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                // 화면기획·웹은 3열 풍경 타일이다. 아이콘 + 라벨 자리표시자는 사진이 깨진 것처럼 읽힌다.
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
+                    spacing: 8
+                ) {
                     ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
                         CachedRemoteImage(url: urls.indices.contains(index) ? urls[index] : nil) { image in
                             image.resizable().scaledToFill()
                         } placeholder: {
-                            VStack(spacing: 7) {
-                                Image(systemName: showsMenu ? "menucard.fill" : "photo.fill")
-                                    .font(.title2)
-                                    .foregroundStyle(MoyeoTheme.forest)
-                                Text(label).font(.caption.weight(.semibold))
-                            }
+                            MoyeoPhotoTile(
+                                mascot: "",
+                                mood: Self.galleryMood(index: index, showsMenu: showsMenu),
+                                height: 74,
+                                cornerRadius: 10
+                            )
                         }
-                        .frame(maxWidth: .infinity, minHeight: 90)
+                        .frame(maxWidth: .infinity, minHeight: 74)
                         .clipped()
-                        .background(MoyeoTheme.subtleBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .accessibilityLabel(label)
                     }
                 }
             }
@@ -438,6 +451,14 @@ struct PlaceDetailView: View {
         }
         .accessibilityIdentifier("screen.placeDetail.\(place.id)")
         .task { await loadDetail() }
+    }
+
+    /// 갤러리 타일 톤은 화면기획처럼 장마다 조금씩 달라야 한 장을 여러 번 붙인 것처럼 보이지 않는다.
+    private static func galleryMood(index: Int, showsMenu: Bool) -> CourseMood {
+        let photoMoods: [CourseMood] = [.sunrise, .forest, .coral, .blossom, .river, .sunrise, .forest, .coral]
+        let menuMoods: [CourseMood] = [.sunrise, .coral, .blossom, .forest]
+        let moods = showsMenu ? menuMoods : photoMoods
+        return moods[index % moods.count]
     }
 
     private func detailRow(_ icon: String, _ value: String, _ caption: String) -> some View {

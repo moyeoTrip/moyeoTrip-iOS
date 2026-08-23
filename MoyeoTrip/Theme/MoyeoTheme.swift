@@ -28,6 +28,13 @@ enum MoyeoTheme {
     static let onLeaf = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#B4DDC3") : UIColor(hex: "#155735")
     })
+    /// primary-100 — leaf 카드의 테두리 톤.
+    static let primary100 = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(hex: "#1C3728") : UIColor(hex: "#DCEFE3")
+    })
+    /// danger-500 — 되돌릴 수 없는 파괴적 동작(모임 종료 · 신고하기) 버튼 색.
+    /// coral(accent-500)은 D-day 배지처럼 강조용으로 계속 쓴다 (화면기획 tokens.jsx: danger #E85547).
+    static let dangerRed = Color(hex: "#E85547")
     static let mint = Color(hex: "#BFE9D2")
     static let river = Color(hex: "#3E9BCF")
     static let blossom = Color(hex: "#F2A7B8")
@@ -65,6 +72,9 @@ enum MoyeoTheme {
     static let card = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#18231E") : UIColor(hex: "#FFFFFF")
     })
+    /// bg-overlay — 오버레이(바텀시트·경고 팝업) 뒤의 이전 화면에 얹는 딤.
+    /// 화면기획과 같이 두 테마에서 같은 어두운 톤이다.
+    static let overlayScrim = Color(hex: "#0F1714").opacity(0.48)
     static let elevatedCard = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(hex: "#1F2B25") : UIColor(hex: "#FFFFFF")
     })

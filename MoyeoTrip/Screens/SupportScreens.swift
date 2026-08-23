@@ -24,6 +24,10 @@ enum SupportRoute: Hashable, Identifiable {
   case noticeHistory(String)
   case tripConfirmed(String)
   case chatMenu(String)
+  /// changeLog14 — 20-1a 멤버 액션 시트를 연 20-1 사이드 메뉴
+  case chatMenuMemberActions(String)
+  /// changeLog14 — 20-1b 내보내기 사유 입력 시트를 연 20-1 사이드 메뉴
+  case chatMenuMemberRemove(String)
   case chatAttach(String)
   case specialMessages
   case friends
@@ -33,6 +37,7 @@ enum SupportRoute: Hashable, Identifiable {
   case coursePublish
   case tripDay(String)
   case notificationDetail
+  case removalReason
   case accountDelete
   case componentStates
   case systemMaintenance
@@ -86,6 +91,8 @@ enum SupportRoute: Hashable, Identifiable {
     case .tripConfirmed(let tripID):
       return "tripConfirmed.\(tripID)"
     case .chatMenu(let threadID): return "chatMenu.\(threadID)"
+    case .chatMenuMemberActions(let threadID): return "chatMenuMemberActions.\(threadID)"
+    case .chatMenuMemberRemove(let threadID): return "chatMenuMemberRemove.\(threadID)"
     case .chatAttach(let threadID): return "chatAttach.\(threadID)"
     case .specialMessages: return "specialMessages"
     case .friends: return "friends"
@@ -95,6 +102,7 @@ enum SupportRoute: Hashable, Identifiable {
     case .coursePublish: return "coursePublish"
     case .tripDay(let threadID): return "tripDay.\(threadID)"
     case .notificationDetail: return "notificationDetail"
+    case .removalReason: return "removalReason"
     case .accountDelete: return "accountDelete"
     case .componentStates: return "componentStates"
     case .systemMaintenance: return "systemMaintenance"
@@ -133,8 +141,10 @@ struct SupportDestinationView: View {
       AuthTermsDirectLaunchView()
     case .applicationSheet:
       ApplicationSheetDirectLaunchView()
-    case .leaveConfirmation:
-      HostLeaveConfirmationPreview()
+    // changeLog14 — 31 경고 팝업은 20-1 채팅방 사이드 메뉴 위에 뜬 것으로 그린다.
+    // 직접 진입(UITEST `leave`)도 그 화면을 깔고 팝업을 연 상태로 시작한다.
+    case .leaveConfirmation(let threadID):
+      ChatSideMenuView(thread: resolvedThread(threadID), startsWithLeaveConfirmation: true)
     case .notifications:
       NotificationCenterView(tripContext: tripContext, feedPosts: $feedPosts)
     case .createRecruitment(let courseID):
@@ -205,6 +215,11 @@ struct SupportDestinationView: View {
       )
     case .chatMenu(let threadID):
       ChatSideMenuView(thread: resolvedThread(threadID))
+    // changeLog14 — 20-1a · 20-1b 는 20-1 위에 뜬 시트다. 직접 진입도 같은 구조로 연다.
+    case .chatMenuMemberActions(let threadID):
+      ChatSideMenuView(thread: resolvedThread(threadID), startsWithMemberActions: true)
+    case .chatMenuMemberRemove(let threadID):
+      ChatSideMenuView(thread: resolvedThread(threadID), startsWithMemberRemoval: true)
     case .chatAttach:
       ChatAttachmentMenuView()
     case .specialMessages:
@@ -223,6 +238,8 @@ struct SupportDestinationView: View {
       TripDayView(thread: resolvedThread(threadID))
     case .notificationDetail:
       NotificationDetailView()
+    case .removalReason:
+      RemovalReasonView()
     case .accountDelete:
       AccountDeleteView(onDeleted: onAuthCompleted)
     case .componentStates:
@@ -250,45 +267,82 @@ struct SupportDestinationView: View {
 private struct NotificationCenterView: View {
   var tripContext = TripInteractionContext()
   @Binding var feedPosts: [FeedPost]
-  @State private var selectedCourse: TravelCourse?
   @State private var selectedTrip: TripRecruitment?
   @State private var selectedPost: FeedPost?
   @State private var showsUnreadOnly = false
   @State private var readAll = false
+  @State private var showsRemovalReason = false
+  @State private var showsFriends = false
 
+  // changeLog14 — 알림 목데이터는 13 기획 목록이 모든 플랫폼의 기준이다.
+  // 오늘 5건 + 어제 3건, 안읽음 4. 이 목록에 없는 행을 추가로 두지 않는다.
   private let items = [
     SupportNotification(
-      title: "출발 확정까지 1명 남았어요",
-      body: "주왕산 & 주산지 힐링 트레킹",
-      time: "방금",
-      icon: "bell.badge.fill",
+      title: "주왕산 & 주산지 여행이 확정됐어요 🎉",
+      time: "방금 전",
+      icon: "checkmark.seal.fill",
       target: .trip("trip-cheongsong-juwangsan"),
       isUnread: true
     ),
     SupportNotification(
-      title: "새 댓글이 달렸어요",
-      body: "경주 단풍·야경 기록에 반응이 왔어요",
-      time: "12분 전",
-      icon: "bubble.left.and.bubble.right.fill",
-      target: .post("feed-03"),
+      title: "경주 단풍·야경 모임이 만들어졌어요 ✨",
+      time: "10분 전",
+      icon: "person.2.fill",
+      target: .trip("trip-gyeongju-night"),
       isUnread: true
     ),
     SupportNotification(
-      title: "날씨 추천이 바뀌었어요",
-      body: "맑음 예보에 맞춰 경주 첨성대 코스를 추천해요",
-      time: "오늘",
-      icon: "sun.max.fill",
-      target: .course("course-gyeongju-history"),
-      isUnread: true
+      title: "우직한 곰 7821님이 **메시지**를 보냈어요",
+      time: "1시간 전",
+      icon: "bubble.left.fill",
+      target: .unwired,
+      isUnread: true,
+      tint: MoyeoTheme.coral,
+      bubble: MoyeoTheme.coral.opacity(0.14)
     ),
     SupportNotification(
-      title: "하회마을 모임이 확정됐어요",
-      body: "모임 채팅방에서 준비물을 확인해보세요",
-      time: "어제",
-      icon: "checkmark.seal.fill",
-      target: .trip("trip-andong-hahoe"),
+      title: "여행 잘 마치셨죠? 함께 걸은 친구에게 **한 줄** 남겨볼까요?",
+      time: "2시간 전",
+      icon: "doc.text.fill",
+      target: .unwired
+    ),
+    SupportNotification(
+      title: "마감 **D-1** · 현재 4/8명이에요",
+      time: "3시간 전",
+      icon: "clock.fill",
+      target: .trip("trip-cheongsong-juwangsan"),
+      tint: MoyeoTheme.sunrise,
+      bubble: MoyeoTheme.sunrise.opacity(0.16)
+    ),
+    SupportNotification(
+      title: "엉뚱한 토끼 1457님이 **친구 요청**을 보냈어요",
+      time: "어제 오후 4시",
+      icon: "person.crop.circle.badge.plus",
+      target: .friends,
       group: "어제",
-      isUnread: true
+      isUnread: true,
+      tint: MoyeoTheme.river,
+      bubble: MoyeoTheme.river.opacity(0.13),
+      showsFriendActions: true
+    ),
+    // changeLog14 — 강퇴 통보는 알림 센터의 한 행이다. 안읽음 수(4)는 바꾸지 않는다.
+    SupportNotification(
+      title: "**감포 바다 일출 모임**에서 내보내졌어요 · 사유 확인",
+      time: "어제 오후 6시",
+      icon: "exclamationmark.triangle.fill",
+      target: .removalReason,
+      group: "어제",
+      tint: MoyeoTheme.coral,
+      bubble: MoyeoTheme.coral.opacity(0.14)
+    ),
+    SupportNotification(
+      title: "**3명**이 내 피드에 좋아요를 눌렀어요",
+      time: "어제 오전 11시",
+      icon: "heart.fill",
+      target: .post("feed-01"),
+      group: "어제",
+      tint: MoyeoTheme.blossom,
+      bubble: MoyeoTheme.blossom.opacity(0.16)
     )
   ]
 
@@ -326,15 +380,14 @@ private struct NotificationCenterView: View {
         NotificationFilterChip(title: "안읽음 \(unreadCount)", isSelected: showsUnreadOnly) { showsUnreadOnly = true }
         Spacer(minLength: 0)
       }
-      .padding(.bottom, 4)
 
       ForEach(groupedItems, id: \.group) { section in
         Text(section.group)
           .font(.caption.weight(.semibold))
           .foregroundStyle(MoyeoTheme.muted)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.top, 12)
-          .padding(.bottom, 2)
+          .padding(.top, 8)
+          .padding(.bottom, 1)
           .accessibilityIdentifier("notifications.group.\(section.group)")
 
         ForEach(section.items) { item in
@@ -342,26 +395,28 @@ private struct NotificationCenterView: View {
           Button {
             open(item.target)
           } label: {
-            HStack(alignment: .top, spacing: 12) {
-              SupportIconBubble(systemImage: item.icon)
-              VStack(alignment: .leading, spacing: 6) {
-                Text(item.title)
-                  .font(.subheadline.weight(.heavy))
+            HStack(alignment: .top, spacing: 11) {
+              SupportIconBubble(systemImage: item.icon, tint: item.tint, bubble: item.bubble)
+              VStack(alignment: .leading, spacing: 4) {
+                titleText(for: item)
                   .foregroundStyle(MoyeoTheme.ink)
-                Text(item.body)
-                  .font(.subheadline)
-                  .foregroundStyle(MoyeoTheme.muted)
                   .fixedSize(horizontal: false, vertical: true)
+                // 상대 시간은 보조 정보다 — 기획·웹·안드로이드와 같은 회색이다
                 Text(item.time)
                   .font(.caption.weight(.bold))
-                  .foregroundStyle(MoyeoTheme.forest)
+                  .foregroundStyle(MoyeoTheme.muted)
+                if item.showsFriendActions {
+                  friendActionButtons
+                    .padding(.top, 2)
+                }
               }
               Spacer()
               Image(systemName: "chevron.right")
                 .font(.caption.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.text400)
             }
-            .padding(.vertical, 14)
+            // 화면기획·웹·안드로이드와 같은 행 밀도. 8행이 한 화면에 담겨야 한다.
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
@@ -370,12 +425,6 @@ private struct NotificationCenterView: View {
         }
       }
     })
-    .navigationDestination(item: $selectedCourse) { course in
-      CourseDetailView(
-        course: course,
-        tripContext: tripContext
-      )
-    }
     .navigationDestination(item: $selectedTrip) { trip in
       TripDetailView(
         trip: trip,
@@ -390,16 +439,67 @@ private struct NotificationCenterView: View {
         incrementCommentCount(for: post.id)
       }
     }
+    .navigationDestination(isPresented: $showsRemovalReason) {
+      RemovalReasonView()
+    }
+    .navigationDestination(isPresented: $showsFriends) {
+      FriendsManagementView()
+    }
+  }
+
+  /// 기획 13 목록은 문장 일부만 굵다 — `**…**` 마크다운이 있으면 그 부분만 굵게,
+  /// 없으면 기존처럼 제목 전체를 굵게 그린다.
+  private func titleText(for item: SupportNotification) -> Text {
+    if item.title.contains("**"), let attributed = try? AttributedString(markdown: item.title) {
+      return Text(attributed).font(.subheadline)
+    }
+    return Text(item.title).font(.subheadline.weight(.heavy))
+  }
+
+  /// 친구 요청 행의 거절/수락 (13 기획). 목데이터라 동작은 두지 않는다.
+  private var friendActionButtons: some View {
+    HStack(spacing: 8) {
+      Button {} label: {
+        Text("거절")
+          .font(.footnote.weight(.bold))
+          .foregroundStyle(MoyeoTheme.ink)
+          .padding(.horizontal, 14)
+          .frame(height: 34)
+          .background(MoyeoTheme.card)
+          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .stroke(MoyeoTheme.line, lineWidth: 1)
+          }
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("notifications.friend.reject")
+      Button {} label: {
+        Text("수락")
+          .font(.footnote.weight(.bold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 14)
+          .frame(height: 34)
+          .background(MoyeoTheme.forest)
+          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("notifications.friend.accept")
+    }
   }
 
   private func open(_ target: SupportNotificationTarget) {
     switch target {
-    case .course(let courseID):
-      selectedCourse = MockData.course(for: courseID)
     case .trip(let tripID):
       selectedTrip = tripContext.trips.first { $0.id == tripID } ?? MockData.trip(for: tripID)
     case .post(let postID):
       selectedPost = MockData.feedPost(for: postID, in: feedPosts)
+    case .friends:
+      showsFriends = true
+    case .removalReason:
+      showsRemovalReason = true
+    case .unwired:
+      break
     }
   }
 
@@ -839,20 +939,26 @@ private struct StatePreviewCard: View {
     }
 }
 
-private struct HostLeaveConfirmationPreview: View {
+/// 31 모임 종료 경고 팝업 (changeLog14).
+/// 오버레이는 이전 화면 위에 뜬 것으로 그린다 — 이 팝업은 스스로 배경을 그리지 않고
+/// 20-1 채팅방 사이드 메뉴 위에 딤과 함께 얹힌다.
+struct LeaveConfirmationDialog: View {
+  var onCancel: () -> Void = {}
+  var onConfirm: () -> Void = {}
+
   var body: some View {
     ZStack {
-      MoyeoTheme.background.ignoresSafeArea()
-      Color.black.opacity(0.58).ignoresSafeArea()
+      MoyeoTheme.overlayScrim.ignoresSafeArea()
 
       // 화면기획의 경고 팝업은 좌측 정렬이고, 두 버튼은 같은 너비의 꼭지점 둥근 사각형이다.
       // 가운데 정렬 + 알약 버튼 + 플랫폼 강조색(파랑) 취소는 다른 플랫폼과 어긋난다.
       VStack(alignment: .leading, spacing: 0) {
+        // 위험 경고는 danger red다 — coral(accent)은 D-day 배지 같은 강조에만 쓴다
         Image(systemName: "exclamationmark.triangle.fill")
           .font(.system(size: 22, weight: .bold))
-          .foregroundStyle(MoyeoTheme.coral)
+          .foregroundStyle(MoyeoTheme.dangerRed)
           .frame(width: 48, height: 48)
-          .background(MoyeoTheme.coral.opacity(0.16))
+          .background(MoyeoTheme.dangerRed.opacity(0.16))
           .clipShape(Circle())
 
         Text("호스트가 나가면\n이 모임은 종료돼요")
@@ -861,7 +967,7 @@ private struct HostLeaveConfirmationPreview: View {
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 16)
 
-        Text("승인된 4명에게 알림이 가고, 채팅방은 14일 동안 읽기 전용으로 유지돼요.")
+        Text("승인된 4명에게 알림이 가고, 채팅방은 14일 동안 읽기 전용으로 유지된 후 사라져요.")
           .font(.subheadline)
           .foregroundStyle(MoyeoTheme.muted)
           .fixedSize(horizontal: false, vertical: true)
@@ -883,7 +989,7 @@ private struct HostLeaveConfirmationPreview: View {
         .padding(.top, 20)
 
         HStack(spacing: 8) {
-          Button {} label: {
+          Button(action: onCancel) {
             Text("취소")
               .font(.subheadline.weight(.semibold))
               .foregroundStyle(MoyeoTheme.ink)
@@ -892,26 +998,29 @@ private struct HostLeaveConfirmationPreview: View {
               .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
           }
           .buttonStyle(.plain)
-          Button {} label: {
+          .accessibilityIdentifier("leave.cancel")
+          Button(action: onConfirm) {
             Text("모임 종료")
               .font(.subheadline.weight(.semibold))
               .foregroundStyle(.white)
               .frame(maxWidth: .infinity)
               .frame(height: 44)
-              .background(MoyeoTheme.coral)
+              .background(MoyeoTheme.dangerRed)
               .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
           }
           .buttonStyle(.plain)
+          .accessibilityIdentifier("leave.confirm")
         }
         .padding(.top, 20)
       }
       .padding(24)
       .frame(maxWidth: 330)
-      .background(MoyeoTheme.background)
+      // 팝업 표면도 카드 표면이다 — 다크에서 `background`는 화면 배경과 같은 값이다
+      .background(MoyeoTheme.card)
       .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: 20).stroke(MoyeoTheme.line))
+      .shadow(color: Color.black.opacity(0.28), radius: 24, y: 10)
     }
-    .toolbar(.hidden, for: .navigationBar)
     .accessibilityIdentifier("screen.hostLeaveConfirmation")
   }
 }
@@ -942,18 +1051,140 @@ private struct NotificationFilterChip: View {
 
 private struct SupportNotification: Identifiable {
   let id = UUID()
+  /// 기획 13 목록은 문장 일부만 굵다 — `**굵게**` 마크다운을 지원한다.
   let title: String
-  let body: String
   let time: String
   let icon: String
   let target: SupportNotificationTarget
   /// 화면기획처럼 오늘/어제로 묶어서 보여준다
   var group: String = "오늘"
   var isUnread: Bool = false
+  /// 기획 13은 알림 유형마다 아이콘 색이 다르다 (친구=파랑 · 강퇴=danger · 좋아요=분홍 …)
+  var tint: Color = MoyeoTheme.forest
+  var bubble: Color = MoyeoTheme.leaf
+  /// 친구 요청 행에만 있는 거절/수락 버튼 (13 기획)
+  var showsFriendActions = false
 }
 
 private enum SupportNotificationTarget {
-  case course(String)
   case trip(String)
   case post(String)
+  /// 친구 요청 알림 → 친구 관리 화면
+  case friends
+  /// changeLog14 — 강퇴 알림 탭 시 내보내기 안내(13-1)로 이동
+  case removalReason
+  /// 기획에 탭 목적지가 정해지지 않은 행 — 목데이터 카탈로그라 이동 없이 둔다
+  case unwired
+}
+
+/// 13-1 내보내기 안내 (changeLog14) — 강퇴 알림에서만 진입한다.
+/// 채팅방은 이미 사라진 뒤라 채팅 쪽에는 어떤 안내도 두지 않고,
+/// 이의 제기(고객센터) 경로도 화면기획에 없으므로 하단 동작은 `확인` 하나다.
+private struct RemovalReasonView: View {
+  @Environment(\.dismiss) private var dismiss
+
+  private let aftermath = [
+    "이 모임에는 다시 신청할 수 없어요.",
+    "채팅방이 내 목록에서 사라져요. 이미 남긴 대화는 모임 채팅방에 그대로 남아요.",
+    "다른 모임을 찾고 신청하는 데에는 아무 영향이 없어요."
+  ]
+
+  var body: some View {
+    SupportList(title: "내보내기 안내", spacing: 16) {
+      // 상단 요약 — danger 틴트 원 + 두 줄 제목 + 일시·주체
+      VStack(spacing: 0) {
+        Image(systemName: "exclamationmark.triangle")
+          .font(.system(size: 26, weight: .bold))
+          .foregroundStyle(MoyeoTheme.coral)
+          .frame(width: 64, height: 64)
+          .background(MoyeoTheme.coral.opacity(0.14))
+          .clipShape(Circle())
+        Text("감포 바다 일출 모임에서\n내보내졌어요")
+          .font(.title3.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 18)
+        Text("2026.08.22 (토) 오후 6:02 · 호스트 결정")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MoyeoTheme.muted)
+          .padding(.top, 8)
+      }
+      .frame(maxWidth: .infinity)
+      .padding(.top, 20)
+      .padding(.bottom, 6)
+
+      // 사유는 호스트가 남긴 서술 하나만 보여준다 — 정형 카테고리 태그는 두지 않는다 (changeLog14)
+      VStack(alignment: .leading, spacing: 12) {
+        Text("호스트가 남긴 사유")
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+        Text("“모임 컨셉과 맞지 않는 대화가 반복되어, 남은 멤버들을 위해 함께하기 어렵다고 판단했어요.”")
+          .font(.subheadline)
+          .foregroundStyle(MoyeoTheme.text700)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(12)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(MoyeoTheme.subtleBackground)
+          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      }
+      .padding(16)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MoyeoTheme.card)
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .stroke(MoyeoTheme.line, lineWidth: 1)
+      }
+      .accessibilityIdentifier("removal-reason.hostReason")
+
+      // 이후 정책 3가지 고지 (changeLog14)
+      VStack(alignment: .leading, spacing: 10) {
+        Text("내보내진 뒤에는")
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+        ForEach(aftermath, id: \.self) { line in
+          HStack(alignment: .top, spacing: 8) {
+            Circle()
+              .fill(MoyeoTheme.text400)
+              .frame(width: 4, height: 4)
+              .padding(.top, 7)
+            Text(line)
+              .font(.footnote)
+              .foregroundStyle(MoyeoTheme.text700)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+      }
+      .padding(16)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MoyeoTheme.card)
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .stroke(MoyeoTheme.line, lineWidth: 1)
+      }
+      .accessibilityIdentifier("removal-reason.aftermath")
+    }
+    .safeAreaInset(edge: .bottom) {
+      Button {
+        dismiss()
+      } label: {
+        Text("확인")
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 52)
+          .background(MoyeoTheme.forest)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("removal-reason-confirm")
+      .padding(.horizontal, 18)
+      .padding(.top, 8)
+      .padding(.bottom, 12)
+      .background(MoyeoTheme.background)
+    }
+    .accessibilityIdentifier("removal-reason-screen")
+  }
 }

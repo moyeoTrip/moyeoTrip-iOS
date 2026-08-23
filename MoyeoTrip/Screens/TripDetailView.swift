@@ -20,6 +20,7 @@ struct TripDetailView: View {
     @State private var isFavorite = false
     @State private var didApplyInSession = false
     @State private var feedbackMessage: String?
+    @State private var isReportPresented = false
 
     private var appliedState: Bool {
         isApplied || didApplyInSession
@@ -36,8 +37,8 @@ struct TripDetailView: View {
                                 onBack: {
                                     dismiss()
                                 },
-                                onRefresh: {
-                                    feedbackMessage = "최신 모집 정보를 확인했어요."
+                                onReport: {
+                                    isReportPresented = true
                                 }
                             )
                             if let feedbackMessage {
@@ -101,6 +102,9 @@ struct TripDetailView: View {
                 onSendChatMessage(thread, message)
             }
         }
+        .fullScreenCover(isPresented: $isReportPresented) {
+            ReportView()
+        }
     }
 }
 
@@ -121,7 +125,7 @@ private struct TripDetailFeedbackBanner: View {
 private struct TripDetailHero: View {
     let trip: TripRecruitment
     let onBack: () -> Void
-    let onRefresh: () -> Void
+    let onReport: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -144,21 +148,15 @@ private struct TripDetailHero: View {
                     }
                     .accessibilityLabel("\(trip.title) 대표 이미지")
 
+                // 화면기획 15 — 우상단은 신고(깃발)다. 상태 배지는 히어로에 두지 않는다
                 HStack {
                     HeroIconButton(systemImage: "chevron.left", label: "뒤로", action: onBack)
                     Spacer()
-                    HeroIconButton(systemImage: "arrow.clockwise", label: "새로고침", action: onRefresh)
+                    HeroIconButton(systemImage: "flag", label: "신고", action: onReport)
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 56)
                 .frame(maxHeight: .infinity, alignment: .top)
-
-                Text(trip.status.rawValue)
-                    .font(.caption.weight(.heavy))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(.leading, 20)
-                    .padding(.bottom, 48)
             }
             .frame(width: proxy.size.width, height: 284)
         }
@@ -259,32 +257,39 @@ private struct TripDetailPanel: View {
                 ProgressBar(value: trip.progress, tint: trip.status.tint, marker: trip.minimumProgress)
             }
 
-            VStack(spacing: 12) {
-                DetailInfoRow(icon: "calendar", title: "일정", value: trip.detailDateText)
-                DetailInfoRow(icon: "clock", title: "시간", value: trip.detailTimeText)
+            // 화면기획 15 일정 카드 — 일정 · 여행 시간 · 집합 세 줄 뒤에
+            // 구분선을 두고 좌표 한 줄과 길 찾기를 붙인다 (웹 · Android 동일)
+            VStack(spacing: 10) {
+                TripScheduleRow(icon: "calendar", label: "일정", value: trip.detailScheduleText)
+                TripScheduleRow(icon: "clock", label: "여행 시간", value: trip.detailTravelTimeText)
+                TripScheduleRow(
+                    icon: "mappin.and.ellipse", label: "집합", value: trip.detailMeetupText)
                 if let meeting = trip.meetingDetails {
-                    DetailInfoRow(icon: "clock.badge", title: "집합 시간", value: meeting.meetingTime)
-                }
-                DetailInfoRow(icon: "mappin.and.ellipse", title: "모이는 곳", value: trip.meetupPoint)
-                if let meeting = trip.meetingDetails {
-                    DetailInfoRow(
-                        icon: "map",
-                        title: "좌표",
-                        value: String(format: "%.6f, %.6f", meeting.latitude, meeting.longitude)
-                    )
-                    Link(destination: directionsURL(for: meeting)) {
-                        Label("길찾기", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                            .font(.subheadline.weight(.heavy))
-                            .foregroundStyle(MoyeoTheme.primary300)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
+                    Rectangle()
+                        .fill(MoyeoTheme.softLine)
+                        .frame(height: 1)
+                    HStack(spacing: 10) {
+                        Image(systemName: "map")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.muted)
+                            .frame(width: 16)
+                        Text(String(format: "%.6f, %.6f", meeting.latitude, meeting.longitude))
+                            .font(.caption2)
+                            .foregroundStyle(MoyeoTheme.muted)
+                        Spacer(minLength: 8)
+                        Link(destination: directionsURL(for: meeting)) {
+                            Text("길 찾기")
+                                .font(.caption.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.brandText)
+                        }
+                        .accessibilityIdentifier("trip.detail.directions")
                     }
-                    .accessibilityIdentifier("trip.detail.directions")
                 }
             }
             .padding(14)
             .background(MoyeoTheme.subtleBackground)
             .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .accessibilityIdentifier("trip.detail.schedule")
 
             // 조건 4종은 한 카드 안에서 2x2 — 4줄로 세우면 카드만 길어진다 (웹 기준)
             VStack(spacing: 12) {
@@ -301,6 +306,23 @@ private struct TripDetailPanel: View {
             .background(MoyeoTheme.subtleBackground)
             .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
             .accessibilityIdentifier("trip.detail.conditions")
+
+            if trip.courseSource == .custom {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text(trip.customCourseNoticeText)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.brandText)
+                .padding(12)
+                .background(MoyeoTheme.leaf)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(MoyeoTheme.primary100, lineWidth: 1)
+                }
+                .accessibilityIdentifier("trip.detail.customCourseNotice")
+            }
 
             HStack(spacing: 12) {
                 MascotAvatar(mascot: trip.hostAvatar, size: 44, background: MoyeoTheme.leaf)
@@ -329,18 +351,6 @@ private struct TripDetailPanel: View {
             }
 
             TripRoutePreview(stops: trip.route)
-
-            if trip.courseSource == .custom {
-                HStack(alignment: .top, spacing: 9) {
-                    Image(systemName: "sparkles")
-                    Text("호스트가 직접 만든 코스예요. 여행 확정 전에는 경로가 바뀔 수 있고, 변경 시 모든 멤버에게 알려드려요.")
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.primary300)
-                .padding(13)
-                .background(MoyeoTheme.leaf)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -389,6 +399,31 @@ private struct DetailInfoRow: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 화면기획 15 일정 카드 행 — 라벨은 왼쪽 고정 폭, 값은 굵게 한 줄이다
+private struct TripScheduleRow: View {
+    let icon: String
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.muted)
+                .frame(width: 16)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.muted)
+                .frame(width: 60, alignment: .leading)
+            Text(value)
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -505,6 +540,43 @@ extension TripRecruitment {
 
     var detailDateText: String {
         parsedSchedule.dateText
+    }
+
+    /// 화면기획 15 — "2026.05.25 (토) · 당일치기"
+    var detailScheduleText: String {
+        guard let kind = scheduleDetails?.kind else { return parsedSchedule.dateText }
+        return "\(parsedSchedule.dateText) · \(kind.rawValue)"
+    }
+
+    /// 화면기획 15 — "08:00 - 18:00" (종료 시간이 없으면 시작 시간만)
+    var detailTravelTimeText: String {
+        guard let details = scheduleDetails else { return parsedSchedule.timeText }
+        let start = details.startTime ?? parsedSchedule.timeText
+        guard let end = details.endTime, !end.isEmpty else { return start }
+        return "\(start) - \(end)"
+    }
+
+    /// 화면기획 15 — "07:50 청송 시외버스터미널 정문 앞"
+    var detailMeetupText: String {
+        guard let meeting = meetingDetails else { return meetupPoint }
+        let place = meeting.detail.isEmpty ? meeting.name : "\(meeting.name) \(meeting.detail)"
+        return "\(meeting.meetingTime) \(place)"
+    }
+
+    /// 화면기획 15 안내 박스 — 확정 마감일을 문장 안에 그대로 노출한다
+    var customCourseNoticeText: String {
+        // "D-3 · 5/22(금)" → "5/22" (기획 문장은 요일 없이 날짜만 넣는다)
+        let deadline = recruitmentDeadline
+            .split(separator: "·")
+            .last?
+            .trimmingCharacters(in: .whitespaces)
+            .split(separator: "(")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        guard let deadline, !deadline.isEmpty else {
+            return "호스트가 직접 만든 코스예요. 여행이 확정되기 전까지 경로가 바뀔 수 있고, 바뀌면 알림으로 알려드려요."
+        }
+        return "호스트가 직접 만든 코스예요. 여행이 확정(\(deadline) 마감)되기 전까지 경로가 바뀔 수 있고, 바뀌면 알림으로 알려드려요."
     }
 
     var detailTimeText: String {

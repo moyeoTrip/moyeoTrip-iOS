@@ -133,8 +133,9 @@ extension MockData {
             title: "30대끼리 느긋하게 힐링 여행가요~",
             region: "청송",
             coverMascot: "🌲",
-            hostName: "숲속 사슴 2417",
-            hostAvatar: "🦌",
+            // 호스트 이름은 4개 플랫폼 공통 기준값이다 (docs/alignment/MOCKDATA-CANON.md)
+            hostName: "숲속여행자",
+            hostAvatar: "🐻",
             schedule: "2026.05.25 (토) 08:00",
             meetupPoint: "청송 시외버스터미널",
             price: "1인 45,000원",
@@ -146,7 +147,42 @@ extension MockData {
             vibe: "초보도 따라오기 쉬운 속도, 쉬는 시간을 넉넉히 두는 조용한 분위기",
             tags: ["자연", "트레킹", "초보가능"],
             route: ["청송 시외버스터미널", "주왕산 국립공원", "주산지", "달기약수탕"],
-            participants: Array(participants.prefix(2))
+            participants: Array(participants.prefix(2)),
+            // 화면기획 15 — 대표 모집은 호스트가 직접 만든 코스다
+            courseSource: .custom,
+            // 화면기획 18-x 여행 경로 — 방문지 4곳과 행별 부제(집합 장소 · 대전사 ~ 제3폭포 …)
+            itinerary: [
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-1", day: 1, order: 1, time: "09:00",
+                    name: "청송 시외버스터미널", memo: "집합 장소"),
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-2", day: 1, order: 2, time: "10:30",
+                    name: "주왕산 국립공원", memo: "대전사 ~ 제3폭포"),
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-3", day: 1, order: 3, time: "14:00",
+                    name: "주산지", memo: "왕버들 산책로"),
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-4", day: 1, order: 4, time: "16:30",
+                    name: "달기약수탕", memo: "늦은 점심")
+            ],
+            scheduleDetails: TripScheduleDetails(
+                kind: .dayTrip,
+                startDate: "2026.05.25 (토)",
+                startTime: "08:00",
+                endTime: "18:00"
+            ),
+            // 화면기획 15 일정 카드 — 집합 시간 · 정문 앞 · 좌표 · 길 찾기
+            meetingDetails: MeetingPointDetails(
+                name: "청송 시외버스터미널",
+                address: "경북 청송군 청송읍 금월로 231",
+                detail: "정문 앞",
+                latitude: 36.435612,
+                longitude: 129.057214,
+                meetingTime: "07:50"
+            ),
+            recruitmentDeadline: "D-3 · 5/22(금)",
+            genderRestriction: "제한 없음",
+            routeEditState: .editable
         ),
         TripRecruitment(
             id: "trip-andong-hahoe",
@@ -188,7 +224,25 @@ extension MockData {
             vibe: "사진을 좋아하지만 이동은 느긋하게, 저녁 이후 야경 시간을 충분히 남겨요",
             tags: ["야경", "단풍", "1박2일"],
             route: ["경주역", "첨성대", "황리단길", "월정교", "동궁과 월지"],
-            participants: Array(participants.prefix(5))
+            participants: Array(participants.prefix(5)),
+            // 화면기획 18 모집 관리 — 호스트 직접 코스 · 방문지 4곳 · 확정 전(D-3)까지 수정 가능
+            courseSource: .custom,
+            itinerary: [
+                ItineraryStop(
+                    id: "trip-gyeongju-stop-1", day: 1, order: 1, time: "14:00",
+                    name: "경주역", memo: "집합 장소"),
+                ItineraryStop(
+                    id: "trip-gyeongju-stop-2", day: 1, order: 2, time: "15:00",
+                    name: "첨성대", memo: "단풍 산책"),
+                ItineraryStop(
+                    id: "trip-gyeongju-stop-3", day: 1, order: 3, time: "17:00",
+                    name: "월정교", memo: "노을 사진"),
+                ItineraryStop(
+                    id: "trip-gyeongju-stop-4", day: 1, order: 4, time: "19:00",
+                    name: "동궁과 월지", memo: "야경 관람")
+            ],
+            recruitmentDeadline: "D-3",
+            routeEditState: .editable
         ),
         TripRecruitment(
             id: "trip-pohang-drive",
@@ -199,7 +253,7 @@ extension MockData {
             hostName: "우직한 곰 7821",
             hostAvatar: "🐻",
             schedule: "2026.06.15 (월) 09:30",
-            meetupPoint: "포항역 1번 출구",
+            meetupPoint: "포항역 광장",
             price: "1인 35,000원",
             capacity: 6,
             joined: 6,
@@ -576,18 +630,37 @@ extension MockData {
             tripTitle: "30대끼리 느긋하게 힐링 여행가요~",
             region: "청송",
             mascot: "🌲",
-            lastMessage: "숲속여행자: 주산지 물안개 시간에 맞춰 출발해요.",
+            lastMessage: "숲속여행자: 저도 함께하게 되어 반갑습니다~",
             updatedAt: "09:32",
             unreadCount: 0,
             statusSummary: "2/5명 · 마감 D-3",
             statusDetail: "1명만 더 모이면 출발 확정",
             members: Array(participants.prefix(2)),
+            // 화면기획 20 — 시스템 필 2개 + 인사 버블 3개 + 경로 수정 카드
             messages: [
+                ChatMessage(
+                    id: "j0-join",
+                    senderName: "시스템",
+                    avatar: "🌲",
+                    body: "모여트립이님이 모임에 참여했어요.",
+                    time: "",
+                    isMine: false,
+                    kind: .system
+                ),
+                ChatMessage(
+                    id: "j0-open",
+                    senderName: "시스템",
+                    avatar: "🌲",
+                    body: "숲속여행자님이 모임을 개설했어요.",
+                    time: "",
+                    isMine: false,
+                    kind: .system
+                ),
                 ChatMessage(
                     id: "j1",
                     senderName: "숲속여행자",
                     avatar: "🐻",
-                    body: "안녕하세요! 좋은 하루 보내세요.",
+                    body: "안녕하세요! 좋은 하루 보내세요 😊",
                     time: "09:30",
                     isMine: false
                 ),
@@ -595,7 +668,7 @@ extension MockData {
                     id: "j2",
                     senderName: "다정한 곰 1001",
                     avatar: "🐻",
-                    body: "안녕하세요! 잘 부탁드려요.",
+                    body: "안녕하세요! 잘 부탁드려요!",
                     time: "09:31",
                     isMine: true
                 ),
@@ -603,13 +676,37 @@ extension MockData {
                     id: "j3",
                     senderName: "숲속여행자",
                     avatar: "🐻",
-                    body: "주산지 물안개 시간에 맞춰 출발해요.",
+                    body: "저도 함께하게 되어 반갑습니다~",
                     time: "09:32",
                     isMine: false
+                ),
+                ChatMessage(
+                    id: "j4-route",
+                    senderName: "시스템",
+                    avatar: "🌲",
+                    body: "3번째 방문지가 **주산지 → 달기약수탕**으로 바뀌었어요. 여행 확정(5/22) 전까지는 경로가 바뀔 수 있어요.",
+                    time: "",
+                    isMine: false,
+                    kind: .routeChanged
                 )
             ],
             isReadOnly: false,
             tripID: "trip-cheongsong-juwangsan",
+            routeSummary: [
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-1", day: 1, order: 1, time: "09:00",
+                    name: "청송 시외버스터미널", memo: "집합 장소"),
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-2", day: 1, order: 2, time: "10:30",
+                    name: "주왕산 국립공원", memo: "대전사 ~ 제3폭포"),
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-3", day: 1, order: 3, time: "14:00",
+                    name: "주산지", memo: "왕버들 산책로"),
+                ItineraryStop(
+                    id: "trip-cheongsong-stop-4", day: 1, order: 4, time: "16:30",
+                    name: "달기약수탕", memo: "늦은 점심")
+            ],
+            courseSource: .custom,
             courseName: "주왕산 & 주산지 힐링 트레킹",
             price: "1인 45,000원",
             recruitmentDeadline: "D-3",
@@ -753,7 +850,10 @@ extension MockData {
             visibility: .publicAll,
             likeCount: 56,
             commentCount: 12,
-            mood: .coral
+            mood: .coral,
+            title: "경주 역사 감성 여행",
+            subtitle: "#야경 #월정교",
+            detailBody: "월정교에서 동궁과 월지로 이어지는 밤 동선이 제일 좋았어요."
         ),
         FeedPost(
             id: "feed-04",
@@ -768,7 +868,10 @@ extension MockData {
             visibility: .friendsOnly,
             likeCount: 73,
             commentCount: 9,
-            mood: .river
+            mood: .river,
+            title: "포항 바다와 시장을 한 번에",
+            subtitle: "#바다 #드라이브",
+            detailBody: "스페이스워크에서 바다를 보고 죽도시장 간식까지 알찼던 하루였어요."
         ),
         FeedPost(
             id: "feed-05",
@@ -783,7 +886,10 @@ extension MockData {
             visibility: .publicAll,
             likeCount: 64,
             commentCount: 7,
-            mood: .blossom
+            mood: .blossom,
+            title: "문경새재 길은 천천히 걸을수록 좋아요",
+            subtitle: "#단풍 #숲길",
+            detailBody: "급하지 않게 걸을수록 단풍 사이 작은 풍경이 더 잘 보여요."
         ),
         FeedPost(
             id: "feed-06",
@@ -798,7 +904,9 @@ extension MockData {
             visibility: .privateOnly,
             likeCount: 31,
             commentCount: 4,
-            mood: .sunrise
+            mood: .sunrise,
+            title: "부석사 눈꽃은 짧게 걸어도 좋아요",
+            subtitle: "#부석사 #눈"
         ),
         FeedPost(
             id: "feed-07",
@@ -813,12 +921,15 @@ extension MockData {
             visibility: .friendsOnly,
             likeCount: 89,
             commentCount: 16,
-            mood: .river
+            mood: .river,
+            title: "울릉도는 천천히 움직여야 보여요",
+            subtitle: "#섬여행 #해안산책"
         )
     ]
 
+    // 화면기획 25 공개 프로필 · 26 마이 — 내 계정 표시 이름은 "모여트립이"다
     static let profile = ProfileSummary(
-        name: "다정한 곰 1001",
+        name: "모여트립이",
         handle: "@moyeo_trip",
         avatar: "🐻",
         profileImageURL: nil,

@@ -47,6 +47,11 @@ struct UITestInitialState {
       myPath.append(MyRoute.profileEdit)
       return true
     }
+    if screen.matches("profile-taste-edit", "profiletasteedit") {
+      selectedTab = .my
+      myPath.append(MyRoute.profileTasteEdit)
+      return true
+    }
     if screen.matches("my-feed", "myfeed") {
       selectedTab = .my
       myPath.append(MyRoute.myFeed)
@@ -167,6 +172,11 @@ struct UITestInitialState {
       homePath.append(SupportRoute.authPreview(.profileBasic))
       return true
     }
+    if screen.matches("profile-taste", "profiletaste", "prof-4") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.profileTaste))
+      return true
+    }
     if screen.matches("profile-image", "profileimage") {
       selectedTab = .home
       homePath.append(SupportRoute.authPreview(.profileImage))
@@ -202,8 +212,8 @@ struct UITestInitialState {
     }
     if screen.matches("host", "host-manage", "hostmanage") {
       selectedTab = .home
-      let requestedTripID =
-        screen.identifier ?? MockData.trips.first?.id ?? "trip-cheongsong-juwangsan"
+      // 화면기획 18 모집 관리의 기준 목데이터는 경주 단풍·야경(4/8명 · D-3)이다
+      let requestedTripID = screen.identifier ?? "trip-gyeongju-night"
       let tripID = MockData.trip(for: requestedTripID)?.id ?? requestedTripID
       homePath.append(SupportRoute.hostManage(tripID))
       return true
@@ -299,7 +309,9 @@ struct UITestInitialState {
     }
     if screen.matches("notice-history", "noticehistory") {
       selectedTab = .home
-      homePath.append(SupportRoute.noticeHistory(screen.identifier ?? MockData.chatThreads[0].id))
+      // 화면기획 20-3의 기준 목데이터는 주왕산 & 주산지 힐링 트레킹 채팅방이다
+      homePath.append(
+        SupportRoute.noticeHistory(screen.identifier ?? "chat-cheongsong-juwangsan"))
       return true
     }
     if screen.matches("trip-confirmed", "tripconfirmed") {
@@ -312,11 +324,24 @@ struct UITestInitialState {
   }
   // swiftlint:enable function_body_length cyclomatic_complexity
 
-  // swiftlint:disable:next cyclomatic_complexity
+  // swiftlint:disable:next cyclomatic_complexity function_body_length
   private mutating func applyChangelogRoute(_ screen: UITestScreenRequest) -> Bool {
     if screen.matches("chat-menu", "chatmenu") {
       selectedTab = .home
       homePath.append(SupportRoute.chatMenu(screen.identifier ?? "chat-cheongsong-juwangsan"))
+      return true
+    }
+    // changeLog14 — 20-1a 멤버 액션 · 20-1b 내보내기 사유 입력. 둘 다 20-1 위에 뜬 시트다.
+    if screen.matches("member-actions", "memberactions") {
+      selectedTab = .home
+      homePath.append(
+        SupportRoute.chatMenuMemberActions(screen.identifier ?? "chat-cheongsong-juwangsan"))
+      return true
+    }
+    if screen.matches("member-remove", "memberremove") {
+      selectedTab = .home
+      homePath.append(
+        SupportRoute.chatMenuMemberRemove(screen.identifier ?? "chat-cheongsong-juwangsan"))
       return true
     }
     if screen.matches("chat-attach", "chatattach") {
@@ -368,6 +393,12 @@ struct UITestInitialState {
     if screen.matches("notif-detail", "notification-detail", "notificationdetail") {
       selectedTab = .home
       homePath.append(SupportRoute.notificationDetail)
+      return true
+    }
+    // changeLog14 — 13-1 내보내기 안내 (강퇴 사유)
+    if screen.matches("removal-reason", "removalreason") {
+      selectedTab = .home
+      homePath.append(SupportRoute.removalReason)
       return true
     }
     if screen.matches("account-delete", "accountdelete") {

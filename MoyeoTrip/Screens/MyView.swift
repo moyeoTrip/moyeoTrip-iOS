@@ -16,8 +16,9 @@ struct MyView: View {
   var feedPosts = MockData.feedPosts
   var onAuthenticationRequired: () -> Void = {}
   private let segments = ["진행중", "지난여행", "찜한 코스"]
+  // 화면기획 26 마이 — 진행중 카드는 4건(청송 · 안동 · 경주 · 포항)이다
   private var activeTrips: [TripRecruitment] {
-    Array(tripContext.trips.prefix(5))
+    Array(tripContext.trips.prefix(4))
   }
   private let pastTrips = [
     PastTrip(
@@ -146,6 +147,8 @@ struct MyView: View {
         PublicProfileView(profile: profile, onAuthenticationRequired: onAuthenticationRequired)
       case .profileEdit:
         ProfileEditView(profile: profile)
+      case .profileTasteEdit:
+        ProfileEditView(profile: profile, opensTasteEditor: true)
       case .myFeed:
         MyFeedListView(posts: feedPosts)
       case .friendDex:
@@ -507,18 +510,18 @@ private struct ProfileEditView: View {
   let profile: ProfileSummary
   @State private var displayName: String
   @State private var bio: String
-  @State private var selectedRegions: Set<String>
-  @State private var selectedPace = "천천히"
+  @State private var selectedTravelStyles: Set<String>
+  @State private var selectedInterestRegions: Set<String>
+  @State private var isTasteEditorPresented: Bool
   @State private var saveMessage: String?
 
-  private let regionOptions = ["청송", "안동", "경주", "울릉", "포항", "문경"]
-  private let paceOptions = ["천천히", "사진 많이", "로컬 맛집", "짧은 코스"]
-
-  init(profile: ProfileSummary) {
+  init(profile: ProfileSummary, opensTasteEditor: Bool = false) {
     self.profile = profile
-    _displayName = State(initialValue: profile.name)
-    _bio = State(initialValue: profile.oneLineBio)
-    _selectedRegions = State(initialValue: Set(profile.favoriteRegions))
+    _displayName = State(initialValue: ProfileEditMockData.privateNickname)
+    _bio = State(initialValue: ProfileEditMockData.bio)
+    _selectedTravelStyles = State(initialValue: TravelTasteSelection.defaultStyles)
+    _selectedInterestRegions = State(initialValue: TravelTasteSelection.defaultInterestRegions)
+    _isTasteEditorPresented = State(initialValue: opensTasteEditor)
   }
 
   var body: some View {
@@ -543,7 +546,11 @@ private struct ProfileEditView: View {
         VStack(spacing: 0) {
           VStack(spacing: 10) {
             ZStack(alignment: .bottomTrailing) {
-              AuthenticatedProfileAvatar(profile: profile, size: 96)
+              AuthenticatedProfileAvatar(
+                profile: profile,
+                size: 96,
+                emojiOverride: ProfileEditMockData.privateAvatar
+              )
               Image(systemName: "lock.fill")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(MoyeoTheme.muted)
@@ -552,7 +559,7 @@ private struct ProfileEditView: View {
                 .clipShape(Circle())
                 .overlay(Circle().stroke(MoyeoTheme.line))
             }
-            Text(profile.name)
+            Text(ProfileEditMockData.privateNickname)
               .font(.title3.weight(.heavy))
               .foregroundStyle(MoyeoTheme.ink)
             Text("한 번 정한 친구는 바꿀 수 없어요")
@@ -564,40 +571,12 @@ private struct ProfileEditView: View {
 
           ProfileEditGroupHeader("공개 프로필")
           ProfileEditListRow(label: "자기소개", value: bio, showsChevron: true)
-          ProfileEditListRow(label: "여행 스타일", value: selectedPace, showsChevron: true)
-          VStack(alignment: .leading, spacing: 10) {
-            Text("관심 지역").font(.subheadline.weight(.bold)).foregroundStyle(MoyeoTheme.ink)
-            HStack(spacing: 6) {
-              ForEach(regionOptions.prefix(4), id: \.self) { region in
-                let on = selectedRegions.contains(region)
-                Button {
-                  if on { selectedRegions.remove(region) } else { selectedRegions.insert(region) }
-                } label: {
-                  Text(region)
-                    .font(.caption.weight(.heavy))
-                    .foregroundStyle(on ? .white : MoyeoTheme.ink)
-                    .padding(.horizontal, 11)
-                    .frame(height: 28)
-                    .background(on ? MoyeoTheme.forest : MoyeoTheme.card)
-                    .overlay(Capsule().stroke(on ? MoyeoTheme.forest : MoyeoTheme.line))
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-              }
-              Text("+ 추가")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.muted)
-                .padding(.horizontal, 11)
-                .frame(height: 28)
-                .background(MoyeoTheme.subtleBackground)
-                .overlay(Capsule().stroke(MoyeoTheme.line))
-                .clipShape(Capsule())
-              Spacer(minLength: 0)
-            }
+          ProfileTravelTasteBlock(
+            travelStyles: Array(selectedTravelStyles),
+            interestRegions: Array(selectedInterestRegions)
+          ) {
+            isTasteEditorPresented = true
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 20)
-          .padding(.vertical, 14)
 
           ProfileEditGroupHeader("비공개 정보")
           // 닉네임과 캐릭터는 선택 후 바꿀 수 없다 — 잠금 표시로 알린다
@@ -619,6 +598,16 @@ private struct ProfileEditView: View {
     .background(MoyeoTheme.background.ignoresSafeArea())
     .toolbar(.hidden, for: .navigationBar)
     .accessibilityIdentifier("screen.profileEdit")
+    .sheet(isPresented: $isTasteEditorPresented) {
+      ProfileTravelTasteEditSheet(
+        travelStyles: $selectedTravelStyles,
+        interestRegions: $selectedInterestRegions
+      )
+      .presentationDetents([.height(720)])
+      .presentationDragIndicator(.hidden)
+      .presentationCornerRadius(24)
+      .presentationBackground(MoyeoTheme.card)
+    }
     .alert(
       "저장 완료",
       isPresented: Binding<Bool>(
@@ -636,6 +625,188 @@ private struct ProfileEditView: View {
     } message: {
       Text(saveMessage ?? "")
     }
+  }
+}
+
+private struct ProfileTravelTasteBlock: View {
+  let travelStyles: [String]
+  let interestRegions: [String]
+  let action: () -> Void
+
+  private var orderedTravelStyles: [String] {
+    TravelTasteSelection.styleOptions.filter(travelStyles.contains)
+  }
+
+  private var orderedInterestRegions: [String] {
+    TravelTasteSelection.interestRegionOptions.filter(interestRegions.contains)
+  }
+
+  var body: some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 8) {
+          Text("여행 취향")
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(MoyeoTheme.ink)
+          Spacer(minLength: 8)
+          Text("탭해서 바로 수정")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(MoyeoTheme.brandText)
+          Image(systemName: "chevron.right")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MoyeoTheme.text400)
+        }
+
+        ProfileTravelTastePreviewLine(title: "여행 스타일", items: orderedTravelStyles)
+        ProfileTravelTastePreviewLine(title: "관심 지역", items: orderedInterestRegions)
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MoyeoTheme.background)
+      .contentShape(Rectangle())
+      .overlay(alignment: .bottom) {
+        Rectangle()
+          .fill(MoyeoTheme.softLine)
+          .frame(maxWidth: .infinity)
+          .frame(height: 1)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("여행 취향 편집")
+    .accessibilityIdentifier("profile.edit.travelTaste")
+  }
+}
+
+private struct ProfileTravelTastePreviewLine: View {
+  let title: String
+  let items: [String]
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MoyeoTheme.muted)
+        .frame(width: 58, alignment: .leading)
+      ForEach(items, id: \.self) { item in
+        Text(item)
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.brandText)
+          .padding(.horizontal, 9)
+          .frame(height: 27)
+          .background(MoyeoTheme.selectionSurface)
+          .clipShape(Capsule())
+          .overlay {
+            Capsule().stroke(MoyeoTheme.forest.opacity(0.7), lineWidth: 1)
+          }
+      }
+      Text("+ 추가")
+        .font(.caption.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.muted)
+        .padding(.horizontal, 9)
+        .frame(height: 27)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(Capsule())
+        .overlay {
+          Capsule().stroke(MoyeoTheme.line, lineWidth: 1)
+        }
+      Spacer(minLength: 0)
+    }
+  }
+}
+
+private struct ProfileTravelTasteEditSheet: View {
+  @Environment(\.dismiss) private var dismiss
+  @Binding private var travelStyles: Set<String>
+  @Binding private var interestRegions: Set<String>
+  @State private var draftTravelStyles: Set<String>
+  @State private var draftInterestRegions: Set<String>
+
+  init(
+    travelStyles: Binding<Set<String>>,
+    interestRegions: Binding<Set<String>>
+  ) {
+    _travelStyles = travelStyles
+    _interestRegions = interestRegions
+    _draftTravelStyles = State(initialValue: travelStyles.wrappedValue)
+    _draftInterestRegions = State(initialValue: interestRegions.wrappedValue)
+  }
+
+  private var canSave: Bool {
+    TravelTasteSelection.isComplete(
+      styles: draftTravelStyles,
+      interestRegions: draftInterestRegions
+    )
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Capsule()
+        .fill(MoyeoTheme.line)
+        .frame(width: 36, height: 4)
+        .padding(.top, 10)
+        .padding(.bottom, 18)
+
+      VStack(alignment: .leading, spacing: 5) {
+        Text("여행 취향 편집")
+          .font(MoyeoTypography.screenTitle)
+          .foregroundStyle(MoyeoTheme.ink)
+        Text("여행 스타일과 관심 지역은 함께 저장돼요.")
+          .font(MoyeoTypography.cardMeta)
+          .foregroundStyle(MoyeoTheme.muted)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 20)
+      .padding(.bottom, 18)
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 22) {
+          TravelTasteOptionSection(
+            title: "여행 스타일",
+            requirementHint: "1개 이상",
+            options: TravelTasteSelection.styleOptions,
+            selectedItems: $draftTravelStyles,
+            accessibilityPrefix: "profile.taste.style"
+          )
+          TravelTasteOptionSection(
+            title: "관심 지역",
+            requirementHint: "경북 안에서 1곳 이상",
+            options: TravelTasteSelection.interestRegionOptions,
+            selectedItems: $draftInterestRegions,
+            accessibilityPrefix: "profile.taste.region"
+          )
+          TravelTasteSelectionSummary(
+            styleCount: draftTravelStyles.count,
+            regionCount: draftInterestRegions.count,
+            accessibilityIdentifier: "profile.taste.summary"
+          )
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 18)
+      }
+      .safeAreaInset(edge: .bottom) {
+        HStack(spacing: 10) {
+          Button("취소") { dismiss() }
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(MoyeoTheme.ink)
+            .frame(width: 72, height: 52)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("profile.taste.cancel")
+
+          AuthPrimaryButton(title: "저장", accessibilityIdentifier: "profile.taste.save") {
+            travelStyles = draftTravelStyles
+            interestRegions = draftInterestRegions
+            dismiss()
+          }
+          .disabled(!canSave)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 14)
+        .background(MoyeoTheme.card)
+      }
+    }
+    .accessibilityIdentifier("screen.profileTasteEdit")
   }
 }
 
@@ -812,13 +983,26 @@ private struct MyHubMenuRow: View {
 }
 
 extension ProfileSummary {
+  /// 화면기획 26 마이 — 프로필 요약 카드의 한 줄 소개
   fileprivate var oneLineBio: String {
-    "혼자 떠나도 같이 웃을 수 있는 작은 여행을 좋아해요."
+    "자연 속에서 힐링하는 걸 좋아해요!"
+  }
+
+  /// 화면기획 25 공개 프로필 — 소개 카드는 두 줄이다
+  fileprivate var publicIntro: String {
+    "자연과 여행을 사랑합니다 🌿\n새로운 사람들과 함께하는 여행이 좋아요!"
   }
 
   fileprivate var mannerScoreText: String {
     "4.7"
   }
+}
+
+/// 화면기획 28 프로필 수정 — 비공개 정보(닉네임·캐릭터)는 공개 이름과 별개다
+private enum ProfileEditMockData {
+  static let privateNickname = "따스한 사슴 3492"
+  static let privateAvatar = "🦌"
+  static let bio = "느긋한 여행 좋아해요"
 }
 
 private struct PublicProfileView: View {
@@ -876,7 +1060,7 @@ private struct PublicProfileView: View {
 
           VStack(alignment: .leading, spacing: 6) {
             Text("소개").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
-            Text(profile.oneLineBio)
+            Text(profile.publicIntro)
               .font(.subheadline)
               .foregroundStyle(MoyeoTheme.muted)
               .fixedSize(horizontal: false, vertical: true)
@@ -1141,6 +1325,13 @@ private struct FriendDexView: View {
               }
             }
 
+            // 여행이 끝났는데 한 줄 메시지를 안 남긴 친구가 있으면 도감 상단에서 유도한다 (화면기획 27)
+            NavigationLink(value: SupportRoute.tripMessage) {
+              DogamEmptyBackNoticeCard()
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("friendDex.emptyBackNotice")
+
             if filteredFriends.isEmpty {
               DogamEmptyResultView()
             } else {
@@ -1197,7 +1388,7 @@ private enum DogamFriendFilter: String, CaseIterable, Identifiable {
     case .repeated:
       return "2회 이상 4"
     case .recent:
-      return "최근 1주 3"
+      return "최근 1개월 3"
     }
   }
 
@@ -1208,7 +1399,7 @@ private enum DogamFriendFilter: String, CaseIterable, Identifiable {
     case .repeated:
       return "2회 이상 만난 친구"
     case .recent:
-      return "최근 1주 동행"
+      return "최근 1개월 동행"
     }
   }
 
@@ -1280,6 +1471,38 @@ private struct DogamFilterChip: View {
   }
 }
 
+/// 화면기획 27 상단 안내 — 카드 뒷면(한 줄 메시지)이 비어 있는 친구를 27-1로 유도한다
+private struct DogamEmptyBackNoticeCard: View {
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "square.and.pencil")
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(MoyeoTheme.onLeaf)
+      VStack(alignment: .leading, spacing: 3) {
+        Text("카드 뒷면이 비어 있는 친구 2명")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.onLeaf)
+        Text("경주 단풍·야경에서 만난 친구들에게 한 줄 남겨볼까요?")
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.brandText)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 6)
+      Image(systemName: "chevron.right")
+        .font(.caption.weight(.bold))
+        .foregroundStyle(MoyeoTheme.brandText)
+    }
+    .padding(13)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MoyeoTheme.leaf)
+    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .stroke(MoyeoTheme.primary100, lineWidth: 1)
+    }
+  }
+}
+
 private struct DogamEmptyResultView: View {
   var body: some View {
     VStack(spacing: 6) {
@@ -1298,6 +1521,13 @@ private struct DogamEmptyResultView: View {
       RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
         .stroke(MoyeoTheme.softLine, lineWidth: 1)
     }
+  }
+}
+
+extension DogamFriend {
+  /// 화면기획 27 — 도감 카드는 "따스한 사슴"처럼 닉네임 앞 두 낱말만 보여준다
+  fileprivate var cardLabel: String {
+    nickname.split(separator: " ").prefix(2).joined(separator: " ")
   }
 }
 
@@ -1320,7 +1550,8 @@ private struct DogamFriendCard: View {
         }
       }
 
-      Text(friend.nickname)
+      // 카드 라벨은 닉네임 뒤 숫자를 뺀 앞 두 낱말이다 (화면기획 27)
+      Text(friend.cardLabel)
         .font(.caption2.weight(.heavy))
         .foregroundStyle(MoyeoTheme.ink)
         .lineLimit(1)
@@ -2093,7 +2324,7 @@ private struct MyActiveTripCard: View {
 
       VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .top, spacing: 8) {
-          Text(trip.title)
+          Text(trip.myListTitle)
             .font(MyTravelCardMetrics.titleFont)
             .foregroundStyle(MoyeoTheme.ink)
             .lineLimit(1)
@@ -2280,6 +2511,11 @@ extension TripRecruitment {
     }
   }
 
+  /// 화면기획 26 마이 — 진행중 카드는 대표 모집만 코스 이름으로 보여준다
+  fileprivate var myListTitle: String {
+    id == "trip-cheongsong-juwangsan" ? "주왕산 & 주산지 힐링 트레킹" : title
+  }
+
   fileprivate var myDateText: String {
     schedule.split(separator: " ").prefix(2).joined(separator: " ")
   }
@@ -2396,10 +2632,12 @@ private struct ProfileHeader: View {
 private struct AuthenticatedProfileAvatar: View {
   let profile: ProfileSummary
   let size: CGFloat
+  /// 화면기획 28처럼 공개 이름과 다른 캐릭터를 보여줘야 하는 화면에서만 쓴다
+  var emojiOverride: String?
 
   var body: some View {
     Group {
-      if let url = profile.profileImageURL {
+      if let url = profile.profileImageURL, emojiOverride == nil {
         CachedRemoteImage(url: url) { image in
           image.resizable().scaledToFill()
         } placeholder: {
@@ -2416,7 +2654,7 @@ private struct AuthenticatedProfileAvatar: View {
   }
 
   private var fallback: some View {
-    Text(profile.avatar)
+    Text(emojiOverride ?? profile.avatar)
       .font(.system(size: size * 0.48))
       .frame(maxWidth: .infinity, maxHeight: .infinity)
   }

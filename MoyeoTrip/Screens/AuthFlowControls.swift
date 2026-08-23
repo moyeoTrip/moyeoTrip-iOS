@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-// This file contains the shared controls for the complete seven-step auth flow.
+// This file contains the shared controls for the complete eight-step auth flow.
 // swiftlint:disable file_length
 
 struct AuthInlineError: View {

@@ -313,7 +313,6 @@ struct AuthBasicsView: View {
     var nicknameCandidate: AuthNicknameCandidate?
     @Binding var selectedBirthdate: AuthBirthdate?
     @Binding var selectedGender: AuthGender?
-    var isSubmitting = false
     var errorMessage: String?
     var backAction: (() -> Void)?
     let continueAction: () -> Void
@@ -350,7 +349,7 @@ struct AuthBasicsView: View {
                 }
             }
         } footer: {
-            // 화면기획은 이전 / 저장하고 프로필 만들기 두 버튼이다
+            // 기본 정보는 여행 취향 단계로 이어진다.
             HStack(spacing: 10) {
                 if let backAction {
                     Button(action: backAction) {
@@ -371,12 +370,12 @@ struct AuthBasicsView: View {
                 }
 
                 AuthPrimaryButton(
-                    title: isSubmitting ? "계정을 만들고 있어요..." : "저장하고 프로필 만들기",
+                    title: "저장하고 다음",
                     accessibilityIdentifier: "auth.basic.continue"
                 ) {
                     continueAction()
                 }
-                .disabled(!canContinue || isSubmitting)
+                .disabled(!canContinue)
             }
         }
     }

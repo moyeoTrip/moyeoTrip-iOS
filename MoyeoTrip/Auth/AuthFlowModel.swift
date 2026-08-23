@@ -10,6 +10,7 @@ enum AuthFlowStage: Equatable {
     case passwordReset
     case nickname
     case basics
+    case taste
     case profileImage
 
     var progress: Double {
@@ -20,6 +21,7 @@ enum AuthFlowStage: Equatable {
         case .emailLogin, .emailRegistration, .passwordReset: 0.34
         case .nickname: 0.44
         case .basics: 0.68
+        case .taste: 0.82
         case .profileImage: 0.94
         }
     }

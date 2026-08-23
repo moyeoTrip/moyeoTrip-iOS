@@ -36,19 +36,23 @@ struct HostManageTripSummary: View {
     let status: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .lineLimit(1)
+        // 화면기획 18 — 제목 아래에 "4 / 8명 · D-3" 순으로 배지를 잇는다
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(MoyeoTypography.cardTitle)
+                .foregroundStyle(MoyeoTheme.ink)
+                .lineLimit(1)
+            HStack(spacing: 8) {
                 Text(participantText)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(MoyeoTheme.muted)
+                Text("·")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.text400)
+                HostManagePill(status)
             }
-            Spacer(minLength: 8)
-            HostManagePill(status)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -65,13 +69,14 @@ struct HostManageRouteRow: View {
                 .background(MoyeoTheme.card)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
-                Text("여행 경로 · \(count)곳")
+                Text("여행 경로 · 방문지 \(count)곳")
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(MoyeoTheme.ink)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(MoyeoTheme.muted)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
@@ -152,15 +157,11 @@ struct HostApprovedCompanionsRow: View {
                         .overlay(Circle().stroke(MoyeoTheme.card, lineWidth: 2))
                 }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("승인된 동행자 \(count)명")
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                Text("집결지와 준비물은 채팅방에서 확인해요.")
-                    .font(.caption)
-                    .foregroundStyle(MoyeoTheme.muted)
-            }
             Spacer()
+            // 화면기획 18 — 아바타 무리 + "본인 외 3명"
+            Text("본인 외 \(max(count - 1, 0))명")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.muted)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 72)

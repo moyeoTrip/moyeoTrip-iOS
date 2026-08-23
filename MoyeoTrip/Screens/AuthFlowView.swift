@@ -8,6 +8,7 @@ enum AuthDirectScreen: String, Hashable {
     case emailLogin
     case nickname
     case profileBasic
+    case profileTaste
     case profileImage
 }
 
@@ -18,6 +19,8 @@ struct AuthFlowView: View {
     @State private var nickname = ""
     @State private var selectedBirthdate: AuthBirthdate?
     @State private var selectedGender: AuthGender?
+    @State private var selectedTravelStyles = TravelTasteSelection.defaultStyles
+    @State private var selectedInterestRegions = TravelTasteSelection.defaultInterestRegions
     @State private var email = ""
     @State private var password = ""
     @State private var passwordConfirmation = ""
@@ -45,7 +48,9 @@ struct AuthFlowView: View {
         }
         _viewModel = StateObject(wrappedValue: model)
         _onboardingIndex = State(initialValue: directConfiguration?.onboardingIndex ?? 0)
-        _nickname = State(initialValue: directScreen == .nickname ? "다정한 곰 1001" : "")
+        // 닉네임은 사용자가 후보에서 직접 고르는 값이다. 화면기획·웹·안드로이드와 같이 진입 시점에는
+        // 아무 후보도 선택되지 않은 상태여야 하고, 그래서 "다음" CTA도 비활성으로 시작한다.
+        _nickname = State(initialValue: "")
         _selectedBirthdate = State(initialValue: directScreen == .profileBasic ? .april1998 : nil)
         // 성별은 사용자가 직접 고르는 값이다. 화면기획·웹과 같이 진입 시점에는 아무것도 고르지 않은 상태.
         _selectedGender = State(initialValue: nil)
@@ -65,6 +70,7 @@ struct AuthFlowView: View {
         case .emailLogin: (.emailLogin, 0)
         case .nickname: (.nickname, 0)
         case .profileBasic: (.basics, 0)
+        case .profileTaste: (.taste, 0)
         case .profileImage: (.profileImage, 0)
         }
     }
@@ -191,6 +197,14 @@ struct AuthFlowView: View {
                 nicknameCandidate: viewModel.selectedNicknameCandidateForProfile,
                 selectedBirthdate: $selectedBirthdate,
                 selectedGender: $selectedGender,
+                errorMessage: viewModel.errorMessage,
+                backAction: { moveBack() },
+                continueAction: { viewModel.stage = .taste }
+            )
+        case .taste:
+            AuthTravelTasteView(
+                selectedTravelStyles: $selectedTravelStyles,
+                selectedInterestRegions: $selectedInterestRegions,
                 isSubmitting: viewModel.isSubmittingSignup,
                 errorMessage: viewModel.errorMessage,
                 backAction: { moveBack() },
@@ -264,6 +278,8 @@ struct AuthFlowView: View {
             viewModel.stage = .login
         case .basics:
             viewModel.stage = .nickname
+        case .taste:
+            viewModel.stage = .basics
         case .profileImage:
             dismissIfAllowed()
         }
@@ -293,18 +309,20 @@ struct AuthFlowView: View {
         case .splash:
             return nil
         case .onboarding:
-            return AuthHeaderProgress(label: "온보딩", current: onboardingIndex + 1, total: 7)
+            return AuthHeaderProgress(label: "온보딩", current: onboardingIndex + 1, total: 8)
         case .login:
-            return AuthHeaderProgress(label: "로그인", current: 4, total: 7)
+            return AuthHeaderProgress(label: "로그인", current: 4, total: 8)
         case .emailLogin, .emailRegistration, .passwordReset:
-            // 화면기획·웹의 이메일 화면은 7단계 프로그레스를 두지 않는 보조 화면이다.
+            // 화면기획·웹의 이메일 화면은 8단계 프로그레스를 두지 않는 보조 화면이다.
             return nil
         case .nickname:
-            return AuthHeaderProgress(label: "프로필 설정", current: 5, total: 7)
+            return AuthHeaderProgress(label: "프로필 설정", current: 5, total: 8)
         case .basics:
-            return AuthHeaderProgress(label: "프로필 설정", current: 6, total: 7)
+            return AuthHeaderProgress(label: "프로필 설정", current: 6, total: 8)
+        case .taste:
+            return AuthHeaderProgress(label: "프로필 설정", current: 7, total: 8)
         case .profileImage:
-            return AuthHeaderProgress(label: "프로필 설정", current: 7, total: 7)
+            return AuthHeaderProgress(label: "프로필 설정", current: 8, total: 8)
         }
     }
 }
@@ -354,7 +372,7 @@ private struct AuthFlowHeader: View {
                 }
             }
 
-            // 단계 라벨은 7단계 프로그레스와 한 쌍이다. 프로그레스가 없는 보조 화면에서는 그리지 않는다.
+            // 단계 라벨은 8단계 프로그레스와 한 쌍이다. 프로그레스가 없는 보조 화면에서는 그리지 않는다.
             if let progress {
                 HStack {
                     Text(progress.label)

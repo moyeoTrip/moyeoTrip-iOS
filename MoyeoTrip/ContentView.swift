@@ -89,6 +89,7 @@ enum MoyeoTab: CaseIterable, Hashable {
 enum MyRoute: Hashable {
     case profile
     case profileEdit
+    case profileTasteEdit
     case myFeed
     case friendDex
     case settings

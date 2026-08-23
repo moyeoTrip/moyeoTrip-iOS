@@ -104,120 +104,22 @@ private struct ChatThreadRow: View {
 }
 
 struct ChatRoomView: View {
-  @Environment(\.moyeoIsOffline) private var isOffline
   let thread: ChatThread
   let onSendMessage: (ChatMessage) -> Void
-  @State private var messages: [ChatMessage]
-  @State private var draft = ""
   @State private var toolbarMessage: String?
   @State private var supportRoute: SupportRoute?
-  @State private var pendingMessageIDs: Set<String>
 
   init(thread: ChatThread, onSendMessage: @escaping (ChatMessage) -> Void = { _ in }) {
     self.thread = thread
     self.onSendMessage = onSendMessage
-    let pending = OfflineChatQueue.messages(for: thread.id)
-    let existingIDs = Set(thread.messages.map(\.id))
-    _messages = State(
-      initialValue: thread.messages + pending.filter { !existingIDs.contains($0.id) }.map(\.message)
-    )
-    _pendingMessageIDs = State(initialValue: Set(pending.map(\.id)))
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      ChatRoomStatusHeader(thread: thread)
-
-      if isOffline {
-        OfflineChatBanner()
-      }
-
-      Button {
-        supportRoute = .noticeHistory(thread.id)
-      } label: {
-        HStack(spacing: 9) {
-          Image(systemName: "pin.fill")
-          Text(thread.pinnedNotices.first?.title ?? "집합 장소와 준비물 공지를 확인해주세요")
-            .lineLimit(1)
-          Spacer()
-          Text("공지 이력")
-          Image(systemName: "chevron.right")
-        }
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-        .padding(.horizontal, 16)
-        .frame(height: 44)
-        .background(MoyeoTheme.leaf)
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("chat.pinnedNotice")
-
-      Button {
-        let tripID =
-          thread.tripID ?? MockData.trips.first { $0.title == thread.tripTitle }?.id
-          ?? MockData.trips[0].id
-        let state: RouteEditState =
-          thread.statusSummary.contains("확정")
-          ? .tripConfirmed : (thread.courseSource == .custom ? .editable : .linkedLocked)
-        supportRoute = .courseEdit(tripID, state)
-      } label: {
-        HStack(spacing: 9) {
-          Image(systemName: "map.fill")
-          VStack(alignment: .leading, spacing: 2) {
-            Text(thread.courseDisplayName)
-            Text("방문지 \(thread.routeSummary.count)개 · \(thread.courseSource.title) · \(routeSummaryText)")
-              .font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
-          }
-          Spacer()
-          Image(systemName: "chevron.right")
-        }
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-        .padding(.horizontal, 16)
-        .frame(height: 48)
-        .background(MoyeoTheme.card)
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("chat.routeSummary")
-
-      ScrollView {
-        VStack(spacing: 14) {
-          if !thread.isReadOnly {
-            ChatApplicationNotice()
-          } else {
-            ChatArchiveNotice(thread: thread)
-          }
-
-          ForEach(messages) { message in
-            MessageBubble(message: message, isPending: pendingMessageIDs.contains(message.id))
-          }
-        }
-        .padding(20)
-      }
-
-      if thread.isReadOnly {
-        VStack(spacing: 4) {
-          Text(thread.archiveStatus ?? "읽기 전용 보관")
-            .font(.caption.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.forest)
-          Text("종료된 모임이라 새 메시지를 보낼 수 없어요.")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.muted)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(MoyeoTheme.card)
-      } else {
-        ChatComposer(
-          draft: $draft,
-          isOffline: isOffline,
-          send: sendMessage,
-          attachment: {
-            supportRoute = .chatAttach(thread.id)
-          }
-        )
-      }
-    }
+    ChatRoomBody(
+      thread: thread,
+      onSendMessage: onSendMessage,
+      onOpenRoute: { supportRoute = $0 }
+    )
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle(thread.tripTitle)
     .navigationBarTitleDisplayMode(.inline)
@@ -256,6 +158,139 @@ struct ChatRoomView: View {
     .navigationDestination(item: $supportRoute) { route in
       SupportDestinationView(route: route)
     }
+  }
+}
+
+/// changeLog14 — 채팅방 본문. 오버레이(20-2 첨부 메뉴 · 32 신고 시트)의 배경이
+/// 실루엣이 아니라 실제 채팅방과 같은 코드를 쓰도록 화면 껍데기와 분리했다.
+struct ChatRoomBody: View {
+  @Environment(\.moyeoIsOffline) private var isOffline
+  let thread: ChatThread
+  var onSendMessage: (ChatMessage) -> Void = { _ in }
+  var onOpenRoute: (SupportRoute) -> Void = { _ in }
+  @State private var messages: [ChatMessage]
+  @State private var draft = ""
+  @State private var pendingMessageIDs: Set<String>
+
+  init(
+    thread: ChatThread,
+    onSendMessage: @escaping (ChatMessage) -> Void = { _ in },
+    onOpenRoute: @escaping (SupportRoute) -> Void = { _ in }
+  ) {
+    self.thread = thread
+    self.onSendMessage = onSendMessage
+    self.onOpenRoute = onOpenRoute
+    let pending = OfflineChatQueue.messages(for: thread.id)
+    let existingIDs = Set(thread.messages.map(\.id))
+    _messages = State(
+      initialValue: thread.messages + pending.filter { !existingIDs.contains($0.id) }.map(\.message)
+    )
+    _pendingMessageIDs = State(initialValue: Set(pending.map(\.id)))
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      ChatRoomStatusHeader(thread: thread)
+
+      if isOffline {
+        OfflineChatBanner()
+      }
+
+      // 화면기획 20 고정 공지 바 — 공지 제목 + "공지 4개 · 고정 2 · 이력 보기"
+      Button {
+        onOpenRoute(.noticeHistory(thread.id))
+      } label: {
+        HStack(spacing: 9) {
+          Image(systemName: "pin.fill")
+          VStack(alignment: .leading, spacing: 2) {
+            Text(thread.pinnedNotices.first?.title ?? "07:50 청송 시외버스터미널 정문 앞 집합")
+              .lineLimit(1)
+            Text(noticeSummaryText)
+              .font(.caption2)
+              .foregroundStyle(MoyeoTheme.muted)
+          }
+          Spacer()
+          Image(systemName: "chevron.right")
+        }
+        .font(.caption.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.ink)
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+        .background(MoyeoTheme.leaf)
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("chat.pinnedNotice")
+
+      // 화면기획 20 코스 바 — 코스 이름 + "방문지 4곳 · 호스트 직접 코스" + 경로 수정 버튼
+      Button {
+        let tripID =
+          thread.tripID ?? MockData.trips.first { $0.title == thread.tripTitle }?.id
+          ?? MockData.trips[0].id
+        let state: RouteEditState =
+          thread.statusSummary.contains("확정")
+          ? .tripConfirmed : (thread.courseSource == .custom ? .editable : .linkedLocked)
+        onOpenRoute(.courseEdit(tripID, state))
+      } label: {
+        HStack(spacing: 9) {
+          Image(systemName: "map.fill")
+          VStack(alignment: .leading, spacing: 2) {
+            Text(thread.courseDisplayName)
+            Text("방문지 \(thread.routeSummary.count)곳 · \(thread.courseSource.title)")
+              .font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
+          }
+          Spacer()
+          Text("경로 수정")
+            .font(.caption2.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.brandText)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .overlay(Capsule().stroke(MoyeoTheme.forest.opacity(0.6)))
+        }
+        .font(.caption.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.ink)
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+        .background(MoyeoTheme.card)
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("chat.routeSummary")
+
+      ScrollView {
+        VStack(spacing: 14) {
+          if thread.isReadOnly {
+            ChatArchiveNotice(thread: thread)
+          }
+
+          ForEach(messages) { message in
+            MessageBubble(message: message, isPending: pendingMessageIDs.contains(message.id))
+          }
+        }
+        .padding(20)
+      }
+
+      if thread.isReadOnly {
+        VStack(spacing: 4) {
+          Text(thread.archiveStatus ?? "읽기 전용 보관")
+            .font(.caption.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.forest)
+          Text("종료된 모임이라 새 메시지를 보낼 수 없어요.")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(MoyeoTheme.muted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(MoyeoTheme.card)
+      } else {
+        ChatComposer(
+          draft: $draft,
+          isOffline: isOffline,
+          send: sendMessage,
+          attachment: {
+            onOpenRoute(.chatAttach(thread.id))
+          }
+        )
+      }
+    }
     .onAppear {
       if !isOffline {
         flushPendingMessages()
@@ -268,9 +303,13 @@ struct ChatRoomView: View {
     }
   }
 
-  private var routeSummaryText: String {
-    let names = thread.routeSummary.map(\.name)
-    return names.isEmpty ? "경로와 집합 정보를 확인하세요" : names.joined(separator: " → ")
+  /// 고정 공지 바 두 번째 줄 — 공지·고정 수는 스레드에 공지가 있으면 그 수를,
+  /// 없으면 화면기획 20의 기준 값(공지 4 · 고정 2)을 쓴다.
+  private var noticeSummaryText: String {
+    let total = thread.pinnedNotices.count
+    guard total > 0 else { return "공지 4개 · 고정 2 · 이력 보기" }
+    let pinned = thread.pinnedNotices.filter(\.isPinned).count
+    return "공지 \(total)개 · 고정 \(pinned) · 이력 보기"
   }
 
   private func sendMessage() {
@@ -377,7 +416,8 @@ private struct ChatRoomStatusHeader: View {
 
   var body: some View {
     VStack(spacing: 8) {
-      Text(thread.chatStatusLine)
+      // 화면기획 20 — "마감 D-3"만 강조색으로 구분한다
+      statusLine
         .font(.caption.weight(.semibold))
         .foregroundStyle(MoyeoTheme.muted)
         .frame(maxWidth: .infinity)
@@ -397,6 +437,15 @@ private struct ChatRoomStatusHeader: View {
     .overlay(alignment: .bottom) {
       Rectangle().fill(MoyeoTheme.softLine).frame(height: 1)
     }
+  }
+
+  private var statusLine: Text {
+    if thread.chatStatusDeadline.isEmpty {
+      return Text(thread.chatStatusLinePrefix)
+    }
+    return Text(
+      "\(thread.chatStatusLinePrefix) · \(Text(thread.chatStatusDeadline).foregroundStyle(MoyeoTheme.coral))"
+    )
   }
 
   private func conditionPill(_ icon: String, _ title: String) -> some View {
@@ -425,9 +474,21 @@ extension ChatThread {
   var genderDisplayText: String { genderRestriction.isEmpty ? "성별 무관" : genderRestriction }
 
   var chatStatusLine: String {
+    chatStatusDeadline.isEmpty ? chatStatusLinePrefix : "\(chatStatusLinePrefix) · \(chatStatusDeadline)"
+  }
+
+  /// 마감 강조 없이 남는 앞부분 — "2/5명 · 5/25(토) 08:00–18:00 · 당일치기"
+  var chatStatusLinePrefix: String {
     let scheduleText = scheduleSummary.isEmpty ? "일정 확인" : scheduleSummary
-    let deadlineText = recruitmentDeadline.isEmpty ? statusSummary : "마감 \(recruitmentDeadline)"
-    return "\(memberCountText) · \(scheduleText) · \(deadlineText)"
+    if recruitmentDeadline.isEmpty {
+      return "\(memberCountText) · \(scheduleText) · \(statusSummary)"
+    }
+    return "\(memberCountText) · \(scheduleText)"
+  }
+
+  /// 강조색으로 그리는 마감 표기 — "마감 D-3"
+  var chatStatusDeadline: String {
+    recruitmentDeadline.isEmpty ? "" : "마감 \(recruitmentDeadline)"
   }
 }
 
@@ -436,21 +497,38 @@ struct MessageBubble: View {
   var isPending = false
 
   var body: some View {
-    if message.isSystemMessage {
-      VStack(spacing: 6) {
-        Text(message.body)
-          .font(.caption.weight(.heavy))
-        if message.kind == .routeChanged {
-          Label("바뀐 경로 보기", systemImage: "map.fill")
-            .font(.caption2.weight(.heavy))
+    if message.kind == .routeChanged {
+      // 화면기획 20 — 경로 수정 카드: 제목 + 본문 + "바뀐 경로 보기 →" 링크
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 7) {
+          Image(systemName: "arrow.triangle.2.circlepath")
+            .font(.caption.weight(.heavy))
+          Text("호스트가 경로를 수정했어요")
+            .font(.caption.weight(.heavy))
         }
+        .foregroundStyle(MoyeoTheme.brandText)
+        Text(.init(message.body))
+          .font(.caption)
+          .foregroundStyle(MoyeoTheme.onLeaf)
+          .fixedSize(horizontal: false, vertical: true)
+        Text("바뀐 경로 보기 →")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.brandText)
       }
-      .foregroundStyle(MoyeoTheme.forest)
-      .padding(.horizontal, 14)
-      .padding(.vertical, 8)
+      .padding(14)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .background(MoyeoTheme.leaf)
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .frame(maxWidth: .infinity, alignment: .center)
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .accessibilityIdentifier("chat.routeChangedCard")
+    } else if message.isSystemMessage {
+      Text(message.body)
+        .font(.caption.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.forest)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(MoyeoTheme.leaf)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
     } else {
       HStack(alignment: .bottom, spacing: 8) {
         if message.isMine {
@@ -498,23 +576,6 @@ struct MessageBubble: View {
         }
       }
     }
-  }
-}
-
-private struct ChatApplicationNotice: View {
-  var body: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "checkmark.seal.fill")
-        .foregroundStyle(MoyeoTheme.forest)
-      Text("모임 신청 후 대화가 이어져요")
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.forest)
-    }
-    .padding(.horizontal, 14)
-    .padding(.vertical, 9)
-    .frame(maxWidth: .infinity)
-    .background(MoyeoTheme.leaf)
-    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
   }
 }
 
