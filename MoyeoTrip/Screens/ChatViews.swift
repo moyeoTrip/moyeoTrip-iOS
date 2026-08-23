@@ -752,12 +752,18 @@ private struct SpecialPlaceCard: View {
 }
 
 private struct SpecialMeetupCard: View {
+  /// 화면기획 21 "만날 위치 공유" — 경주 모집의 첫 방문지 좌표를 그대로 쓴다.
+  private var coordinate: MoyeoMapCoordinate? {
+    let stop = MockData.trips.first { $0.id == "trip-gyeongju-night" }?.itinerary.first
+    return MoyeoMapCoordinate(latitude: stop?.latitude, longitude: stop?.longitude)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Label("11/8 14:00 만남", systemImage: "calendar")
         .font(.caption2.weight(.heavy))
         .foregroundStyle(MoyeoTheme.coral)
-      MapMessagePreview()
+      MapMessagePreview(coordinate: coordinate)
         .frame(height: 88)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       Text("경주역 2번 출구")
@@ -837,7 +843,26 @@ private struct SpecialSimpleCard: View {
 }
 
 private struct MapMessagePreview: View {
+  var coordinate: MoyeoMapCoordinate?
+
   var body: some View {
+    if let coordinate {
+      MoyeoMapView(
+        content: MoyeoMapContent(
+          center: coordinate,
+          level: 16,
+          markers: [MoyeoMapMarker(id: "special-meetup", coordinate: coordinate)],
+          fitsContent: false
+        ),
+        isInteractive: false,
+        fallback: { mockup }
+      )
+    } else {
+      mockup
+    }
+  }
+
+  private var mockup: some View {
     GeometryReader { proxy in
       let size = proxy.size
 

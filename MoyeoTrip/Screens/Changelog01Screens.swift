@@ -61,9 +61,12 @@ struct RecruitmentDraft: Hashable {
     static let preview = RecruitmentDraft()
 
     static let previewStops = [
-        ItineraryStop(id: "stop-terminal", day: 1, order: 1, time: "09:00", name: "청송 시외버스터미널", memo: "집합 장소"),
-        ItineraryStop(id: "stop-juwangsan", day: 1, order: 2, time: "10:30", name: "주왕산 국립공원", memo: "대전사 - 제3폭포"),
-        ItineraryStop(id: "stop-jusanji", day: 1, order: 3, time: "14:00", name: "주산지", memo: "왕버들 산책로")
+        ItineraryStop(id: "stop-terminal", day: 1, order: 1, time: "09:00", name: "청송 시외버스터미널", memo: "집합 장소",
+                      latitude: 36.435612, longitude: 129.057214),
+        ItineraryStop(id: "stop-juwangsan", day: 1, order: 2, time: "10:30", name: "주왕산 국립공원", memo: "대전사 - 제3폭포",
+                      latitude: 36.3931, longitude: 129.1728),
+        ItineraryStop(id: "stop-jusanji", day: 1, order: 3, time: "14:00", name: "주산지", memo: "왕버들 산책로",
+                      latitude: 36.3494, longitude: 129.1436)
     ]
 
     var scheduleSummary: String {
@@ -896,7 +899,7 @@ struct RecruitmentMeetingView: View {
             VStack(alignment: .leading, spacing: 15) {
                 DesignHeading("집합 장소 정하기", subtitle: "검색하거나 지도의 핀을 움직여 정확한 위치를 알려주세요.")
                 ZStack(alignment: .top) {
-                    MeetingMapCard(meeting: draft.meeting)
+                    MeetingMapCard(meeting: $draft.meeting)
                         .accessibilityIdentifier("createMeeting.map")
                     LabelledSearchField(text: $search, prompt: "장소 검색 (TourAPI)")
                         .padding(12)
@@ -1276,9 +1279,13 @@ struct NoticeHistoryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     NoticeSectionTitle(title: "상단 고정 중")
-                    ForEach(notices.filter(\.isPinned)) { notice in NoticeCard(notice: notice) }
+                    ForEach(notices.filter(\.isPinned)) { notice in
+                        NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                    }
                     NoticeSectionTitle(title: "지난 공지")
-                    ForEach(notices.filter { !$0.isPinned }) { notice in NoticeCard(notice: notice) }
+                    ForEach(notices.filter { !$0.isPinned }) { notice in
+                        NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                    }
 
                     Text("공지는 호스트만 올릴 수 있고, 고정은 최대 3개까지예요. 고정을 해제해도 이력에는 그대로 남아요.")
                         .font(.caption2)
@@ -1309,6 +1316,17 @@ struct NoticeHistoryView: View {
         } message: { Text("집합 장소나 준비물 변경을 모든 멤버에게 알려요.") }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .accessibilityIdentifier("screen.noticeHistory")
+    }
+
+    /// 20-3 공지의 지도 미리보기는 모집의 집합 좌표를 그대로 쓴다. 없으면 목업으로 남는다.
+    private var meetingCoordinate: MoyeoMapCoordinate? {
+        guard
+            let tripID = thread.tripID,
+            let meeting = MockData.trips.first(where: { $0.id == tripID })?.meetingDetails
+        else {
+            return nil
+        }
+        return MoyeoMapCoordinate(latitude: meeting.latitude, longitude: meeting.longitude)
     }
 
     private func createNotice() {
@@ -1391,6 +1409,7 @@ private struct NoticeHistoryNavigationBar: View {
 
 private struct NoticeCard: View {
     let notice: TripNotice
+    var meetingCoordinate: MoyeoMapCoordinate?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -1413,7 +1432,7 @@ private struct NoticeCard: View {
             }
             Text(notice.body).font(.subheadline).foregroundStyle(MoyeoTheme.ink)
             if notice.id == "notice-meet" {
-                NoticeRoutePreview()
+                NoticeRoutePreview(coordinate: meetingCoordinate)
                     .frame(height: 88)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
@@ -1439,7 +1458,31 @@ private struct NoticeCard: View {
 /// 집합 장소 공지의 지도 미리보기 (화면기획 20-3).
 /// 경로선을 그리면 선 그래프처럼 읽힌다 — 집합 한 지점이므로 지도면 + 가운데 핀만 둔다.
 private struct NoticeRoutePreview: View {
+    var coordinate: MoyeoMapCoordinate?
+
     var body: some View {
+        if let coordinate {
+            MoyeoMapView(
+                content: MoyeoMapContent(
+                    center: coordinate,
+                    level: 16,
+                    markers: [MoyeoMapMarker(id: "notice-meet", coordinate: coordinate)],
+                    fitsContent: false
+                ),
+                isInteractive: false
+            ) {
+                mockup
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("집합 장소 지도")
+        } else {
+            mockup
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("집합 장소 지도")
+        }
+    }
+
+    private var mockup: some View {
         GeometryReader { proxy in
             ZStack {
                 MoyeoTheme.mapGreen
@@ -1461,14 +1504,50 @@ private struct NoticeRoutePreview: View {
                     .position(x: proxy.size.width * 0.5, y: proxy.size.height * 0.44)
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("집합 장소 지도")
     }
 }
 
+/// 여행 경로 지도 (화면기획 17-7 / 18-2 / 18-3).
+/// 방문지 위경도가 모두 있으면 실지도에 순번 마커 + 경로선을, 없으면 기존 도식을 그린다.
 private struct RouteSchematic: View {
     let stops: [ItineraryStop]
+
+    private var routeMarkers: [MoyeoMapMarker] {
+        stops.compactMap { stop in
+            guard let coordinate = MoyeoMapCoordinate(latitude: stop.latitude, longitude: stop.longitude) else {
+                return nil
+            }
+            return MoyeoMapMarker(id: stop.id, coordinate: coordinate, order: stop.order)
+        }
+    }
+
     var body: some View {
+        let markers = routeMarkers
+        if markers.count == stops.count, let first = markers.first {
+            MoyeoMapView(
+                content: MoyeoMapContent(
+                    center: first.coordinate,
+                    level: 11,
+                    markers: markers,
+                    polyline: markers.map(\.coordinate)
+                ),
+                isInteractive: false,
+                fallback: { schematic }
+            )
+            .frame(height: 160)
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("경로 지도, 방문지 \(stops.count)곳")
+        } else {
+            schematic
+                .frame(height: 160)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("경로 지도, 방문지 \(stops.count)곳")
+        }
+    }
+
+    private var schematic: some View {
         GeometryReader { proxy in
             ZStack {
                 MoyeoTheme.mapGreen
@@ -1489,16 +1568,34 @@ private struct RouteSchematic: View {
                 }
             }
         }
-        .frame(height: 160)
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("경로 지도, 방문지 \(stops.count)곳")
     }
 }
 
+/// 17-3 집합 장소 지정. 실지도에서는 중앙 핀을 고정하고 지도를 끌어 좌표를 잡는다.
 private struct MeetingMapCard: View {
-    let meeting: MeetingPointDetails
+    @Binding var meeting: MeetingPointDetails
+
     var body: some View {
+        MoyeoMapView(
+            content: MoyeoMapContent(
+                center: MoyeoMapCoordinate(latitude: meeting.latitude, longitude: meeting.longitude),
+                level: 16,
+                fitsContent: false
+            ),
+            draggablePin: true,
+            onPinMove: updateCoordinate,
+            fallback: { mockup }
+        )
+        .frame(height: 210).clipShape(RoundedRectangle(cornerRadius: 9))
+        .accessibilityLabel("지도 핀, \(meeting.name)")
+    }
+
+    private func updateCoordinate(_ coordinate: MoyeoMapCoordinate) {
+        meeting.latitude = coordinate.latitude
+        meeting.longitude = coordinate.longitude
+    }
+
+    private var mockup: some View {
         ZStack {
             MoyeoTheme.mapGreen
             VStack(spacing: 6) {
@@ -1507,8 +1604,6 @@ private struct MeetingMapCard: View {
                 Text("핀을 움직여 위치 조정").font(.caption2).foregroundStyle(MoyeoTheme.muted)
             }
         }
-        .frame(height: 210).clipShape(RoundedRectangle(cornerRadius: 9))
-        .accessibilityLabel("지도 핀, \(meeting.name)")
     }
 }
 

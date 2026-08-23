@@ -154,16 +154,20 @@ extension MockData {
             itinerary: [
                 ItineraryStop(
                     id: "trip-cheongsong-stop-1", day: 1, order: 1, time: "09:00",
-                    name: "청송 시외버스터미널", memo: "집합 장소"),
+                    name: "청송 시외버스터미널", memo: "집합 장소",
+                    latitude: 36.435612, longitude: 129.057214),
                 ItineraryStop(
                     id: "trip-cheongsong-stop-2", day: 1, order: 2, time: "10:30",
-                    name: "주왕산 국립공원", memo: "대전사 ~ 제3폭포"),
+                    name: "주왕산 국립공원", memo: "대전사 ~ 제3폭포",
+                    latitude: 36.3931, longitude: 129.1728),
                 ItineraryStop(
                     id: "trip-cheongsong-stop-3", day: 1, order: 3, time: "14:00",
-                    name: "주산지", memo: "왕버들 산책로"),
+                    name: "주산지", memo: "왕버들 산책로",
+                    latitude: 36.3494, longitude: 129.1436),
                 ItineraryStop(
                     id: "trip-cheongsong-stop-4", day: 1, order: 4, time: "16:30",
-                    name: "달기약수탕", memo: "늦은 점심")
+                    name: "달기약수탕", memo: "늦은 점심",
+                    latitude: 36.4278, longitude: 129.0489)
             ],
             scheduleDetails: TripScheduleDetails(
                 kind: .dayTrip,
@@ -230,16 +234,20 @@ extension MockData {
             itinerary: [
                 ItineraryStop(
                     id: "trip-gyeongju-stop-1", day: 1, order: 1, time: "14:00",
-                    name: "경주역", memo: "집합 장소"),
+                    name: "경주역", memo: "집합 장소",
+                    latitude: 35.8562, longitude: 129.2247),
                 ItineraryStop(
                     id: "trip-gyeongju-stop-2", day: 1, order: 2, time: "15:00",
-                    name: "첨성대", memo: "단풍 산책"),
+                    name: "첨성대", memo: "단풍 산책",
+                    latitude: 35.8348, longitude: 129.2194),
                 ItineraryStop(
                     id: "trip-gyeongju-stop-3", day: 1, order: 3, time: "17:00",
-                    name: "월정교", memo: "노을 사진"),
+                    name: "월정교", memo: "노을 사진",
+                    latitude: 35.829, longitude: 129.2168),
                 ItineraryStop(
                     id: "trip-gyeongju-stop-4", day: 1, order: 4, time: "19:00",
-                    name: "동궁과 월지", memo: "야경 관람")
+                    name: "동궁과 월지", memo: "야경 관람",
+                    latitude: 35.8348, longitude: 129.2264)
             ],
             recruitmentDeadline: "D-3",
             routeEditState: .editable
@@ -362,7 +370,9 @@ extension MockData {
             mapHint: "청송 북동쪽 숲길",
             mascot: "🌲",
             tags: ["트레킹", "폭포", "주산지"],
-            linkedTripID: "trip-cheongsong-juwangsan"
+            linkedTripID: "trip-cheongsong-juwangsan",
+            latitude: 36.3931,
+            longitude: 129.1728
         ),
         ExploreSpot(
             id: "spot-hahoe",
@@ -374,7 +384,9 @@ extension MockData {
             mapHint: "낙동강 곡선 안쪽",
             mascot: "🏡",
             tags: ["한옥", "유네스코", "산책"],
-            linkedTripID: "trip-andong-hahoe"
+            linkedTripID: "trip-andong-hahoe",
+            latitude: 36.539,
+            longitude: 128.518
         ),
         ExploreSpot(
             id: "spot-ulleung",
@@ -386,7 +398,9 @@ extension MockData {
             mapHint: "동해 한가운데 섬 코스",
             mascot: "🌊",
             tags: ["섬여행", "해안산책", "힐링"],
-            linkedTripID: "trip-ulleung-island"
+            linkedTripID: "trip-ulleung-island",
+            latitude: 37.4845,
+            longitude: 130.9057
         ),
         ExploreSpot(
             id: "spot-gyeongju",
@@ -398,7 +412,9 @@ extension MockData {
             mapHint: "경주 중심 역사 지구",
             mascot: "🌙",
             tags: ["야경", "역사", "산책"],
-            linkedTripID: "trip-gyeongju-night"
+            linkedTripID: "trip-gyeongju-night",
+            latitude: 35.8348,
+            longitude: 129.2194
         ),
         ExploreSpot(
             id: "spot-pohang",
@@ -410,7 +426,9 @@ extension MockData {
             mapHint: "영일대해수욕장 근처",
             mascot: "🌉",
             tags: ["바다", "사진", "드라이브"],
-            linkedTripID: "trip-pohang-drive"
+            linkedTripID: "trip-pohang-drive",
+            latitude: 36.057,
+            longitude: 129.3777
         ),
         ExploreSpot(
             id: "spot-mungyeong",
@@ -422,7 +440,9 @@ extension MockData {
             mapHint: "문경 북쪽 숲길",
             mascot: "🍁",
             tags: ["단풍", "트레킹", "숲길"],
-            linkedTripID: "trip-mungyeong-saejae"
+            linkedTripID: "trip-mungyeong-saejae",
+            latitude: 36.758,
+            longitude: 128.077
         ),
         ExploreSpot(
             id: "spot-buseoksa",
@@ -434,7 +454,9 @@ extension MockData {
             mapHint: "영주 북동쪽 산길",
             mascot: "❄️",
             tags: ["사찰", "눈", "짧은동선"],
-            linkedTripID: "trip-yeongju-buseoksa"
+            linkedTripID: "trip-yeongju-buseoksa",
+            latitude: 36.9997,
+            longitude: 128.6871
         )
     ]
 
@@ -695,16 +717,20 @@ extension MockData {
             routeSummary: [
                 ItineraryStop(
                     id: "trip-cheongsong-stop-1", day: 1, order: 1, time: "09:00",
-                    name: "청송 시외버스터미널", memo: "집합 장소"),
+                    name: "청송 시외버스터미널", memo: "집합 장소",
+                    latitude: 36.435612, longitude: 129.057214),
                 ItineraryStop(
                     id: "trip-cheongsong-stop-2", day: 1, order: 2, time: "10:30",
-                    name: "주왕산 국립공원", memo: "대전사 ~ 제3폭포"),
+                    name: "주왕산 국립공원", memo: "대전사 ~ 제3폭포",
+                    latitude: 36.3931, longitude: 129.1728),
                 ItineraryStop(
                     id: "trip-cheongsong-stop-3", day: 1, order: 3, time: "14:00",
-                    name: "주산지", memo: "왕버들 산책로"),
+                    name: "주산지", memo: "왕버들 산책로",
+                    latitude: 36.3494, longitude: 129.1436),
                 ItineraryStop(
                     id: "trip-cheongsong-stop-4", day: 1, order: 4, time: "16:30",
-                    name: "달기약수탕", memo: "늦은 점심")
+                    name: "달기약수탕", memo: "늦은 점심",
+                    latitude: 36.4278, longitude: 129.0489)
             ],
             courseSource: .custom,
             courseName: "주왕산 & 주산지 힐링 트레킹",

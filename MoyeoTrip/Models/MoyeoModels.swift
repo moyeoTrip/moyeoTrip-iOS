@@ -256,6 +256,9 @@ struct ExploreSpot: Identifiable, Hashable {
     let mascot: String
     let tags: [String]
     let linkedTripID: String?
+    // 실지도(화면기획 11)에 마커를 찍기 위한 위경도. 없으면 목업 지도로 남는다.
+    var latitude: Double?
+    var longitude: Double?
 }
 
 struct ChatThread: Identifiable, Hashable {

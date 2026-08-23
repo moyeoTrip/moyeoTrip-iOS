@@ -340,55 +340,24 @@ private struct ExploreMapView: View {
     private let mapHill = adaptiveColor(light: "#D8E8D5", dark: "#182C22")
     private let mapWater = adaptiveColor(light: "#C9E0E5", dark: "#17303B")
 
+    /// 목데이터 위경도가 있는 명소만 실지도 마커로 찍는다. 원 안 숫자는 그 지역의 모집 수다.
+    private var mapContent: MoyeoMapContent {
+        let markers = MockData.spots.compactMap { spot -> MoyeoMapMarker? in
+            guard let coordinate = MoyeoMapCoordinate(latitude: spot.latitude, longitude: spot.longitude) else {
+                return nil
+            }
+            let recruitments = MockData.trips.count { $0.region == spot.region }
+            return MoyeoMapMarker(id: spot.id, coordinate: coordinate, order: recruitments > 0 ? recruitments : nil)
+        }
+        let center = markers.first?.coordinate ?? MoyeoMapCoordinate(latitude: 36.4361, longitude: 129.0573)
+        return MoyeoMapContent(center: center, level: 9, markers: markers)
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
-            GeometryReader { proxy in
-                let size = proxy.size
-
-                ZStack {
-                    mapBase
-                    Path { path in
-                        path.move(to: CGPoint(x: 0, y: size.height * 0.27))
-                        path.addCurve(
-                            to: CGPoint(x: size.width, y: size.height * 0.24),
-                            control1: CGPoint(x: size.width * 0.22, y: size.height * 0.16),
-                            control2: CGPoint(x: size.width * 0.62, y: size.height * 0.43)
-                        )
-                        path.addLine(to: CGPoint(x: size.width, y: size.height))
-                        path.addLine(to: CGPoint(x: 0, y: size.height))
-                        path.closeSubpath()
-                    }
-                    .fill(mapHill)
-                    Path { path in
-                        path.move(to: CGPoint(x: size.width * 0.66, y: 0))
-                        path.addCurve(
-                            to: CGPoint(x: size.width, y: size.height * 0.30),
-                            control1: CGPoint(x: size.width * 0.84, y: size.height * 0.12),
-                            control2: CGPoint(x: size.width * 0.88, y: size.height * 0.24)
-                        )
-                        path.addLine(to: CGPoint(x: size.width, y: size.height))
-                        path.addLine(to: CGPoint(x: size.width * 0.76, y: size.height))
-                        path.addCurve(
-                            to: CGPoint(x: size.width * 0.66, y: 0),
-                            control1: CGPoint(x: size.width * 0.80, y: size.height * 0.70),
-                            control2: CGPoint(x: size.width * 0.62, y: size.height * 0.36)
-                        )
-                    }
-                    .fill(mapWater)
-
-                    ForEach(clusters) { cluster in
-                        MapClusterPin(cluster: cluster)
-                            .position(x: size.width * cluster.x, y: size.height * cluster.y)
-                    }
-
-                    ForEach(Array(MockData.spots.prefix(3).enumerated()), id: \.element.id) { index, spot in
-                        MapPhotoPin(spot: spot)
-                            .position(
-                                x: size.width * photoPositions[index].x,
-                                y: size.height * photoPositions[index].y
-                            )
-                    }
-                }
+            // 하단 선택 카드와 탭바가 지도를 덮으므로 카카오 로고를 그 위로 올린다.
+            MoyeoMapView(content: mapContent, logoBottomInset: 268) {
+                mockupMap
             }
             .ignoresSafeArea()
 
@@ -408,6 +377,57 @@ private struct ExploreMapView: View {
         }
         .background(mapBase.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var mockupMap: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+
+            ZStack {
+                mapBase
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: size.height * 0.27))
+                    path.addCurve(
+                        to: CGPoint(x: size.width, y: size.height * 0.24),
+                        control1: CGPoint(x: size.width * 0.22, y: size.height * 0.16),
+                        control2: CGPoint(x: size.width * 0.62, y: size.height * 0.43)
+                    )
+                    path.addLine(to: CGPoint(x: size.width, y: size.height))
+                    path.addLine(to: CGPoint(x: 0, y: size.height))
+                    path.closeSubpath()
+                }
+                .fill(mapHill)
+                Path { path in
+                    path.move(to: CGPoint(x: size.width * 0.66, y: 0))
+                    path.addCurve(
+                        to: CGPoint(x: size.width, y: size.height * 0.30),
+                        control1: CGPoint(x: size.width * 0.84, y: size.height * 0.12),
+                        control2: CGPoint(x: size.width * 0.88, y: size.height * 0.24)
+                    )
+                    path.addLine(to: CGPoint(x: size.width, y: size.height))
+                    path.addLine(to: CGPoint(x: size.width * 0.76, y: size.height))
+                    path.addCurve(
+                        to: CGPoint(x: size.width * 0.66, y: 0),
+                        control1: CGPoint(x: size.width * 0.80, y: size.height * 0.70),
+                        control2: CGPoint(x: size.width * 0.62, y: size.height * 0.36)
+                    )
+                }
+                .fill(mapWater)
+
+                ForEach(clusters) { cluster in
+                    MapClusterPin(cluster: cluster)
+                        .position(x: size.width * cluster.x, y: size.height * cluster.y)
+                }
+
+                ForEach(Array(MockData.spots.prefix(3).enumerated()), id: \.element.id) { index, spot in
+                    MapPhotoPin(spot: spot)
+                        .position(
+                            x: size.width * photoPositions[index].x,
+                            y: size.height * photoPositions[index].y
+                        )
+                }
+            }
+        }
     }
 }
 

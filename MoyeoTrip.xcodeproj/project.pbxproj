@@ -14,6 +14,7 @@
 		D1A0A00530A0000100000001 /* KakaoSDKAuth in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02530A0000100000001 /* KakaoSDKAuth */; };
 		D1A0A00630A0000100000001 /* KakaoSDKUser in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02630A0000100000001 /* KakaoSDKUser */; };
 		D1A0A00730A0000100000001 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02730A0000100000001 /* FirebaseMessaging */; };
+		D1A0A00830A0000100000001 /* KakaoMapsSDK-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02830A0000100000001 /* KakaoMapsSDK-SPM */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,6 +84,7 @@
 				D1A0A00430A0000100000001 /* KakaoSDKCommon in Frameworks */,
 				D1A0A00530A0000100000001 /* KakaoSDKAuth in Frameworks */,
 				D1A0A00630A0000100000001 /* KakaoSDKUser in Frameworks */,
+				D1A0A00830A0000100000001 /* KakaoMapsSDK-SPM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,6 +154,7 @@
 				D1A0A02430A0000100000001 /* KakaoSDKCommon */,
 				D1A0A02530A0000100000001 /* KakaoSDKAuth */,
 				D1A0A02630A0000100000001 /* KakaoSDKUser */,
+				D1A0A02830A0000100000001 /* KakaoMapsSDK-SPM */,
 			);
 			productName = MoyeoTrip;
 			productReference = AF88FD1B2FC9D867000CF969 /* MoyeoTrip.app */;
@@ -242,6 +245,7 @@
 				D1A0A01030A0000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				D1A0A01130A0000100000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				D1A0A01230A0000100000001 /* XCRemoteSwiftPackageReference "kakao-ios-sdk" */,
+				D1A0A01330A0000100000001 /* XCRemoteSwiftPackageReference "KakaoMapsSDK-SPM" */,
 				AF8CDA973032B1A700CD3FA7 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -727,6 +731,14 @@
 				version = 2.28.0;
 			};
 		};
+		D1A0A01330A0000100000001 /* XCRemoteSwiftPackageReference "KakaoMapsSDK-SPM" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kakao-mapsSDK/KakaoMapsSDK-SPM.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.12.19;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -769,6 +781,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1A0A01030A0000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		D1A0A02830A0000100000001 /* KakaoMapsSDK-SPM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1A0A01330A0000100000001 /* XCRemoteSwiftPackageReference "KakaoMapsSDK-SPM" */;
+			productName = "KakaoMapsSDK-SPM";
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
