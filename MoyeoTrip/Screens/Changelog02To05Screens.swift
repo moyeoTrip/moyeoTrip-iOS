@@ -6,6 +6,8 @@ struct ChangelogPerson: Identifiable {
   let name: String
   let detail: String
   let role: String
+  /// 서버 동행자의 프로필 이미지 — 서버 모임일 때만 채워진다
+  var profileImageURL: URL?
 
   var id: String { name }
 }
@@ -37,6 +39,8 @@ struct ChatSideMenuView: View {
   @State private var showsLeaveConfirmation: Bool
   /// changeLog14 — 멤버 ⋯ 가 여는 멤버 시트(20-1a 액션 → 20-1b 사유 입력)의 요청
   @State private var memberSheet: MemberSheetRequest?
+  /// 참여 중인 서버 방의 읽기 응답 — 403이거나 미로그인이면 nil로 남고 목데이터가 유지된다 (20-1)
+  @State private var serverContent: ServerChatRoomContent?
 
   init(
     thread: ChatThread,
@@ -61,13 +65,25 @@ struct ChatSideMenuView: View {
   var body: some View {
     ChatMenuBody(
       thread: thread,
+      serverContent: serverContent,
       onOpenRoute: { route = $0 },
       onLeave: { showsLeaveConfirmation = true },
       onMemberMore: { memberSheet = MemberSheetRequest(member: $0, initialStage: .actions) }
     )
+    .task {
+      guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, serverContent == nil else { return }
+      serverContent = await ChatRoomContentAPIClient.shared.content(roomID: roomID)
+    }
     .navigationTitle("모임 정보")
     .navigationBarTitleDisplayMode(.inline)
-    .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
+    .navigationDestination(item: $route) { route in
+      // 서버 모임은 목데이터 스레드로 되돌아가지 않도록 이 스레드를 그대로 넘긴다
+      if thread.isServerBacked, case .noticeHistory = route {
+        NoticeHistoryView(thread: thread)
+      } else {
+        SupportDestinationView(route: route)
+      }
+    }
     // changeLog14 — 경고 팝업은 화면기획의 좌측 정렬 카드다. 시스템 알림창은 그 모양이 아니라
     // 31 모임 종료 경고와 같은 팝업(LeaveConfirmationDialog)을 이전 화면 위에 얹는다.
     .overlay {
@@ -99,6 +115,8 @@ struct ChatSideMenuView: View {
 /// 빈 딤이 아니라 실제 이 화면과 같은 코드를 쓰도록 화면 껍데기와 분리했다.
 struct ChatMenuBody: View {
   let thread: ChatThread
+  /// 참여 중인 서버 방의 읽기 응답 — nil이면 목데이터를 유지한다
+  var serverContent: ServerChatRoomContent?
   var onOpenRoute: (SupportRoute) -> Void = { _ in }
   var onLeave: () -> Void = {}
   var onMemberMore: (ChangelogPerson) -> Void = { _ in }
@@ -112,29 +130,50 @@ struct ChatMenuBody: View {
     ChangelogPerson(mascot: "🦝", name: "호기심 많은 너구리 9027", detail: "매너 4.8 · 여행 8회", role: "")
   ]
 
-  private var members: [ChangelogPerson] { Self.defaultMembers }
+  /// 서버 동행자 목록 — 서버는 매너 점수를 주지 않아 완료 여행 횟수만 보여준다
+  private var members: [ChangelogPerson] {
+    guard let serverContent else { return Self.defaultMembers }
+    return serverContent.memberList.members.map { member in
+      ChangelogPerson(
+        mascot: "",
+        name: member.nickname,
+        detail: "여행 \(member.completedTripCount)회",
+        role: member.host ? "호스트" : (member.me ? "나" : ""),
+        profileImageURL: member.profileImageURL
+      )
+    }
+  }
+
+  private var displayThread: ChatThread {
+    guard let serverContent else { return thread }
+    return ServerTripMapper.chatThread(thread, applying: serverContent)
+  }
 
   var body: some View {
     ScrollView {
       VStack(spacing: 0) {
         VStack(alignment: .leading, spacing: 6) {
-          Text(thread.tripTitle)
+          Text(displayThread.tripTitle)
             .font(MoyeoTypography.cardTitle)
             .foregroundStyle(MoyeoTheme.ink)
-          Label(thread.courseDisplayName, systemImage: "map.fill")
-            .font(.caption.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.text700)
-          Text("5/25(토) 당일치기 · 08:00 – 18:00")
-          Text("07:50 청송 시외버스터미널 정문 앞 집합")
+          if !displayThread.courseDisplayName.isEmpty {
+            Label(displayThread.courseDisplayName, systemImage: "map.fill")
+              .font(.caption.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.text700)
+          }
+          // 서버 모임은 서버가 준 일정·집합 정보만 보여준다
+          Text(serverContent == nil ? "5/25(토) 당일치기 · 08:00 – 18:00" : displayThread.scheduleSummary)
+          if serverContent == nil {
+            Text("07:50 청송 시외버스터미널 정문 앞 집합")
+          } else if !displayThread.meetupSummary.isEmpty {
+            Text(displayThread.meetupSummary)
+          }
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-              sideConditionPill(thread.priceDisplayText, icon: "wonsign.circle")
-              sideConditionPill(
-                thread.recruitmentDeadline.isEmpty ? "마감 확인" : "마감 \(thread.recruitmentDeadline)",
-                icon: "clock"
-              )
-              sideConditionPill(thread.ageRangeDisplayText, icon: "person.2")
-              sideConditionPill(thread.genderDisplayText, icon: "person.crop.circle")
+              sideConditionPill(displayThread.priceDisplayText, icon: "wonsign.circle")
+              sideConditionPill(deadlinePillText, icon: "clock")
+              sideConditionPill(displayThread.ageRangeDisplayText, icon: "person.2")
+              sideConditionPill(displayThread.genderDisplayText, icon: "person.crop.circle")
             }
           }
           HStack(spacing: 8) {
@@ -155,13 +194,25 @@ struct ChatMenuBody: View {
             Text("동행자 \(members.count)")
               .font(MoyeoTypography.cardTitle)
             Spacer()
-            Text("최대 5명 · 대기 1명")
+            Text(memberCapacityText)
               .font(MoyeoTypography.cardMeta)
               .foregroundStyle(MoyeoTheme.muted)
           }
           ForEach(members) { member in
             HStack(spacing: 11) {
-              MascotAvatar(mascot: member.mascot, size: 38, background: MoyeoTheme.leaf)
+              if let profileImageURL = member.profileImageURL {
+                CachedRemoteImage(url: profileImageURL) { image in
+                  image
+                    .resizable()
+                    .scaledToFill()
+                } placeholder: {
+                  MoyeoTheme.leaf
+                }
+                .frame(width: 38, height: 38)
+                .clipShape(Circle())
+              } else {
+                MascotAvatar(mascot: member.mascot, size: 38, background: MoyeoTheme.leaf)
+              }
               VStack(alignment: .leading, spacing: 2) {
                 Text(member.name).font(.subheadline.weight(.bold))
                 Text(member.detail)
@@ -203,10 +254,10 @@ struct ChatMenuBody: View {
         .padding(18)
 
         sectionDivider
-        menuButton("공지", subtitle: "고정 2개 · 전체 4개", icon: "note.text") {
+        menuButton("공지", subtitle: noticeSubtitle, icon: "note.text") {
           onOpenRoute(.noticeHistory(thread.id))
         }
-        menuButton("공유된 항목", subtitle: "사진 12 · 장소 4 · 투표 2", icon: "photo.on.rectangle") {
+        menuButton("공유된 항목", subtitle: sharedItemsSubtitle, icon: "photo.on.rectangle") {
           onOpenRoute(.specialMessages)
         }
         HStack(spacing: 12) {
@@ -244,15 +295,46 @@ struct ChatMenuBody: View {
     Rectangle().fill(MoyeoTheme.subtleBackground).frame(height: 8)
   }
 
+  /// 서버 모임은 마감 정보를 못 받았으면 칩을 감춘다
+  private var deadlinePillText: String {
+    if !displayThread.recruitmentDeadline.isEmpty {
+      return "마감 \(displayThread.recruitmentDeadline)"
+    }
+    return serverContent == nil ? "마감 확인" : ""
+  }
+
+  private var memberCapacityText: String {
+    guard let memberList = serverContent?.memberList else { return "최대 5명 · 대기 1명" }
+    return "최대 \(memberList.maxParticipants)명 · 대기 \(memberList.waitlistCount)명"
+  }
+
+  private var noticeSubtitle: String {
+    guard let history = serverContent?.noticeHistory else { return "고정 2개 · 전체 4개" }
+    return "고정 \(history.pinnedNotices.count)개 · 전체 \(history.allNotices.count)개"
+  }
+
+  /// 공유된 항목 — 서버 메시지 유형으로 센다
+  private var sharedItemsSubtitle: String {
+    guard let serverContent else { return "사진 12 · 장소 4 · 투표 2" }
+    let messages = serverContent.messages
+    let photos = messages.filter { $0.type == "IMAGE" }.count
+    let places = messages.filter { $0.type == "LOCATION" || $0.type == "TOURISM_CONTENT" }.count
+    let polls = messages.filter { $0.type == "POLL" }.count
+    return "사진 \(photos) · 장소 \(places) · 투표 \(polls)"
+  }
+
+  @ViewBuilder
   private func sideConditionPill(_ title: String, icon: String) -> some View {
-    Label(title, systemImage: icon)
-      .font(.caption2.weight(.heavy))
-      .foregroundStyle(MoyeoTheme.text700)
-      .padding(.horizontal, 9)
-      .frame(height: 26)
-      .background(MoyeoTheme.subtleBackground)
-      .overlay(Capsule().stroke(MoyeoTheme.softLine))
-      .clipShape(Capsule())
+    if !title.isEmpty {
+      Label(title, systemImage: icon)
+        .font(.caption2.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.text700)
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(MoyeoTheme.subtleBackground)
+        .overlay(Capsule().stroke(MoyeoTheme.softLine))
+        .clipShape(Capsule())
+    }
   }
 
   private func menuButton(
@@ -688,6 +770,11 @@ struct FriendsManagementView: View {
   @State private var segment: FriendManagementSegment = .mine
   @State private var rejected = Set<String>()
   @State private var accepted = Set<String>()
+  /// 실서버 친구 데이터 — 로그인 세션이 있고 친구 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  @State private var serverFriends: ServerFriendList?
+  @State private var serverReceived: ServerFriendRequestList?
+  @State private var serverSent: ServerFriendRequestList?
+  @State private var resolvedRequestIDs = Set<Int64>()
 
   private let mine = [
     ChangelogPerson(mascot: "🐻", name: "우직한 곰 7821", detail: "함께 여행 3회 · 어제 접속", role: ""),
@@ -738,9 +825,13 @@ struct FriendsManagementView: View {
               .frame(maxWidth: .infinity, alignment: .leading)
               .padding(.vertical, 10)
           }
-          ForEach(items) { item in
-            if !rejected.contains(item.name) {
-              friendRow(item)
+          if serverFriends != nil {
+            serverRows
+          } else {
+            ForEach(items) { item in
+              if !rejected.contains(item.name) {
+                friendRow(item)
+              }
             }
           }
           HStack(alignment: .top, spacing: 9) {
@@ -772,6 +863,9 @@ struct FriendsManagementView: View {
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle("친구 관리")
     .navigationBarTitleDisplayMode(.inline)
+    .task {
+      await loadServerFriends()
+    }
     .toolbar {
       Button {
       } label: {
@@ -806,11 +900,144 @@ struct FriendsManagementView: View {
   }
 
   private func count(for segment: FriendManagementSegment) -> Int {
-    switch segment {
-    case .mine: mine.count
-    case .received: received.count
-    case .sent: sent.count
+    if serverFriends != nil {
+      switch segment {
+      case .mine: return serverFriends?.totalCount ?? 0
+      case .received: return serverReceived?.requests.count ?? 0
+      case .sent: return serverSent?.requests.count ?? 0
+      }
     }
+    switch segment {
+    case .mine: return mine.count
+    case .received: return received.count
+    case .sent: return sent.count
+    }
+  }
+
+  // MARK: - 실서버 친구 관리
+
+  private func loadServerFriends() async {
+    guard MoyeoServerSync.isEnabled, serverFriends == nil else { return }
+    guard let friends = try? await SocialAPIClient.shared.friends() else { return }
+    serverReceived = try? await SocialAPIClient.shared.receivedFriendRequests()
+    serverSent = try? await SocialAPIClient.shared.sentFriendRequests()
+    serverFriends = friends
+  }
+
+  @ViewBuilder
+  private var serverRows: some View {
+    switch segment {
+    case .mine:
+      if let friends = serverFriends?.friends, !friends.isEmpty {
+        ForEach(friends) { friend in
+          ServerFriendRow(
+            user: friend.user,
+            detail: friend.lastActive.map { "\($0) 접속" } ?? ""
+          ) {
+            EmptyView()
+          }
+        }
+      } else {
+        serverEmptyRow("아직 친구가 없어요")
+      }
+    case .received:
+      let requests = (serverReceived?.requests ?? []).filter { !resolvedRequestIDs.contains($0.requestId) }
+      if requests.isEmpty {
+        serverEmptyRow("받은 친구 신청이 없어요")
+      } else {
+        ForEach(requests) { request in
+          ServerFriendRow(user: request.user, detail: requestedAtText(request.requestedAt)) {
+            HStack(spacing: 8) {
+              Button("거절") {
+                resolveRequest(request.requestId, accept: false)
+              }
+              .buttonStyle(.bordered).controlSize(.small)
+              Button("수락") {
+                resolveRequest(request.requestId, accept: true)
+              }
+              .buttonStyle(.borderedProminent).controlSize(.small).tint(MoyeoTheme.forest)
+            }
+          }
+        }
+      }
+    case .sent:
+      let requests = (serverSent?.requests ?? []).filter { !resolvedRequestIDs.contains($0.requestId) }
+      if requests.isEmpty {
+        serverEmptyRow("보낸 친구 신청이 없어요")
+      } else {
+        ForEach(requests) { request in
+          ServerFriendRow(user: request.user, detail: requestedAtText(request.requestedAt)) {
+            Text("요청 중").font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted)
+              .padding(.horizontal, 10).frame(height: 30).background(MoyeoTheme.subtleBackground)
+              .clipShape(Capsule())
+          }
+        }
+      }
+    }
+  }
+
+  private func resolveRequest(_ requestID: Int64, accept: Bool) {
+    Task {
+      do {
+        if accept {
+          try await SocialAPIClient.shared.acceptFriendRequest(requestID: requestID)
+        } else {
+          try await SocialAPIClient.shared.rejectFriendRequest(requestID: requestID)
+        }
+        resolvedRequestIDs.insert(requestID)
+        if accept, let friends = try? await SocialAPIClient.shared.friends() {
+          serverFriends = friends
+        }
+      } catch {
+        // 실패 시 목록을 유지한다 — 다음 진입에서 서버 상태로 다시 맞춰진다
+      }
+    }
+  }
+
+  /// "2026-09-01T12:00:00" → "2026.09.01 신청"
+  private func requestedAtText(_ requestedAt: String) -> String {
+    guard let datePart = requestedAt.split(separator: "T").first else { return requestedAt }
+    return "\(datePart.replacingOccurrences(of: "-", with: ".")) 신청"
+  }
+
+  private func serverEmptyRow(_ message: String) -> some View {
+    Text(message)
+      .font(.caption)
+      .foregroundStyle(MoyeoTheme.muted)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.vertical, 18)
+  }
+}
+
+/// 실서버 친구/신청 한 행 — 서버가 준 값(닉네임·프로필 이미지·소개)만 그린다
+private struct ServerFriendRow<Trailing: View>: View {
+  let user: ServerFriendUser
+  let detail: String
+  @ViewBuilder var trailing: () -> Trailing
+
+  var body: some View {
+    HStack(spacing: 12) {
+      CachedRemoteImage(url: user.profileImageURL) { image in
+        image
+          .resizable()
+          .scaledToFill()
+      } placeholder: {
+        MoyeoTheme.leaf
+      }
+      .frame(width: 44, height: 44)
+      .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(user.nickname).font(.subheadline.weight(.bold))
+        if !detail.isEmpty {
+          Text(detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+        } else if let introduction = user.introduction, !introduction.isEmpty {
+          Text(introduction).font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
+        }
+      }
+      Spacer()
+      trailing()
+    }
+    .frame(minHeight: 68)
   }
 }
 
@@ -1009,31 +1236,49 @@ struct BlockedUsersView: View {
     ChangelogPerson(
       mascot: "🕊️", name: "청아한 두루미 2024", detail: "2026.06.02 차단 · 프로필에서 차단", role: "")
   ]
+  /// 실서버 차단 목록 — 로그인 세션이 있고 차단 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  @State private var serverBlocked: [ServerBlockedUser]?
 
   var body: some View {
     ScrollView {
       VStack(spacing: 10) {
         infoCard("차단하면 그 사람이 만들었거나 참여한 모집이 홈·탐색·코스 상세에서 모두 숨겨져요. 상대방에게는 알려지지 않아요.")
-        ForEach(blocked) { user in
-          HStack(spacing: 12) {
-            MascotAvatar(mascot: user.mascot, size: 42, background: MoyeoTheme.subtleBackground)
-            VStack(alignment: .leading, spacing: 3) {
-              Text(user.name).font(.subheadline.weight(.bold))
-              Text(user.detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+        if let serverBlocked {
+          // 실서버 차단 목록 — 서버가 준 사용자만 그린다
+          if serverBlocked.isEmpty {
+            Text("차단한 사용자가 없어요.")
+              .font(.caption)
+              .foregroundStyle(MoyeoTheme.muted)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.vertical, 18)
+              .accessibilityIdentifier("blockedUsers.server.empty")
+          } else {
+            ForEach(serverBlocked) { user in
+              serverBlockedRow(user)
             }
-            Spacer()
-            Button {
-              blocked.removeAll { $0.name == user.name }
-            } label: {
-              Text("차단 해제")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-                .padding(.horizontal, 12)
-                .frame(height: 34)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
-            }
-            .buttonStyle(.plain)
-          }.frame(minHeight: 64)
+          }
+        } else {
+          ForEach(blocked) { user in
+            HStack(spacing: 12) {
+              MascotAvatar(mascot: user.mascot, size: 42, background: MoyeoTheme.subtleBackground)
+              VStack(alignment: .leading, spacing: 3) {
+                Text(user.name).font(.subheadline.weight(.bold))
+                Text(user.detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+              }
+              Spacer()
+              Button {
+                blocked.removeAll { $0.name == user.name }
+              } label: {
+                Text("차단 해제")
+                  .font(.caption.weight(.heavy))
+                  .foregroundStyle(MoyeoTheme.ink)
+                  .padding(.horizontal, 12)
+                  .frame(height: 34)
+                  .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
+              }
+              .buttonStyle(.plain)
+            }.frame(minHeight: 64)
+          }
         }
         Text("차단을 해제하면 서로의 모집·피드를 다시 볼 수 있어요. 해제 전에 한 번 더 확인해요.")
           .font(.caption).foregroundStyle(MoyeoTheme.text400).frame(
@@ -1043,7 +1288,51 @@ struct BlockedUsersView: View {
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle("차단한 사용자")
     .navigationBarTitleDisplayMode(.inline)
+    .task {
+      guard MoyeoServerSync.isEnabled, serverBlocked == nil else { return }
+      serverBlocked = try? await SocialAPIClient.shared.blockedUsers()
+    }
     .accessibilityIdentifier("screen.blockedUsers")
+  }
+
+  private func serverBlockedRow(_ user: ServerBlockedUser) -> some View {
+    HStack(spacing: 12) {
+      CachedRemoteImage(url: user.profileImageURL) { image in
+        image
+          .resizable()
+          .scaledToFill()
+      } placeholder: {
+        MoyeoTheme.subtleBackground
+      }
+      .frame(width: 42, height: 42)
+      .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(user.nickname).font(.subheadline.weight(.bold))
+        Text(blockedAtText(user.blockedAt)).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+      }
+      Spacer()
+      Button {
+        Task {
+          try? await SocialAPIClient.shared.unblock(userID: user.userId)
+          serverBlocked?.removeAll { $0.userId == user.userId }
+        }
+      } label: {
+        Text("차단 해제")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .padding(.horizontal, 12)
+          .frame(height: 34)
+          .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("blockedUsers.server.unblock.\(user.userId)")
+    }.frame(minHeight: 64)
+  }
+
+  /// "2026-09-01T12:00:00" → "2026.09.01 차단"
+  private func blockedAtText(_ blockedAt: String) -> String {
+    guard let datePart = blockedAt.split(separator: "T").first else { return blockedAt }
+    return "\(datePart.replacingOccurrences(of: "-", with: ".")) 차단"
   }
 }
 

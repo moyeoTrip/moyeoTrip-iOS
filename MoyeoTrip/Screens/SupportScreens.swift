@@ -45,6 +45,10 @@ enum SupportRoute: Hashable, Identifiable {
   case feedComments(String)
   case legalDocument(LegalDocumentKind)
   case signupLegalDocument(LegalDocumentKind)
+  /// changeLog17 — 29-4 오픈소스 라이선스 목록
+  case ossLicenses
+  /// changeLog17 — 29-4a 라이선스 전문. 값은 `oss-licenses-ios.json` 의 `name` 이다.
+  case ossLicenseDetail(String)
 
   var id: String {
     switch self {
@@ -110,6 +114,8 @@ enum SupportRoute: Hashable, Identifiable {
     case .feedComments(let postID): return "feedComments.\(postID)"
     case .legalDocument(let document): return "legalDocument.\(document.rawValue)"
     case .signupLegalDocument(let document): return "signupLegalDocument.\(document.rawValue)"
+    case .ossLicenses: return "ossLicenses"
+    case .ossLicenseDetail(let name): return "ossLicenseDetail.\(name)"
     }
   }
 }
@@ -254,6 +260,15 @@ struct SupportDestinationView: View {
       LegalDocumentDetailView(kind: document, entry: .settings)
     case .signupLegalDocument(let document):
       LegalDocumentDetailView(kind: document, entry: .signup)
+    case .ossLicenses:
+      OSSLicensesView()
+    case .ossLicenseDetail(let name):
+      // 캡처 기본값은 목록 첫 항목이다. 항목이 없으면 목록 화면으로 떨어진다.
+      if let item = OSSLicenseCatalog.item(named: name) ?? OSSLicenseCatalog.items.first {
+        OSSLicenseDetailView(item: item)
+      } else {
+        OSSLicensesView()
+      }
     }
   }
 
@@ -273,86 +288,46 @@ private struct NotificationCenterView: View {
   @State private var readAll = false
   @State private var showsRemovalReason = false
   @State private var showsFriends = false
+  /// 실서버 알림 — 로그인 세션이 있고 목록 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  @State private var serverNotifications: [ServerNotification]?
+  @State private var serverUnreadCount = 0
+  @State private var serverReadIDs = Set<Int64>()
+  @State private var serverKickHistory: ServerKickHistory?
 
-  // changeLog14 — 알림 목데이터는 13 기획 목록이 모든 플랫폼의 기준이다.
-  // 오늘 5건 + 어제 3건, 안읽음 4. 이 목록에 없는 행을 추가로 두지 않는다.
-  private let items = [
-    SupportNotification(
-      title: "주왕산 & 주산지 여행이 확정됐어요 🎉",
-      time: "방금 전",
-      icon: "checkmark.seal.fill",
-      target: .trip("trip-cheongsong-juwangsan"),
-      isUnread: true
-    ),
-    SupportNotification(
-      title: "경주 단풍·야경 모임이 만들어졌어요 ✨",
-      time: "10분 전",
-      icon: "person.2.fill",
-      target: .trip("trip-gyeongju-night"),
-      isUnread: true
-    ),
-    SupportNotification(
-      title: "우직한 곰 7821님이 **메시지**를 보냈어요",
-      time: "1시간 전",
-      icon: "bubble.left.fill",
-      target: .unwired,
-      isUnread: true,
-      tint: MoyeoTheme.coral,
-      bubble: MoyeoTheme.coral.opacity(0.14)
-    ),
-    SupportNotification(
-      title: "여행 잘 마치셨죠? 함께 걸은 친구에게 **한 줄** 남겨볼까요?",
-      time: "2시간 전",
-      icon: "doc.text.fill",
-      target: .unwired
-    ),
-    SupportNotification(
-      title: "마감 **D-1** · 현재 4/8명이에요",
-      time: "3시간 전",
-      icon: "clock.fill",
-      target: .trip("trip-cheongsong-juwangsan"),
-      tint: MoyeoTheme.sunrise,
-      bubble: MoyeoTheme.sunrise.opacity(0.16)
-    ),
-    SupportNotification(
-      title: "엉뚱한 토끼 1457님이 **친구 요청**을 보냈어요",
-      time: "어제 오후 4시",
-      icon: "person.crop.circle.badge.plus",
-      target: .friends,
-      group: "어제",
-      isUnread: true,
-      tint: MoyeoTheme.river,
-      bubble: MoyeoTheme.river.opacity(0.13),
-      showsFriendActions: true
-    ),
-    // changeLog14 — 강퇴 통보는 알림 센터의 한 행이다. 안읽음 수(4)는 바꾸지 않는다.
-    SupportNotification(
-      title: "**감포 바다 일출 모임**에서 내보내졌어요 · 사유 확인",
-      time: "어제 오후 6시",
-      icon: "exclamationmark.triangle.fill",
-      target: .removalReason,
-      group: "어제",
-      tint: MoyeoTheme.coral,
-      bubble: MoyeoTheme.coral.opacity(0.14)
-    ),
-    SupportNotification(
-      title: "**3명**이 내 피드에 좋아요를 눌렀어요",
-      time: "어제 오전 11시",
-      icon: "heart.fill",
-      target: .post("feed-01"),
-      group: "어제",
-      tint: MoyeoTheme.blossom,
-      bubble: MoyeoTheme.blossom.opacity(0.16)
-    )
-  ]
+  private let items = supportNotificationMockItems
 
   private var unreadCount: Int {
-    items.filter { $0.isUnread && !readAll }.count
+    if serverNotifications != nil {
+      return serverUnreadCount
+    }
+    return items.filter { $0.isUnread && !readAll }.count
   }
 
   private var visibleItems: [SupportNotification] {
     guard showsUnreadOnly else { return items }
     return items.filter { $0.isUnread && !readAll }
+  }
+
+  private func isServerUnread(_ notification: ServerNotification) -> Bool {
+    !notification.read && !serverReadIDs.contains(notification.notificationId) && !readAll
+  }
+
+  private var visibleServerItems: [ServerNotification] {
+    guard let serverNotifications else { return [] }
+    guard showsUnreadOnly else { return serverNotifications }
+    return serverNotifications.filter(isServerUnread)
+  }
+
+  /// 서버 알림을 화면기획 13처럼 오늘/어제/이전으로 묶는다
+  private var groupedServerItems: [(group: String, items: [ServerNotification])] {
+    var order: [String] = []
+    var buckets: [String: [ServerNotification]] = [:]
+    for item in visibleServerItems {
+      let group = ServerNotificationPresentation.groupTitle(for: item.createdAt)
+      if buckets[group] == nil { order.append(group) }
+      buckets[group, default: []].append(item)
+    }
+    return order.map { ($0, buckets[$0] ?? []) }
   }
 
   private var groupedItems: [(group: String, items: [SupportNotification])] {
@@ -372,7 +347,7 @@ private struct NotificationCenterView: View {
       title: "알림",
       spacing: 0,
       trailingTitle: "모두 읽음",
-      trailingAction: { readAll = true },
+      trailingAction: { markAllRead() },
       content: {
       // 화면기획·웹과 같은 전체 / 안읽음 필터
       HStack(spacing: 8) {
@@ -381,6 +356,35 @@ private struct NotificationCenterView: View {
         Spacer(minLength: 0)
       }
 
+      if serverNotifications != nil {
+        // 실서버 알림 목록 — 서버가 준 알림만 그린다
+        if visibleServerItems.isEmpty {
+          VStack(spacing: 6) {
+            Image(systemName: "bell")
+              .font(.title3.weight(.bold))
+              .foregroundStyle(MoyeoTheme.forest)
+            Text(showsUnreadOnly ? "안 읽은 알림이 없어요" : "아직 알림이 없어요")
+              .font(.subheadline.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.ink)
+          }
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 44)
+          .accessibilityIdentifier("notifications.server.empty")
+        } else {
+          ForEach(groupedServerItems, id: \.group) { section in
+            Text(section.group)
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(MoyeoTheme.muted)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.top, 8)
+              .padding(.bottom, 1)
+
+            ForEach(section.items) { item in
+              serverNotificationRow(item)
+            }
+          }
+        }
+      } else {
       ForEach(groupedItems, id: \.group) { section in
         Text(section.group)
           .font(.caption.weight(.semibold))
@@ -424,7 +428,14 @@ private struct NotificationCenterView: View {
           }
         }
       }
+      }
     })
+    .task {
+      await loadServerNotifications()
+    }
+    .navigationDestination(item: $serverKickHistory) { history in
+      RemovalReasonView(serverHistory: history)
+    }
     .navigationDestination(item: $selectedTrip) { trip in
       TripDetailView(
         trip: trip,
@@ -485,6 +496,55 @@ private struct NotificationCenterView: View {
       }
       .buttonStyle(.plain)
       .accessibilityIdentifier("notifications.friend.accept")
+    }
+  }
+
+  // MARK: - 실서버 알림
+
+  private func loadServerNotifications() async {
+    guard MoyeoServerSync.isEnabled, serverNotifications == nil else { return }
+    guard let page = try? await NotificationAPIClient.shared.notifications(size: 50) else { return }
+    serverNotifications = page.notifications
+    serverUnreadCount = Int(page.unreadCount)
+  }
+
+  private func markAllRead() {
+    readAll = true
+    guard serverNotifications != nil else { return }
+    serverUnreadCount = 0
+    Task {
+      try? await NotificationAPIClient.shared.markAllRead()
+    }
+  }
+
+  private func serverNotificationRow(_ item: ServerNotification) -> some View {
+    ServerNotificationRow(item: item, isUnread: isServerUnread(item)) {
+      openServerNotification(item)
+    }
+  }
+
+  private func openServerNotification(_ item: ServerNotification) {
+    if isServerUnread(item) {
+      serverReadIDs.insert(item.notificationId)
+      serverUnreadCount = max(serverUnreadCount - 1, 0)
+      Task {
+        try? await NotificationAPIClient.shared.markRead(notificationID: item.notificationId)
+      }
+    }
+
+    switch item.type {
+    case "CHAT_ROOM_KICKED":
+      Task {
+        serverKickHistory = try? await NotificationAPIClient.shared.kickHistory(
+          notificationID: item.notificationId
+        )
+      }
+    case "FRIEND_REQUEST", "FRIEND_ACCEPTED":
+      showsFriends = true
+    default:
+      if let roomID = item.chatRoomId {
+        selectedTrip = ServerTripMapper.placeholderTrip(roomID: roomID)
+      }
     }
   }
 
@@ -1066,6 +1126,251 @@ private struct SupportNotification: Identifiable {
   var showsFriendActions = false
 }
 
+/// 실서버 알림 한 행 — 서버가 내려준 내용·시각만 그린다
+private struct ServerNotificationRow: View {
+  let item: ServerNotification
+  let isUnread: Bool
+  let onOpen: () -> Void
+
+  var body: some View {
+    let style = ServerNotificationPresentation.style(for: item.type)
+
+    VStack(spacing: 0) {
+      Button(action: onOpen) {
+        HStack(alignment: .top, spacing: 11) {
+          SupportIconBubble(systemImage: style.icon, tint: style.tint, bubble: style.bubble)
+          VStack(alignment: .leading, spacing: 4) {
+            Text(item.content)
+              .font(isUnread ? .subheadline.weight(.heavy) : .subheadline)
+              .foregroundStyle(MoyeoTheme.ink)
+              .fixedSize(horizontal: false, vertical: true)
+            Text(ServerNotificationPresentation.timeText(for: item.createdAt))
+              .font(.caption.weight(.bold))
+              .foregroundStyle(MoyeoTheme.muted)
+            if item.type == "FRIEND_REQUEST" {
+              ServerFriendActionButtons(requestID: item.referenceId)
+                .padding(.top, 2)
+            }
+          }
+          Spacer()
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.text400)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("notifications.server.\(item.notificationId)")
+      Divider().overlay(MoyeoTheme.softLine)
+    }
+  }
+}
+
+/// 서버 친구 요청 알림의 거절/수락 (수락·거절 API 실호출)
+private struct ServerFriendActionButtons: View {
+  let requestID: Int64
+  @State private var resolution: String?
+
+  var body: some View {
+    HStack(spacing: 8) {
+      if let resolution {
+        Text(resolution)
+          .font(.footnote.weight(.bold))
+          .foregroundStyle(MoyeoTheme.muted)
+          .padding(.horizontal, 14)
+          .frame(height: 34)
+          .background(MoyeoTheme.subtleBackground)
+          .clipShape(Capsule())
+      } else {
+        Button {
+          Task {
+            try? await SocialAPIClient.shared.rejectFriendRequest(requestID: requestID)
+            resolution = "거절함"
+          }
+        } label: {
+          Text("거절")
+            .font(.footnote.weight(.bold))
+            .foregroundStyle(MoyeoTheme.ink)
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(MoyeoTheme.line, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        Button {
+          Task {
+            try? await SocialAPIClient.shared.acceptFriendRequest(requestID: requestID)
+            resolution = "수락함"
+          }
+        } label: {
+          Text("수락")
+            .font(.footnote.weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(MoyeoTheme.forest)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+      }
+    }
+  }
+}
+
+/// 실서버 알림의 유형별 아이콘·색과 시간 표기 (기획 13의 유형별 색 규칙을 따른다)
+enum ServerNotificationPresentation {
+  struct Style {
+    let icon: String
+    let tint: Color
+    let bubble: Color
+  }
+
+  static func style(for type: String) -> Style {
+    switch type {
+    case "CHAT_ROOM_CREATED":
+      return Style(icon: "person.2.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
+    case "CHAT_ROOM_KICKED":
+      return Style(
+        icon: "exclamationmark.triangle.fill",
+        tint: MoyeoTheme.coral,
+        bubble: MoyeoTheme.coral.opacity(0.14)
+      )
+    case "CHAT_MESSAGE_RECEIVED":
+      return Style(
+        icon: "bubble.left.fill", tint: MoyeoTheme.coral, bubble: MoyeoTheme.coral.opacity(0.14))
+    case "TRAVEL_COURSE_UPDATED":
+      return Style(icon: "arrow.triangle.2.circlepath", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
+    case "MEETING_INFO_UPDATED":
+      return Style(
+        icon: "mappin.and.ellipse", tint: MoyeoTheme.river, bubble: MoyeoTheme.river.opacity(0.13))
+    case "RECRUITMENT_DEADLINE":
+      return Style(
+        icon: "clock.fill", tint: MoyeoTheme.sunrise, bubble: MoyeoTheme.sunrise.opacity(0.16))
+    case "FRIEND_REQUEST":
+      return Style(
+        icon: "person.crop.circle.badge.plus",
+        tint: MoyeoTheme.river,
+        bubble: MoyeoTheme.river.opacity(0.13)
+      )
+    case "FRIEND_ACCEPTED":
+      return Style(
+        icon: "person.2.fill", tint: MoyeoTheme.river, bubble: MoyeoTheme.river.opacity(0.13))
+    case "FEED_LIKE":
+      return Style(
+        icon: "heart.fill", tint: MoyeoTheme.blossom, bubble: MoyeoTheme.blossom.opacity(0.16))
+    default:
+      return Style(icon: "bell.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
+    }
+  }
+
+  static func date(from createdAt: String) -> Date? {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    if let date = formatter.date(from: createdAt) { return date }
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+    return formatter.date(from: createdAt)
+  }
+
+  static func groupTitle(for createdAt: String) -> String {
+    guard let date = date(from: createdAt) else { return "이전" }
+    if Calendar.current.isDateInToday(date) { return "오늘" }
+    if Calendar.current.isDateInYesterday(date) { return "어제" }
+    return "이전"
+  }
+
+  static func timeText(for createdAt: String) -> String {
+    guard let date = date(from: createdAt) else { return createdAt }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "ko_KR")
+    if Calendar.current.isDateInToday(date) {
+      formatter.dateFormat = "a h:mm"
+    } else if Calendar.current.isDateInYesterday(date) {
+      formatter.dateFormat = "'어제' a h:mm"
+    } else {
+      formatter.dateFormat = "M월 d일 a h:mm"
+    }
+    return formatter.string(from: date)
+  }
+}
+
+// changeLog14 — 알림 목데이터는 13 기획 목록이 모든 플랫폼의 기준이다.
+// 오늘 5건 + 어제 3건, 안읽음 4. 이 목록에 없는 행을 추가로 두지 않는다.
+private let supportNotificationMockItems = [
+  SupportNotification(
+    title: "주왕산 & 주산지 여행이 확정됐어요 🎉",
+    time: "방금 전",
+    icon: "checkmark.seal.fill",
+    target: .trip("trip-cheongsong-juwangsan"),
+    isUnread: true
+  ),
+  SupportNotification(
+    title: "경주 단풍·야경 모임이 만들어졌어요 ✨",
+    time: "10분 전",
+    icon: "person.2.fill",
+    target: .trip("trip-gyeongju-night"),
+    isUnread: true
+  ),
+  SupportNotification(
+    title: "우직한 곰 7821님이 **메시지**를 보냈어요",
+    time: "1시간 전",
+    icon: "bubble.left.fill",
+    target: .unwired,
+    isUnread: true,
+    tint: MoyeoTheme.coral,
+    bubble: MoyeoTheme.coral.opacity(0.14)
+  ),
+  SupportNotification(
+    title: "여행 잘 마치셨죠? 함께 걸은 친구에게 **한 줄** 남겨볼까요?",
+    time: "2시간 전",
+    icon: "doc.text.fill",
+    target: .unwired
+  ),
+  SupportNotification(
+    title: "마감 **D-1** · 현재 4/8명이에요",
+    time: "3시간 전",
+    icon: "clock.fill",
+    target: .trip("trip-cheongsong-juwangsan"),
+    tint: MoyeoTheme.sunrise,
+    bubble: MoyeoTheme.sunrise.opacity(0.16)
+  ),
+  SupportNotification(
+    title: "엉뚱한 토끼 1457님이 **친구 요청**을 보냈어요",
+    time: "어제 오후 4시",
+    icon: "person.crop.circle.badge.plus",
+    target: .friends,
+    group: "어제",
+    isUnread: true,
+    tint: MoyeoTheme.river,
+    bubble: MoyeoTheme.river.opacity(0.13),
+    showsFriendActions: true
+  ),
+  // changeLog14 — 강퇴 통보는 알림 센터의 한 행이다. 안읽음 수(4)는 바꾸지 않는다.
+  SupportNotification(
+    title: "**감포 바다 일출 모임**에서 내보내졌어요 · 사유 확인",
+    time: "어제 오후 6시",
+    icon: "exclamationmark.triangle.fill",
+    target: .removalReason,
+    group: "어제",
+    tint: MoyeoTheme.coral,
+    bubble: MoyeoTheme.coral.opacity(0.14)
+  ),
+  SupportNotification(
+    title: "**3명**이 내 피드에 좋아요를 눌렀어요",
+    time: "어제 오전 11시",
+    icon: "heart.fill",
+    target: .post("feed-01"),
+    group: "어제",
+    tint: MoyeoTheme.blossom,
+    bubble: MoyeoTheme.blossom.opacity(0.16)
+  )
+]
+
 private enum SupportNotificationTarget {
   case trip(String)
   case post(String)
@@ -1081,7 +1386,32 @@ private enum SupportNotificationTarget {
 /// 채팅방은 이미 사라진 뒤라 채팅 쪽에는 어떤 안내도 두지 않고,
 /// 이의 제기(고객센터) 경로도 화면기획에 없으므로 하단 동작은 `확인` 하나다.
 private struct RemovalReasonView: View {
+  /// 실서버 강퇴 이력 — 알림 13-1에서 서버 알림으로 진입하면 채워진다
+  var serverHistory: ServerKickHistory?
   @Environment(\.dismiss) private var dismiss
+
+  private var titleText: String {
+    guard let serverHistory else { return "감포 바다 일출 모임에서\n내보내졌어요" }
+    return "\(serverHistory.roomTitle)에서\n내보내졌어요"
+  }
+
+  private var metaText: String {
+    guard let serverHistory else { return "2026.08.22 (토) 오후 6:02 · 호스트 결정" }
+    guard let date = ServerNotificationPresentation.date(from: serverHistory.kickedAt) else {
+      return serverHistory.kickedAt
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "ko_KR")
+    formatter.dateFormat = "yyyy.MM.dd (E) a h:mm"
+    return "\(formatter.string(from: date)) · 호스트 결정"
+  }
+
+  private var reasonText: String {
+    guard let serverHistory else {
+      return "“모임 컨셉과 맞지 않는 대화가 반복되어, 남은 멤버들을 위해 함께하기 어렵다고 판단했어요.”"
+    }
+    return "“\(serverHistory.reason)”"
+  }
 
   private let aftermath = [
     "이 모임에는 다시 신청할 수 없어요.",
@@ -1099,13 +1429,13 @@ private struct RemovalReasonView: View {
           .frame(width: 64, height: 64)
           .background(MoyeoTheme.coral.opacity(0.14))
           .clipShape(Circle())
-        Text("감포 바다 일출 모임에서\n내보내졌어요")
+        Text(titleText)
           .font(.title3.weight(.heavy))
           .foregroundStyle(MoyeoTheme.ink)
           .multilineTextAlignment(.center)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 18)
-        Text("2026.08.22 (토) 오후 6:02 · 호스트 결정")
+        Text(metaText)
           .font(.caption.weight(.semibold))
           .foregroundStyle(MoyeoTheme.muted)
           .padding(.top, 8)
@@ -1119,7 +1449,7 @@ private struct RemovalReasonView: View {
         Text("호스트가 남긴 사유")
           .font(.subheadline.weight(.heavy))
           .foregroundStyle(MoyeoTheme.ink)
-        Text("“모임 컨셉과 맞지 않는 대화가 반복되어, 남은 멤버들을 위해 함께하기 어렵다고 판단했어요.”")
+        Text(reasonText)
           .font(.subheadline)
           .foregroundStyle(MoyeoTheme.text700)
           .fixedSize(horizontal: false, vertical: true)

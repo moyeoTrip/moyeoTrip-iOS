@@ -1,0 +1,147 @@
+{
+  "_source": "docs/oss/oss-licenses.json (platforms.ios)",
+  "updatedAt": "2026-08-24",
+  "platform": "ios",
+  "items": [
+    {
+      "name": "Firebase iOS SDK",
+      "version": "12.16.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/firebase/firebase-ios-sdk"
+    },
+    {
+      "name": "Firebase App Check",
+      "version": "11.3.1",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/app-check"
+    },
+    {
+      "name": "Alamofire",
+      "version": "5.12.0",
+      "license": "MIT",
+      "licenseTextId": "MIT",
+      "url": "https://github.com/Alamofire/Alamofire"
+    },
+    {
+      "name": "GoogleSignIn-iOS",
+      "version": "9.2.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/GoogleSignIn-iOS"
+    },
+    {
+      "name": "AppAuth-iOS",
+      "version": "2.1.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/openid/AppAuth-iOS"
+    },
+    {
+      "name": "GTMAppAuth",
+      "version": "5.0.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/GTMAppAuth"
+    },
+    {
+      "name": "GTMSessionFetcher",
+      "version": "3.5.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/gtm-session-fetcher"
+    },
+    {
+      "name": "GoogleUtilities",
+      "version": "8.1.2",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/GoogleUtilities"
+    },
+    {
+      "name": "GoogleDataTransport",
+      "version": "10.1.1",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/GoogleDataTransport"
+    },
+    {
+      "name": "GoogleAppMeasurement",
+      "version": "12.16.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/GoogleAppMeasurement"
+    },
+    {
+      "name": "Google Ads On-Device Conversion SDK",
+      "version": "3.6.1",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/googleads/google-ads-on-device-conversion-ios-sdk"
+    },
+    {
+      "name": "Interop for Google SDKs",
+      "version": "101.0.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/interop-ios-for-google-sdks"
+    },
+    {
+      "name": "Abseil C++",
+      "version": "1.2024072200.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/abseil-cpp-binary"
+    },
+    {
+      "name": "gRPC",
+      "version": "1.69.1",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/grpc-binary"
+    },
+    {
+      "name": "Promises",
+      "version": "2.4.1",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/google/promises"
+    },
+    {
+      "name": "LevelDB",
+      "version": "1.22.5",
+      "license": "BSD-3-Clause",
+      "licenseTextId": "BSD-3-Clause",
+      "url": "https://github.com/firebase/leveldb"
+    },
+    {
+      "name": "nanopb",
+      "version": "2.30910.1",
+      "license": "Zlib",
+      "licenseTextId": "Zlib",
+      "url": "https://github.com/firebase/nanopb"
+    },
+    {
+      "name": "Kakao iOS SDK",
+      "version": "2.28.0",
+      "license": "Apache-2.0",
+      "licenseTextId": "Apache-2.0",
+      "url": "https://github.com/kakao/kakao-ios-sdk"
+    },
+    {
+      "name": "KakaoMapsSDK",
+      "version": "2.12.19",
+      "license": "카카오 지도 SDK 이용약관",
+      "url": "https://apis.map.kakao.com",
+      "note": "오픈소스 라이선스가 아닌 카카오 자체 배포 약관을 따릅니다. SDK 안에 별도의 오픈소스 고지가 포함되어 있습니다."
+    },
+    {
+      "name": "Sentry Cocoa",
+      "version": "9.26.0",
+      "license": "MIT",
+      "licenseTextId": "MIT",
+      "url": "https://github.com/getsentry/sentry-cocoa"
+    }
+  ]
+}

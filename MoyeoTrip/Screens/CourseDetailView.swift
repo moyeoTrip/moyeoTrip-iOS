@@ -13,6 +13,13 @@ struct CourseDetailView: View {
     @State private var supportRoute: SupportRoute?
     @State private var isFavorite = false
     @State private var feedbackMessage: String?
+    /// 실서버 코스 상세 — 목록에 없는 작성자·연결된 모임 수가 여기서 온다 (14)
+    @State private var serverDetail: TravelCourse?
+
+    /// 서버 상세를 받았으면 그것으로 그린다. 실패하면 들어올 때 받은 코스를 그대로 유지한다.
+    private var displayCourse: TravelCourse {
+        serverDetail ?? course
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +38,7 @@ struct CourseDetailView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 18) {
-                        CourseDetailHero(course: course)
+                        CourseDetailHero(course: displayCourse)
 
                         if let feedbackMessage {
                             CourseDetailFeedbackBanner(message: feedbackMessage)
@@ -39,7 +46,7 @@ struct CourseDetailView: View {
                         }
 
                         DetailPanel(title: "코스 미리보기") {
-                            CourseRouteMap(route: course.stops, mood: course.mood)
+                            CourseRouteMap(route: displayCourse.stops, mood: displayCourse.mood)
                         }
 
                         Color.clear
@@ -64,15 +71,18 @@ struct CourseDetailView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom) {
-            CourseDetailBottomBar(
-                onCreateRecruitment: {
-                    supportRoute = .createRecruitment(course.id)
-                },
-                onOpenRecruitments: {
-                    selectedTrip = tripContext.trips.first { $0.courseID == course.id }
-                        ?? MockData.trip(forCourseID: course.id)
-                }
-            )
+            // 서버 코스에는 연결된 목데이터 모집이 없다 — 모집 만들기/참여 바는 목데이터 코스에서만 보여준다
+            if !displayCourse.isServerBacked {
+                CourseDetailBottomBar(
+                    onCreateRecruitment: {
+                        supportRoute = .createRecruitment(course.id)
+                    },
+                    onOpenRecruitments: {
+                        selectedTrip = tripContext.trips.first { $0.courseID == course.id }
+                            ?? MockData.trip(forCourseID: course.id)
+                    }
+                )
+            }
         }
         .navigationDestination(item: $selectedTrip) { trip in
             TripDetailView(
@@ -88,6 +98,12 @@ struct CourseDetailView: View {
                 route: route,
                 tripContext: tripContext
             )
+        }
+        .task {
+            guard MoyeoServerSync.isEnabled, let courseID = course.serverCourseID, serverDetail == nil else { return }
+            if let detail = try? await TravelCourseAPIClient.shared.courseDetail(courseID: courseID) {
+                serverDetail = ServerCourseMapper.course(from: detail)
+            }
         }
         .accessibilityIdentifier("course.detail.\(course.id)")
     }
@@ -167,13 +183,28 @@ private struct CourseDetailHero: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Image(course.heroImageAssetName)
-                .resizable()
-                .scaledToFill()
-                .frame(height: 174)
-                .frame(maxWidth: .infinity)
-                .clipped()
-                .accessibilityLabel("\(course.title) 대표 이미지")
+            Group {
+                if let thumbnailURL = course.thumbnailURL {
+                    // 실서버 코스 — 서버가 준 대표 썸네일을 그린다
+                    CachedRemoteImage(url: thumbnailURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        MoyeoTheme.leaf
+                    }
+                } else if course.isServerBacked {
+                    MoyeoTheme.leaf
+                } else {
+                    Image(course.heroImageAssetName)
+                        .resizable()
+                        .scaledToFill()
+                }
+            }
+            .frame(height: 174)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .accessibilityLabel("\(course.title) 대표 이미지")
 
             VStack(alignment: .leading, spacing: 13) {
                 Text(course.title)
@@ -182,24 +213,44 @@ private struct CourseDetailHero: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 7) {
-                    Pill(text: course.tags.first ?? course.region, tint: course.mood.accent)
+                    if let firstTag = course.tags.first ?? (course.region.isEmpty ? nil : course.region) {
+                        Pill(text: firstTag, tint: course.mood.accent)
+                    }
                     Pill(text: course.status.rawValue, tint: course.mood.accent)
-                    Pill(text: "추천", tint: course.mood.accent)
+                    // "추천" 배지는 서버가 주는 정보가 아니다 — 목데이터 코스에서만 보여준다
+                    if !course.isServerBacked {
+                        Pill(text: "추천", tint: course.mood.accent)
+                    }
                 }
 
                 if let publishingInfo = course.publishingInfo {
                     CoursePublishingSource(info: publishingInfo)
                 }
 
-                Text(course.subtitle)
-                    .font(MoyeoTypography.font(size: 13, relativeTo: .subheadline))
-                    .foregroundStyle(MoyeoTheme.text700)
-                    .fixedSize(horizontal: false, vertical: true)
+                if !course.subtitle.isEmpty {
+                    Text(course.subtitle)
+                        .font(MoyeoTypography.font(size: 13, relativeTo: .subheadline))
+                        .foregroundStyle(MoyeoTheme.text700)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 HStack(spacing: 0) {
                     CourseMetricColumn(icon: "clock", label: "소요시간", value: course.duration)
                     CourseMetricColumn(icon: "map", label: "이동거리", value: course.distance)
-                    CourseMetricColumn(icon: "star.fill", label: "평점", value: "4.8")
+                    if course.isServerBacked {
+                        // 서버 코스 평점 — 평가가 없으면 서버가 null을 준다
+                        if let rating = course.serverAverageRating {
+                            CourseMetricColumn(
+                                icon: "star.fill",
+                                label: "평점",
+                                value: String(format: "%.1f", rating)
+                            )
+                        } else {
+                            CourseMetricColumn(icon: "star", label: "평점", value: "아직 없음")
+                        }
+                    } else {
+                        CourseMetricColumn(icon: "star.fill", label: "평점", value: "4.8")
+                    }
                 }
             }
             .padding(.horizontal, 20)

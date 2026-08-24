@@ -10,11 +10,38 @@ struct ApplicationSheet: View {
     let onDismiss: () -> Void
     var onSubmitted: () -> Void = {}
     let onSubmit: () -> Void
+    /// 실서버 모임이면 신청을 서버에 보낸다 — 목데이터 모임은 기존 동작 그대로
+    var serverSubmitHandler: ((String) async throws -> ServerJoinResult)?
     @State private var memo = ""
     @State private var didSubmit = false
+    @State private var isSubmitting = false
+    @State private var submitErrorMessage: String?
+    @State private var serverResult: ServerJoinResult?
 
     private var validationMessage: String? {
         ApplicationNotePolicy.validationMessage(for: memo)
+    }
+
+    private var completionTitle: String {
+        switch serverResult {
+        case .pendingApproval:
+            return "참가 신청을 보냈어요"
+        case .waitlisted:
+            return "대기열에 등록됐어요"
+        default:
+            return "모집에 참여됐어요"
+        }
+    }
+
+    private var completionSubtitle: String {
+        switch serverResult {
+        case .pendingApproval:
+            return "호스트가 승인하면 채팅방이 열려요. 결과는 알림으로 알려드려요."
+        case .waitlisted:
+            return "자리가 나면 순서대로 자동 합류돼요."
+        default:
+            return "이제 모임 채팅에서 인사하고 집결 정보를 확인해요."
+        }
     }
 
     var body: some View {
@@ -24,9 +51,7 @@ struct ApplicationSheet: View {
                 Color.black
                     .ignoresSafeArea()
 
-                Image(trip.heroImageAssetName)
-                    .resizable()
-                    .scaledToFill()
+                TripDetailHeroImage(trip: trip)
                     .frame(width: proxy.size.width, height: 330)
                     .clipped()
                     .overlay(.black.opacity(0.44))
@@ -91,10 +116,10 @@ struct ApplicationSheet: View {
                     .font(.system(size: 34, weight: .bold))
                     .foregroundStyle(MoyeoTheme.forest)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("모집에 참여됐어요")
+                    Text(completionTitle)
                         .font(.headline.weight(.heavy))
                         .foregroundStyle(MoyeoTheme.ink)
-                    Text("이제 모임 채팅에서 인사하고 집결 정보를 확인해요.")
+                    Text(completionSubtitle)
                         .font(.caption)
                         .foregroundStyle(MoyeoTheme.muted)
                 }
@@ -204,24 +229,51 @@ struct ApplicationSheet: View {
     }
 
     private var submitButton: some View {
-        Button {
-            guard validationMessage == nil else { return }
-            onSubmitted()
-            withAnimation(.snappy(duration: 0.24)) {
-                didSubmit = true
+        VStack(spacing: 8) {
+            if let submitErrorMessage {
+                Text(submitErrorMessage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.coral)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("application.sheet.error")
             }
-        } label: {
-            Text("신청하기")
-                .fontWeight(.bold)
-                .font(.subheadline)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(MoyeoTheme.forest)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            Button {
+                guard validationMessage == nil, !isSubmitting else { return }
+                if let serverSubmitHandler {
+                    submitErrorMessage = nil
+                    isSubmitting = true
+                    Task {
+                        do {
+                            serverResult = try await serverSubmitHandler(memo)
+                            onSubmitted()
+                            withAnimation(.snappy(duration: 0.24)) {
+                                didSubmit = true
+                            }
+                        } catch {
+                            submitErrorMessage = (error as? LocalizedError)?.errorDescription
+                                ?? "신청을 보내지 못했어요. 잠시 후 다시 시도해주세요."
+                        }
+                        isSubmitting = false
+                    }
+                } else {
+                    onSubmitted()
+                    withAnimation(.snappy(duration: 0.24)) {
+                        didSubmit = true
+                    }
+                }
+            } label: {
+                Text(isSubmitting ? "신청 보내는 중…" : "신청하기")
+                    .fontWeight(.bold)
+                    .font(.subheadline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(MoyeoTheme.forest.opacity(isSubmitting ? 0.6 : 1))
+                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("application.sheet.submit")
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("application.sheet.submit")
     }
 
     private var openChatButton: some View {
@@ -229,8 +281,10 @@ struct ApplicationSheet: View {
             onSubmit()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                Text("모임 채팅으로 이동")
+                if serverResult == nil || serverResult == .joined {
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                }
+                Text(serverResult == nil || serverResult == .joined ? "모임 채팅으로 이동" : "확인")
                     .fontWeight(.bold)
             }
             .font(.subheadline)

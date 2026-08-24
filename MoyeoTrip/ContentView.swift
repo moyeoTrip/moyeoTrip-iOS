@@ -104,6 +104,8 @@ enum MeetingsRoute: Hashable {
 // swiftlint:disable:next type_body_length
 struct ContentView: View {
     @StateObject private var connectivity: MoyeoConnectivity
+    /// 29 설정 › 화면 › 테마의 사용자 설정. 캡처의 강제 테마가 항상 이긴다.
+    @ObservedObject private var themeStore = MoyeoThemeStore.shared
     @State private var selectedTab: MoyeoTab
     @State private var isShowingSplash: Bool
     @State private var homePath = NavigationPath()
@@ -168,6 +170,15 @@ struct ContentView: View {
         self.keepsSplashVisibleForCapture = keepsSplashVisibleForCapture
     }
 
+    /// 캡처 모드는 사용자 설정을 무시하고 강제 테마만 쓴다. 그 밖에는 설정 › 화면 › 테마를 따른다
+    /// (`system` = nil → OS 설정을 그대로 따라가고 런타임 변경에도 즉시 반응한다).
+    private var effectiveColorScheme: ColorScheme? {
+        if UITestPlanningMockData.isActive {
+            return forcedColorScheme
+        }
+        return forcedColorScheme ?? themeStore.mode.colorScheme
+    }
+
     var body: some View {
         ZStack {
             connectionAwareContent
@@ -187,7 +198,7 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(MoyeoTheme.background.ignoresSafeArea())
-        .preferredColorScheme(forcedColorScheme)
+        .preferredColorScheme(effectiveColorScheme)
         .onAppear {
             // 긴 화면의 스크롤 페이지 캡처 (UITEST_SCROLL_PAGE=N)
             UITestScrollDriver.applyIfRequested()

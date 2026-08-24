@@ -3,6 +3,8 @@
 //  MoyeoTrip
 //
 
+// 실서버 공개 코스 레일이 더해져 길어졌다 — 기존 화면 파일들과 같은 예외를 둔다.
+// swiftlint:disable file_length
 import SwiftUI
 
 struct HomeView: View {
@@ -13,11 +15,16 @@ struct HomeView: View {
     var onAuthCompleted: () -> Void = {}
     var onOpenCourseList: () -> Void = {}
     @State private var supportRoute: SupportRoute?
+    /// 실서버 공개 코스 — 로그인 세션이 있고 코스 API가 성공했을 때만 채워진다 (nil = 목데이터)
+    @State private var serverCourses: [TravelCourse]?
     private let bottomScrollClearance: CGFloat = 86
     private let weatherCondition = MockData.currentWeatherCondition
 
     private var recommendedCourses: [TravelCourse] {
-        Array(
+        if let serverCourses {
+            return Array(serverCourses.prefix(6))
+        }
+        return Array(
             WeatherCoursePolicy
                 .recommendedCourses(for: weatherCondition, courses: MockData.courses)
                 .prefix(6)
@@ -70,19 +77,33 @@ struct HomeView: View {
                                     }
                                     .padding(.horizontal, 18)
 
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 14) {
-                                            ForEach(Array(recommendedCourses.enumerated()), id: \.element.id) { index, course in
-                                                NavigationLink(value: course) {
-                                                    CourseCard(course: course, showsStatus: index == 0)
+                                    if let serverCourses, serverCourses.isEmpty {
+                                        // 실서버에 공개된 코스가 아직 없다 — 서버 상태 그대로 보여준다
+                                        Text("아직 공개된 코스가 없어요.")
+                                            .font(MoyeoTypography.cardMeta)
+                                            .foregroundStyle(MoyeoTheme.muted)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 18)
+                                            .padding(.vertical, 12)
+                                            .accessibilityIdentifier("home.serverCourses.empty")
+                                    } else {
+                                        ScrollView(.horizontal, showsIndicators: false) {
+                                            HStack(spacing: 14) {
+                                                ForEach(Array(recommendedCourses.enumerated()), id: \.element.id) { index, course in
+                                                    NavigationLink(value: course) {
+                                                        CourseCard(
+                                                            course: course,
+                                                            showsStatus: index == 0 && !course.isServerBacked
+                                                        )
                                                         .frame(width: 136)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                    .accessibilityIdentifier("course.card.\(course.id)")
                                                 }
-                                                .buttonStyle(.plain)
-                                                .accessibilityIdentifier("course.card.\(course.id)")
                                             }
+                                            .padding(.horizontal, 18)
+                                            .padding(.bottom, 3)
                                         }
-                                        .padding(.horizontal, 18)
-                                        .padding(.bottom, 3)
                                     }
                                 }
                                 .id("home.middle")
@@ -184,6 +205,15 @@ struct HomeView: View {
                 feedPosts: $feedPosts,
                 onAuthCompleted: onAuthCompleted
             )
+        }
+        .task {
+            guard MoyeoServerSync.isEnabled, serverCourses == nil else { return }
+            // 인기 코스를 먼저, 비어 있으면 공개 코스 전체를 쓴다
+            if let popular = try? await TravelCourseAPIClient.shared.popularCourses(), !popular.isEmpty {
+                serverCourses = popular.map(ServerCourseMapper.course(from:))
+            } else if let publicCourses = try? await TravelCourseAPIClient.shared.publicCourses() {
+                serverCourses = publicCourses.map(ServerCourseMapper.course(from:))
+            }
         }
         .onAppear {
             isBottomNavigationSuppressed = supportRoute != nil
@@ -315,12 +345,29 @@ private struct CourseCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MoyeoPhotoTile(
-                mascot: course.mascot,
-                mood: course.mood,
-                height: 86,
-                cornerRadius: 0
-            )
+            Group {
+                if let thumbnailURL = course.thumbnailURL {
+                    CachedRemoteImage(url: thumbnailURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        MoyeoTheme.leaf
+                    }
+                    .frame(height: 86)
+                    .clipped()
+                } else if course.isServerBacked {
+                    MoyeoTheme.leaf
+                        .frame(height: 86)
+                } else {
+                    MoyeoPhotoTile(
+                        mascot: course.mascot,
+                        mood: course.mood,
+                        height: 86,
+                        cornerRadius: 0
+                    )
+                }
+            }
             .overlay(alignment: .topLeading) {
                 if showsStatus {
                     Pill(text: "진행중", tint: .white)
@@ -368,7 +415,8 @@ extension TravelCourse {
         case "course-ulleung-island":
             return "1/5명"
         default:
-            return region
+            // 서버 코스는 지역명을 내려주지 않는다 — 이동 거리를 대신 보여준다
+            return region.isEmpty ? distance : region
         }
     }
 }

@@ -5,6 +5,9 @@
 
 import SwiftUI
 
+// 캡처 라우트 카탈로그를 한 파일에 모아 두기 때문에 길이 제한을 끈다.
+// swiftlint:disable file_length
+
 // Direct-launch routing intentionally centralizes the visual-regression catalog.
 // swiftlint:disable type_body_length
 struct UITestInitialState {
@@ -414,6 +417,20 @@ struct UITestInitialState {
     if screen.matches("system-error", "systemerror", "error-500") {
       selectedTab = .home
       homePath.append(SupportRoute.systemError)
+      return true
+    }
+    // changeLog17 — 29-4 오픈소스 라이선스 목록 · 29-4a 라이선스 전문
+    if screen.matches("oss-licenses", "osslicenses") {
+      selectedTab = .home
+      homePath.append(SupportRoute.ossLicenses)
+      return true
+    }
+    if screen.matches("oss-license-detail", "osslicensedetail") {
+      selectedTab = .home
+      // 화면기획 29-4a의 기준 항목은 목록 첫 항목(Firebase iOS SDK)이다
+      homePath.append(
+        SupportRoute.ossLicenseDetail(
+          screen.identifier ?? OSSLicenseCatalog.items.first?.name ?? ""))
       return true
     }
     if screen.matches("feed-comments", "feedcomments") {

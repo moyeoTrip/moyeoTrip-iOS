@@ -237,7 +237,13 @@ final class KakaoMapHostController: UIViewController {
 
         for marker in content.markers {
             let styleID = "moyeo.marker.\(marker.order.map(String.init) ?? "meeting")"
-            let symbol = marker.order.map(MoyeoMapSymbols.orderBadge) ?? MoyeoMapSymbols.meetingPin
+            // 함수 참조(`map(MoyeoMapSymbols.orderBadge)`)로 넘기면 main-actor 격리가 벗겨져
+            // Swift 6 에서 경고가 난다. 호출을 이 컨텍스트(=@MainActor) 안에 두고 값만 고른다.
+            let symbol: UIImage = if let order = marker.order {
+                MoyeoMapSymbols.orderBadge(order)
+            } else {
+                MoyeoMapSymbols.meetingPin
+            }
             manager.addPoiStyle(
                 PoiStyle(
                     styleID: styleID,

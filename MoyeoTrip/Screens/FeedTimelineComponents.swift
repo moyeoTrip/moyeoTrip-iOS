@@ -32,12 +32,53 @@ struct FeedPhotoPreview: View {
     var height: CGFloat = 166
 
     var body: some View {
-        MoyeoPhotoTile(
-            mascot: post.photoMascot,
-            mood: post.mood,
-            height: height,
-            cornerRadius: 0
-        )
+        if let photoURL = post.photoURL {
+            // 실서버 피드 — 서버가 준 첫 번째 사진을 그린다
+            CachedRemoteImage(url: photoURL) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                MoyeoTheme.leaf
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .clipped()
+        } else if post.isServerBacked {
+            // 사진이 없는 서버 피드 — 빈 배경만 둔다
+            MoyeoTheme.leaf
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+        } else {
+            MoyeoPhotoTile(
+                mascot: post.photoMascot,
+                mood: post.mood,
+                height: height,
+                cornerRadius: 0
+            )
+        }
+    }
+}
+
+/// 피드 작성자 아바타 — 서버 피드는 프로필 이미지 URL, 목데이터 피드는 이모지 마스코트
+struct FeedAuthorAvatar: View {
+    let post: FeedPost
+    var size: CGFloat = 34
+
+    var body: some View {
+        if let avatarURL = post.authorAvatarURL {
+            CachedRemoteImage(url: avatarURL) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                MoyeoTheme.leaf
+            }
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+        } else {
+            MascotAvatar(mascot: post.authorAvatar, size: size, background: MoyeoTheme.leaf)
+        }
     }
 }
 

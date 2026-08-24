@@ -21,9 +21,19 @@ struct TripDetailView: View {
     @State private var didApplyInSession = false
     @State private var feedbackMessage: String?
     @State private var isReportPresented = false
+    // 실서버 연동 상태 — 서버 모임(serverRoomID)일 때만 채워진다
+    @State private var serverTrip: TripRecruitment?
+    @State private var serverCourse: TravelCourse?
+    @State private var serverCanApply: Bool?
+    @State private var serverJoinResult: ServerJoinResult?
 
     private var appliedState: Bool {
         isApplied || didApplyInSession
+    }
+
+    /// 서버 상세를 받아오면 서버 데이터로, 아니면 진입 시 받은 데이터로 그린다
+    private var displayTrip: TripRecruitment {
+        serverTrip ?? trip
     }
 
     var body: some View {
@@ -33,7 +43,7 @@ struct TripDetailView: View {
                     ScrollView {
                         VStack(spacing: 0) {
                             TripDetailHero(
-                                trip: trip,
+                                trip: displayTrip,
                                 onBack: {
                                     dismiss()
                                 },
@@ -46,7 +56,7 @@ struct TripDetailView: View {
                                     .padding(.horizontal, 16)
                                     .padding(.top, 12)
                             }
-                            TripDetailPanel(trip: trip)
+                            TripDetailPanel(trip: displayTrip, serverCourse: serverCourse)
                                 .padding(.top, feedbackMessage == nil ? -28 : 12)
                         }
                         .frame(width: proxy.size.width)
@@ -54,19 +64,23 @@ struct TripDetailView: View {
                     }
 
                     TripDetailBottomBar(
-                        canJoin: trip.canJoin,
-                        actionTitle: trip.applicationActionTitle,
+                        canJoin: displayTrip.canJoin && (serverCanApply ?? true),
+                        actionTitle: displayTrip.applicationActionTitle,
                         isApplied: appliedState,
+                        isAppliedTitle: displayTrip.isServerBacked ? appliedServerTitle : "모임 채팅으로 이동",
                         isFavorite: isFavorite,
-                        onToggleFavorite: {
-                            isFavorite.toggle()
-                            feedbackMessage = isFavorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
-                        },
+                        onToggleFavorite: toggleFavorite,
                         onApply: {
                             if appliedState {
-                                selectedThread = threadProvider(trip)
-                            } else if trip.status == .cancelled {
+                                if displayTrip.isServerBacked {
+                                    feedbackMessage = appliedServerFeedback
+                                } else {
+                                    selectedThread = threadProvider(trip)
+                                }
+                            } else if displayTrip.status == .cancelled {
                                 feedbackMessage = "모집이 취소되어 신청할 수 없어요."
+                            } else if displayTrip.isServerBacked, serverCanApply == false {
+                                feedbackMessage = "지금은 이 모임에 신청할 수 없어요."
                             } else {
                                 isApplicationPresented = true
                             }
@@ -78,7 +92,7 @@ struct TripDetailView: View {
 
             if isApplicationPresented {
                 ApplicationSheet(
-                    trip: trip,
+                    trip: displayTrip,
                     onDismiss: {
                         isApplicationPresented = false
                     },
@@ -89,8 +103,11 @@ struct TripDetailView: View {
                     },
                     onSubmit: {
                         isApplicationPresented = false
-                        selectedThread = threadProvider(trip)
-                    }
+                        if !displayTrip.isServerBacked {
+                            selectedThread = threadProvider(trip)
+                        }
+                    },
+                    serverSubmitHandler: serverSubmitHandler
                 )
                 .transition(.opacity)
             }
@@ -105,6 +122,73 @@ struct TripDetailView: View {
         .fullScreenCover(isPresented: $isReportPresented) {
             ReportView()
         }
+        .task {
+            await loadServerDetail()
+        }
+    }
+
+    private var appliedServerTitle: String {
+        switch serverJoinResult {
+        case .joined:
+            return "참여가 확정됐어요"
+        case .waitlisted:
+            return "대기열 등록됨"
+        default:
+            return "신청 완료 · 승인 대기"
+        }
+    }
+
+    private var appliedServerFeedback: String {
+        switch serverJoinResult {
+        case .joined:
+            return "참여가 확정됐어요. 모임 탭에서 확인할 수 있어요."
+        case .waitlisted:
+            return "대기열에 등록됐어요. 자리가 나면 순서대로 합류돼요."
+        default:
+            return "호스트 승인을 기다리고 있어요. 결과는 알림으로 알려드려요."
+        }
+    }
+
+    private var serverSubmitHandler: ((String) async throws -> ServerJoinResult)? {
+        guard let roomID = trip.serverRoomID, MoyeoServerSync.isEnabled else { return nil }
+        return { message in
+            let response = try await ChatRoomAPIClient.shared.apply(roomID: roomID, message: message)
+            await MainActor.run {
+                serverJoinResult = response.result
+                didApplyInSession = true
+                onApplied(trip)
+            }
+            return response.result
+        }
+    }
+
+    private func toggleFavorite() {
+        guard let roomID = trip.serverRoomID, MoyeoServerSync.isEnabled else {
+            isFavorite.toggle()
+            feedbackMessage = isFavorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
+            return
+        }
+        Task {
+            do {
+                let favorite = try await ChatRoomAPIClient.shared.toggleFavorite(roomID: roomID)
+                isFavorite = favorite
+                feedbackMessage = favorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
+            } catch {
+                feedbackMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "찜 처리에 실패했어요. 잠시 후 다시 시도해주세요."
+            }
+        }
+    }
+
+    private func loadServerDetail() async {
+        guard let roomID = trip.serverRoomID, MoyeoServerSync.isEnabled else { return }
+        let course = (try? await TravelCourseAPIClient.shared.roomCourse(roomID: roomID))?.course
+        if let detail = try? await ChatRoomAPIClient.shared.detail(roomID: roomID) {
+            serverTrip = ServerTripMapper.trip(from: detail, course: course)
+            isFavorite = detail.favorite
+        }
+        serverCourse = course.map(ServerCourseMapper.course(from:))
+        serverCanApply = (try? await ChatRoomAPIClient.shared.joinEligibility(roomID: roomID))?.canApply
     }
 }
 
@@ -130,9 +214,7 @@ private struct TripDetailHero: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .bottomLeading) {
-                Image(trip.heroImageAssetName)
-                    .resizable()
-                    .scaledToFill()
+                TripDetailHeroImage(trip: trip)
                     .frame(width: proxy.size.width, height: 284)
                     .clipped()
                     .overlay {
@@ -164,6 +246,30 @@ private struct TripDetailHero: View {
     }
 }
 
+/// 서버 모임은 썸네일 URL을, 목데이터 모임은 번들 이미지 에셋을 그린다
+struct TripDetailHeroImage: View {
+    let trip: TripRecruitment
+
+    var body: some View {
+        if let heroImageURL = trip.heroImageURL {
+            CachedRemoteImage(url: heroImageURL) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                MoyeoTheme.leaf
+            }
+        } else if trip.isServerBacked {
+            // 서버가 썸네일을 내려주지 않은 모임 — 빈 배경만 둔다
+            MoyeoTheme.leaf
+        } else {
+            Image(trip.heroImageAssetName)
+                .resizable()
+                .scaledToFill()
+        }
+    }
+}
+
 private struct HeroIconButton: View {
     let systemImage: String
     let label: String
@@ -185,6 +291,7 @@ private struct HeroIconButton: View {
 
 private struct TripDetailPanel: View {
     let trip: TripRecruitment
+    var serverCourse: TravelCourse?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -200,7 +307,7 @@ private struct TripDetailPanel: View {
                     .foregroundStyle(MoyeoTheme.ink)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if let course = MockData.course(for: trip.courseID) {
+                if let course = serverCourse ?? MockData.course(for: trip.courseID) {
                     NavigationLink {
                         CourseDetailView(course: course)
                     } label: {
@@ -232,12 +339,15 @@ private struct TripDetailPanel: View {
                     .foregroundStyle(MoyeoTheme.muted)
             }
 
-            HStack(alignment: .center) {
-                ParticipantStack(participants: trip.participants, limit: 3, size: 32)
-                Spacer()
-                Text("최소 \(trip.minimumParticipants)명 이상")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.muted)
+            // 서버 모임은 참가자 닉네임·최소 인원을 내려주지 않는다 — 그 줄은 숨긴다
+            if !trip.isServerBacked {
+                HStack(alignment: .center) {
+                    ParticipantStack(participants: trip.participants, limit: 3, size: 32)
+                    Spacer()
+                    Text("최소 \(trip.minimumParticipants)명 이상")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
             }
 
             VStack(alignment: .leading, spacing: 7) {
@@ -254,7 +364,11 @@ private struct TripDetailPanel: View {
                         .clipShape(Capsule())
                     Spacer()
                 }
-                ProgressBar(value: trip.progress, tint: trip.status.tint, marker: trip.minimumProgress)
+                ProgressBar(
+                    value: trip.progress,
+                    tint: trip.status.tint,
+                    marker: trip.minimumParticipants > 0 ? trip.minimumProgress : nil
+                )
             }
 
             // 화면기획 15 일정 카드 — 일정 · 여행 시간 · 집합 세 줄 뒤에
@@ -298,7 +412,7 @@ private struct TripDetailPanel: View {
                     DetailInfoRow(icon: "clock", title: "모집 마감", value: trip.recruitmentDeadline)
                 }
                 HStack(alignment: .top, spacing: 12) {
-                    DetailInfoRow(icon: "person.2", title: "나이대", value: trip.ageRangeText)
+                    DetailInfoRow(icon: "person.2", title: "나이대", value: trip.displayAgeRangeText)
                     DetailInfoRow(icon: "person.crop.circle", title: "성별", value: trip.genderRestriction)
                 }
             }
@@ -325,32 +439,53 @@ private struct TripDetailPanel: View {
             }
 
             HStack(spacing: 12) {
-                MascotAvatar(mascot: trip.hostAvatar, size: 44, background: MoyeoTheme.leaf)
+                if let hostImageURL = trip.hostProfileImageURL {
+                    CachedRemoteImage(url: hostImageURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        MoyeoTheme.leaf
+                    }
+                    .frame(width: 44, height: 44)
+                    .clipShape(Circle())
+                } else if !trip.hostAvatar.isEmpty {
+                    MascotAvatar(mascot: trip.hostAvatar, size: 44, background: MoyeoTheme.leaf)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("호스트")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(MoyeoTheme.muted)
-                    Text(trip.hostName)
-                        .font(.subheadline.weight(.heavy))
-                        .foregroundStyle(MoyeoTheme.ink)
-                    Text("매너 점수 \(trip.hostScoreText)")
-                        .font(.caption)
-                        .foregroundStyle(MoyeoTheme.muted)
+                    // 서버는 호스트 닉네임·매너 점수를 내려주지 않는다 — 있는 값만 보여준다
+                    if !trip.hostName.isEmpty {
+                        Text(trip.hostName)
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                    }
+                    if !trip.isServerBacked {
+                        Text("매너 점수 \(trip.hostScoreText)")
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.muted)
+                    }
                 }
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("모임 소개")
-                    .font(.headline)
-                    .foregroundStyle(MoyeoTheme.ink)
-                Text(trip.summary)
-                    .font(.subheadline)
-                    .foregroundStyle(MoyeoTheme.text700)
-                    .fixedSize(horizontal: false, vertical: true)
+            if !trip.summary.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("모임 소개")
+                        .font(.headline)
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Text(trip.summary)
+                        .font(.subheadline)
+                        .foregroundStyle(MoyeoTheme.text700)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
-            TripRoutePreview(stops: trip.route)
+            if !trip.route.isEmpty {
+                TripRoutePreview(stops: trip.route)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -465,6 +600,7 @@ private struct TripDetailBottomBar: View {
     let canJoin: Bool
     let actionTitle: String
     let isApplied: Bool
+    var isAppliedTitle = "모임 채팅으로 이동"
     let isFavorite: Bool
     let onToggleFavorite: () -> Void
     let onApply: () -> Void
@@ -487,7 +623,7 @@ private struct TripDetailBottomBar: View {
             .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
 
             Button(action: onApply) {
-                Text(isApplied ? "모임 채팅으로 이동" : (canJoin ? "함께 가기 신청" : actionTitle))
+                Text(isApplied ? isAppliedTitle : (canJoin ? "함께 가기 신청" : actionTitle))
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -534,8 +670,17 @@ extension TripRecruitment {
     }
 
     var detailMetaText: String {
-        let values = ([region] + tags.prefix(2)).joined(separator: " · ")
-        return values
+        ([region] + tags.prefix(2))
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    /// 서버 모임은 나이 제한이 없으면 null을 내려준다 — "제한 없음"으로 표기한다
+    var displayAgeRangeText: String {
+        guard minimumAge > 0 || maximumAge > 0 else { return "제한 없음" }
+        if minimumAge > 0 && maximumAge > 0 { return ageRangeText }
+        if minimumAge > 0 { return "\(minimumAge)세 이상" }
+        return "\(maximumAge)세 이하"
     }
 
     var detailDateText: String {

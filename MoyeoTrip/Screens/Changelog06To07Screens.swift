@@ -45,6 +45,8 @@ struct TourismPlace: Identifiable, Hashable {
     let menuImageLabels: [String]
     var imageURLs: [URL] = []
     var menuImageURLs: [URL] = []
+    /// 서버 관광 콘텐츠 유형 ID — 서버 장소일 때만 채워진다 (17-1a 타입 필터)
+    var serverContentTypeID: Int?
 
     var showsMenuImages: Bool {
         type == .restaurant && !menuImageLabels.isEmpty
@@ -115,9 +117,14 @@ struct PlaceSearchView: View {
         _model = StateObject(wrappedValue: TourismPlaceSearchModel(service: resolvedService))
     }
 
+    /// 서버 타입 목록이 오면 타입 필터는 서버가 처리한다 — 화면에서 다시 걸러내지 않는다
+    private var usesServerTypes: Bool {
+        !model.contentTypes.isEmpty
+    }
+
     private var filteredPlaces: [TourismPlace] {
         model.places.filter { place in
-            let matchesType = selectedType == nil || place.type == selectedType
+            let matchesType = usesServerTypes || selectedType == nil || place.type == selectedType
             let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesQuery = normalized.isEmpty || place.title.contains(normalized) || place.address.contains(normalized)
             return matchesType && matchesQuery
@@ -147,9 +154,17 @@ struct PlaceSearchView: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 7) {
-                        filterButton("전체", type: nil)
-                        ForEach(TourismContentType.allCases) { type in
-                            filterButton(type.rawValue, type: type)
+                        if usesServerTypes {
+                            // 17-1a — 서버가 주는 관광 콘텐츠 유형으로 필터를 그린다
+                            serverFilterButton("전체", contentTypeID: nil)
+                            ForEach(model.contentTypes) { type in
+                                serverFilterButton(type.contentTypeName, contentTypeID: type.contentTypeId)
+                            }
+                        } else {
+                            filterButton("전체", type: nil)
+                            ForEach(TourismContentType.allCases) { type in
+                                filterButton(type.rawValue, type: type)
+                            }
                         }
                     }
                 }
@@ -177,7 +192,8 @@ struct PlaceSearchView: View {
                             .accessibilityIdentifier("placeSearch.fallback")
                     }
 
-                    Text("\(filteredPlaces.count)곳 · 주왕산 코스 근처순")
+                    // 서버는 정렬 기준을 주지 않는다 — 서버 목록에서는 "근처순" 표기를 뺀다
+                    Text(model.isServerBacked ? "\(filteredPlaces.count)곳" : "\(filteredPlaces.count)곳 · 주왕산 코스 근처순")
                         .font(.caption)
                         .foregroundStyle(MoyeoTheme.muted)
                         .padding(.horizontal, 20)
@@ -247,13 +263,39 @@ struct PlaceSearchView: View {
         .navigationDestination(for: TourismPlace.self) { place in
             PlaceDetailView(place: place, onAdd: onAdd, service: model.service)
         }
-        .task { await model.load() }
+        .task {
+            await model.load()
+            // 서버에는 키워드 검색이 없다 — 서버 목록에서는 목데이터용 기본 검색어를 비운다
+            if model.isServerBacked {
+                query = ""
+            }
+        }
         .accessibilityIdentifier("screen.placeSearch")
     }
 
     private func filterButton(_ title: String, type: TourismContentType?) -> some View {
-        let isSelected = selectedType == type
-        return Button(title) { selectedType = type }
+        filterChip(title, isSelected: selectedType == type, identifier: title) {
+            selectedType = type
+        }
+    }
+
+    private func serverFilterButton(_ title: String, contentTypeID: Int?) -> some View {
+        filterChip(
+            title,
+            isSelected: model.selectedContentTypeID == contentTypeID,
+            identifier: title
+        ) {
+            Task { await model.selectContentType(contentTypeID) }
+        }
+    }
+
+    private func filterChip(
+        _ title: String,
+        isSelected: Bool,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, action: action)
             .font(.caption.weight(.heavy))
             .foregroundStyle(isSelected ? MoyeoTheme.onLeaf : MoyeoTheme.ink)
             .padding(.horizontal, 13)
@@ -261,6 +303,7 @@ struct PlaceSearchView: View {
             .background(isSelected ? MoyeoTheme.leaf : MoyeoTheme.card)
             .overlay(Capsule().stroke(isSelected ? MoyeoTheme.forest : MoyeoTheme.line))
             .clipShape(Capsule())
+            .accessibilityIdentifier("placeSearch.filter.\(identifier)")
     }
 }
 
@@ -653,8 +696,10 @@ struct LegalDocumentDetailView: View {
     let entry: LegalDocumentEntry
     var onAgree: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
+    /// 실서버 약관 — 로그인 세션이 있고 약관 API가 성공하면 서버 본문으로 대체한다
+    @State private var serverDocument: LegalDocumentContent?
 
-    private var document: LegalDocumentContent { kind.content }
+    private var document: LegalDocumentContent { serverDocument ?? kind.content }
 
     var body: some View {
         ScrollView {
@@ -667,10 +712,17 @@ struct LegalDocumentDetailView: View {
                         .frame(height: 24)
                         .background(document.isRequired ? MoyeoTheme.leaf : MoyeoTheme.subtleBackground)
                         .clipShape(Capsule())
-                    Text("\(document.version) · \(document.effectiveDate)")
-                        .font(.caption).foregroundStyle(MoyeoTheme.muted).monospacedDigit()
+                    // 서버 약관은 시행일을 내려주지 않는다 — 버전만 표기한다
+                    Text(
+                        document.effectiveDate.isEmpty
+                            ? document.version
+                            : "\(document.version) · \(document.effectiveDate)"
+                    )
+                    .font(.caption).foregroundStyle(MoyeoTheme.muted).monospacedDigit()
                 }
 
+                // 서버 약관은 요약을 내려주지 않는다 — 요약 박스는 있는 경우에만 그린다
+                if !document.summary.isEmpty {
                 Text(document.summary)
                     .font(.subheadline)
                     .foregroundStyle(MoyeoTheme.text700)
@@ -679,6 +731,7 @@ struct LegalDocumentDetailView: View {
                     .background(MoyeoTheme.subtleBackground)
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
 
                 ForEach(document.sections, id: \.title) { section in
                     VStack(alignment: .leading, spacing: 8) {
@@ -715,6 +768,9 @@ struct LegalDocumentDetailView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationTitle(document.title)
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await loadServerTerm()
+        }
         .toolbar {
             // 화면기획·웹의 우측 상단 공유
             ToolbarItem(placement: .topBarTrailing) {
@@ -728,6 +784,35 @@ struct LegalDocumentDetailView: View {
             }
         }
         .accessibilityIdentifier("screen.terms.\(kind.rawValue).\(entry == .signup ? "signup" : "settings")")
+    }
+
+    /// 서버 약관 목록에서 이 화면의 약관을 찾아 본문(마크다운)을 받아온다
+    private func loadServerTerm() async {
+        guard MoyeoServerSync.isEnabled, serverDocument == nil else { return }
+        guard let summaries = try? await TermsAPIClient.shared.terms() else { return }
+        let keyword = kind.serverTitleKeyword
+        guard let match = summaries.first(where: { $0.title.contains(keyword) }) else { return }
+        guard let detail = try? await TermsAPIClient.shared.term(id: match.termId) else { return }
+        serverDocument = LegalDocumentContent(
+            title: detail.title,
+            isRequired: detail.required,
+            version: detail.version,
+            effectiveDate: "",
+            summary: "",
+            sections: ServerTermContentParser.sections(from: detail.content)
+        )
+    }
+}
+
+extension LegalDocumentKind {
+    /// 서버 약관 제목에서 이 문서를 찾기 위한 키워드
+    var serverTitleKeyword: String {
+        switch self {
+        case .service: "이용약관"
+        case .privacy: "개인정보"
+        case .location: "위치"
+        case .marketing: "마케팅"
+        }
     }
 }
 

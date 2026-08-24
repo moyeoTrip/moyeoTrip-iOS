@@ -1,20 +1,8 @@
 # Sentry configuration
 
-The app contains a conditional Sentry bootstrap but no committed DSN or secret.
+The `Sentry` Swift Package product is linked to the `MoyeoTrip` target and the app initializes it at launch when a DSN is configured locally. `Secrets.xcconfig` is ignored by Git and is included by `App.xcconfig` for this purpose.
 
-1. Add `https://github.com/getsentry/sentry-cocoa` to the Xcode project when crash reporting is enabled.
-2. Link the `Sentry` product to the `MoyeoTrip` target.
-3. Define `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, and `SENTRY_TRACES_SAMPLE_RATE` as CI/user-defined build settings or scheme environment variables.
-4. Keep real values out of tracked `.xcconfig` and plist files.
-
-Suggested values:
-
-```text
-SENTRY_DSN=https://PUBLIC_KEY@SENTRY_HOST/PROJECT_ID
-SENTRY_ENVIRONMENT=development|staging|production
-SENTRY_RELEASE=moyeotrip-ios@VERSION+BUILD
-SENTRY_TRACES_SAMPLE_RATE=0.0 (debug) or an explicitly approved production sample such as 0.1
-```
+`SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, and `SENTRY_TRACES_SAMPLE_RATE` can be set in `Secrets.xcconfig`, as CI/user-defined build settings, or as scheme environment variables.
 
 `sendDefaultPii` is disabled. A Sentry organization auth token is only needed for CI symbol upload and must stay in the CI secret store; it is never an app runtime value.
 

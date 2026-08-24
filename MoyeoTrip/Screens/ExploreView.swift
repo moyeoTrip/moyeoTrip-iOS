@@ -11,6 +11,9 @@ struct ExploreView: View {
     @State private var supportRoute: SupportRoute?
     @State private var selectedCourse: TravelCourse?
     @State private var favoriteCourseIDs: Set<String> = ["course-cheongsong-juwangsan"]
+    /// 실서버 모임 목록 — 로그인 세션이 있고 검색 API가 성공했을 때만 채워진다 (nil = 목데이터)
+    @State private var serverRooms: [ServerChatRoomSummary]?
+    @State private var selectedServerTrip: TripRecruitment?
 
     private let categories = ["전체", "자연", "역사", "체험", "힐링"]
 
@@ -22,6 +25,20 @@ struct ExploreView: View {
         _isBottomNavigationSuppressed = isBottomNavigationSuppressed
         self.tripContext = tripContext
         _showingMap = State(initialValue: startsInMap)
+    }
+
+    private var filteredServerRooms: [ServerChatRoomSummary]? {
+        guard let serverRooms else { return nil }
+        return serverRooms.filter { room in
+            let matchesSearch = searchText.isEmpty
+                || room.title.localizedCaseInsensitiveContains(searchText)
+                || room.courseTitle.localizedCaseInsensitiveContains(searchText)
+                || room.tagNames.contains { $0.localizedCaseInsensitiveContains(searchText) }
+            let matchesCategory = selectedCategory == "전체"
+                || room.tagNames.contains { $0.contains(selectedCategory) }
+                || room.title.contains(selectedCategory)
+            return matchesSearch && matchesCategory
+        }
     }
 
     private var filteredCourses: [TravelCourse] {
@@ -87,7 +104,18 @@ struct ExploreView: View {
                             }
 
                             VStack(spacing: 12) {
-                                if filteredCourses.isEmpty {
+                                if let serverRoomList = filteredServerRooms {
+                                    // 실서버 모임 목록 — 서버가 준 데이터만 그린다
+                                    if serverRoomList.isEmpty {
+                                        ExploreEmptyResultView()
+                                    } else {
+                                        ForEach(serverRoomList) { room in
+                                            ExploreServerRoomRow(room: room) {
+                                                selectedServerTrip = ServerTripMapper.trip(from: room)
+                                            }
+                                        }
+                                    }
+                                } else if filteredCourses.isEmpty {
                                     ExploreEmptyResultView()
                                 } else {
                                     ForEach(filteredCourses) { course in
@@ -139,6 +167,19 @@ struct ExploreView: View {
                 tripContext: tripContext
             )
         }
+        .navigationDestination(item: $selectedServerTrip) { trip in
+            TripDetailView(
+                trip: trip,
+                isApplied: tripContext.isApplied(trip),
+                threadProvider: tripContext.chatThreadProvider,
+                onApplied: tripContext.onApplyTrip,
+                onSendChatMessage: tripContext.onSendChatMessage
+            )
+        }
+        .task {
+            guard MoyeoServerSync.isEnabled, serverRooms == nil else { return }
+            serverRooms = try? await ChatRoomAPIClient.shared.search()
+        }
         .navigationDestination(item: $supportRoute) { route in
             SupportDestinationView(
                 route: route,
@@ -152,16 +193,19 @@ struct ExploreView: View {
             )
         }
         .onAppear {
-            isBottomNavigationSuppressed = selectedCourse != nil || supportRoute != nil
+            isBottomNavigationSuppressed = selectedCourse != nil || supportRoute != nil || selectedServerTrip != nil
         }
         .onChange(of: supportRoute) { _, route in
-            isBottomNavigationSuppressed = selectedCourse != nil || route != nil
+            isBottomNavigationSuppressed = selectedCourse != nil || route != nil || selectedServerTrip != nil
         }
         .onChange(of: selectedCourse) { _, course in
-            isBottomNavigationSuppressed = course != nil || supportRoute != nil
+            isBottomNavigationSuppressed = course != nil || supportRoute != nil || selectedServerTrip != nil
+        }
+        .onChange(of: selectedServerTrip) { _, trip in
+            isBottomNavigationSuppressed = selectedCourse != nil || supportRoute != nil || trip != nil
         }
         .onDisappear {
-            if selectedCourse == nil && supportRoute == nil {
+            if selectedCourse == nil && supportRoute == nil && selectedServerTrip == nil {
                 isBottomNavigationSuppressed = false
             }
         }
@@ -632,6 +676,68 @@ private struct ExploreCourseRow: View {
             RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
         }
+    }
+}
+
+/// 실서버 모임 행 — 서버가 내려준 값(제목·코스명·태그·인원·썸네일)만 그린다
+private struct ExploreServerRoomRow: View {
+    let room: ServerChatRoomSummary
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 11) {
+                CachedRemoteImage(url: room.thumbnailURL) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    MoyeoTheme.leaf
+                }
+                .frame(width: 88, height: 68)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay(alignment: .bottomLeading) {
+                    Text("\(room.participantCount)/\(room.maxParticipants)명")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(MoyeoTheme.forest)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .padding(5)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(room.title)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                        .lineLimit(2)
+                    Text(
+                        ([room.courseTitle] + room.tagNames.prefix(2))
+                            .filter { !$0.isEmpty }
+                            .joined(separator: " · ")
+                    )
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .lineLimit(1)
+                    Text(ServerTripMapper.scheduleText(startDate: room.startDate, endDate: room.endDate))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.text700)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(height: 72)
+            .padding(10)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(room.title)
+        .accessibilityIdentifier("explore.serverRoom.\(room.roomId)")
     }
 }
 

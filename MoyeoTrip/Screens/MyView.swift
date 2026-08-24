@@ -10,6 +10,10 @@ import SwiftUI
 struct MyView: View {
   @Binding var path: NavigationPath
   @State private var selectedSegment = "진행중"
+  /// 실서버 프로필 — 로그인 세션이 있고 프로필 API가 성공했을 때만 채워진다
+  @State private var serverProfile: ServerMyProfile?
+  /// 실서버 내 모임 목록 — chat-rooms/my 가 성공했을 때만 채워진다 (nil = 목데이터)
+  @State private var serverRooms: [ServerMyChatRoom]?
 
   var tripContext = TripInteractionContext()
   var profile = MockData.profile
@@ -82,14 +86,17 @@ struct MyView: View {
       ScrollView {
         VStack(spacing: 10) {
           NavigationLink(value: MyRoute.profile) {
-            MyProfileSummaryCard(profile: profile)
+            MyProfileSummaryCard(profile: profile, serverProfile: serverProfile)
           }
           .buttonStyle(.plain)
           .accessibilityElement(children: .combine)
           .accessibilityLabel("프로필 메뉴")
           .accessibilityIdentifier("my.profileSummary")
 
-          MyProfileStatPills(profile: profile)
+          // 서버는 여행·매너·피드 수를 내려주지 않는다 — 서버 프로필 상태에서는 숨긴다
+          if serverProfile == nil {
+            MyProfileStatPills(profile: profile)
+          }
 
           VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -97,7 +104,7 @@ struct MyView: View {
                 .font(MoyeoTypography.sectionTitle)
                 .foregroundStyle(MoyeoTheme.ink)
               Spacer()
-              Text("\(activeTrips.count)개")
+              Text("\(myTravelCount)개")
                 .font(.caption.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.forest)
             }
@@ -111,6 +118,7 @@ struct MyView: View {
               selectedSegment: selectedSegment,
               activeTrips: activeTrips,
               pastTrips: pastTrips,
+              serverRooms: serverRooms,
               openCoursePublish: { path.append(SupportRoute.coursePublish) }
             )
           }
@@ -164,7 +172,21 @@ struct MyView: View {
     .navigationDestination(for: SupportRoute.self) { route in
       SupportDestinationView(route: route, onAuthCompleted: onAuthenticationRequired)
     }
+    .task {
+      guard MoyeoServerSync.isEnabled, serverProfile == nil else { return }
+      serverProfile = try? await UserProfileAPIClient.shared.myProfile()
+    }
+    .task {
+      guard MoyeoServerSync.isEnabled, serverRooms == nil else { return }
+      serverRooms = try? await ChatRoomAPIClient.shared.myRooms()
+    }
     .accessibilityIdentifier("screen.my")
+  }
+
+  /// 내 여행 개수 — 서버 목록을 받았으면 진행 중인 서버 방 개수를 쓴다
+  private var myTravelCount: Int {
+    guard let serverRooms else { return activeTrips.count }
+    return serverRooms.filter { !$0.ended }.count
   }
 }
 
@@ -196,24 +218,35 @@ private struct MyHeader: View {
 
 private struct MyProfileSummaryCard: View {
   let profile: ProfileSummary
+  var serverProfile: ServerMyProfile?
 
   var body: some View {
     HStack(spacing: 12) {
       AuthenticatedProfileAvatar(profile: profile, size: 58)
       VStack(alignment: .leading, spacing: 4) {
-        Text(profile.name)
+        Text(serverProfile?.nickname ?? profile.name)
           .font(MoyeoTypography.cardTitle)
           .foregroundStyle(MoyeoTheme.ink)
           .lineLimit(1)
-        Text(profile.oneLineBio)
-          .font(MoyeoTypography.cardBody)
-          .foregroundStyle(MoyeoTheme.muted)
-          .lineLimit(1)
-        HStack(spacing: 6) {
-          Pill(text: "여행 \(profile.joinedTrips)", tint: MoyeoTheme.forest)
-          Pill(text: "매너 \(profile.mannerScoreText)", tint: MoyeoTheme.coral)
+        if let serverProfile {
+          // 서버 프로필 — 자기소개가 있으면 보여주고, 없으면 그 줄을 비운다
+          if let introduction = serverProfile.introduction, !introduction.isEmpty {
+            Text(introduction)
+              .font(MoyeoTypography.cardBody)
+              .foregroundStyle(MoyeoTheme.muted)
+              .lineLimit(1)
+          }
+        } else {
+          Text(profile.oneLineBio)
+            .font(MoyeoTypography.cardBody)
+            .foregroundStyle(MoyeoTheme.muted)
+            .lineLimit(1)
+          HStack(spacing: 6) {
+            Pill(text: "여행 \(profile.joinedTrips)", tint: MoyeoTheme.forest)
+            Pill(text: "매너 \(profile.mannerScoreText)", tint: MoyeoTheme.coral)
+          }
+          .padding(.top, 4)
         }
-        .padding(.top, 4)
       }
       Spacer()
       Image(systemName: "chevron.right")
@@ -274,9 +307,63 @@ private struct MyTravelTabContent: View {
   let selectedSegment: String
   let activeTrips: [TripRecruitment]
   let pastTrips: [PastTrip]
+  /// 실서버 내 모임 목록 — 있으면 진행중·지난여행 탭을 서버 방으로 그린다
+  var serverRooms: [ServerMyChatRoom]?
   let openCoursePublish: () -> Void
 
   var body: some View {
+    if let serverRooms {
+      serverContent(rooms: serverRooms)
+    } else {
+      mockContent
+    }
+  }
+
+  @ViewBuilder
+  private func serverContent(rooms: [ServerMyChatRoom]) -> some View {
+    let filtered = selectedSegment == "지난여행" ? rooms.filter(\.ended) : rooms.filter { !$0.ended }
+
+    VStack(spacing: 10) {
+      if selectedSegment == "찜한 코스" {
+        // 서버에 찜한 코스 목록 API가 없다 — 이 탭은 기존 목데이터를 유지한다
+        savedCourses
+      } else if filtered.isEmpty {
+        Text(selectedSegment == "지난여행" ? "지난 여행이 없어요" : "진행 중인 여행이 없어요")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MoyeoTheme.muted)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 34)
+          .accessibilityIdentifier("my.serverTrip.empty")
+      } else {
+        ForEach(filtered) { room in
+          if room.ended {
+            // 지난 여행은 서버가 코스 공개 가능 여부만 준다 — 이동할 상세가 없어 카드만 보여준다
+            MyServerTripCard(room: room)
+              .accessibilityIdentifier("my.serverTrip.\(room.roomId)")
+          } else {
+            NavigationLink(value: ServerTripMapper.placeholderTrip(roomID: room.roomId, title: room.title)) {
+              MyServerTripCard(room: room)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("my.serverTrip.\(room.roomId)")
+          }
+        }
+      }
+    }
+  }
+
+  private var savedCourses: some View {
+    ForEach(MockData.courses.dropFirst(2)) { course in
+      NavigationLink(value: course) {
+        MySavedCourseCard(course: course)
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("my.savedCourse.\(course.id)")
+    }
+  }
+
+  @ViewBuilder
+  private var mockContent: some View {
     VStack(spacing: 10) {
       switch selectedSegment {
       case "진행중":
@@ -308,15 +395,79 @@ private struct MyTravelTabContent: View {
           .accessibilityIdentifier("my.pastTrip.\(trip.courseID)")
         }
       default:
-        ForEach(MockData.courses.dropFirst(2)) { course in
-          NavigationLink(value: course) {
-            MySavedCourseCard(course: course)
+        savedCourses
+      }
+    }
+  }
+}
+
+/// 화면기획 26 — 실서버 내 여행 카드. 서버가 주지 않는 값(지역·마스코트·참가자 얼굴)은 그리지 않는다.
+private struct MyServerTripCard: View {
+  let room: ServerMyChatRoom
+
+  var body: some View {
+    HStack(spacing: MyTravelCardMetrics.gap) {
+      Group {
+        if let thumbnailURL = room.thumbnailURL {
+          CachedRemoteImage(url: thumbnailURL) { image in
+            image
+              .resizable()
+              .scaledToFill()
+          } placeholder: {
+            MoyeoTheme.leaf
           }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("my.savedCourse.\(course.id)")
+        } else {
+          MoyeoTheme.leaf
+        }
+      }
+      .frame(width: MyTravelCardMetrics.thumbWidth, height: MyTravelCardMetrics.thumbHeight)
+      .clipShape(RoundedRectangle(cornerRadius: MyTravelCardMetrics.thumbRadius, style: .continuous))
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 8) {
+          Text(room.title)
+            .font(MyTravelCardMetrics.titleFont)
+            .foregroundStyle(MoyeoTheme.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.9)
+            .accessibilityIdentifier("my.serverTrip.\(room.roomId).title")
+          Spacer(minLength: 4)
+          if !room.ended, let dDay = room.recruitmentDDay {
+            Pill(text: dDay <= 0 ? "D-Day" : "D-\(dDay)", tint: MoyeoTheme.coral)
+          }
+        }
+
+        Text(ServerTripMapper.scheduleText(startDate: room.startDate, endDate: room.endDate))
+          .font(MyTravelCardMetrics.metaFont)
+          .foregroundStyle(MoyeoTheme.muted)
+          .lineLimit(1)
+          .accessibilityIdentifier("my.serverTrip.\(room.roomId).date")
+
+        Text(ServerTripMapper.statusText(for: room))
+          .font(MyTravelCardMetrics.subtitleFont)
+          .foregroundStyle(MoyeoTheme.muted)
+          .lineLimit(1)
+          .accessibilityIdentifier("my.serverTrip.\(room.roomId).status")
+
+        if let participantCount = room.participantCount, let maxParticipants = room.maxParticipants,
+           maxParticipants > 0 {
+          HStack(spacing: 8) {
+            ProgressBar(
+              value: min(Double(participantCount) / Double(maxParticipants), 1),
+              tint: MoyeoTheme.forest
+            )
+            Text("\(participantCount)/\(maxParticipants)명")
+              .font(.caption2.weight(.bold))
+              .foregroundStyle(MoyeoTheme.text700)
+              .accessibilityIdentifier("my.serverTrip.\(room.roomId).people")
+          }
+          .padding(.top, 1)
         }
       }
     }
+    .padding(12)
+    .frame(height: MyTravelCardMetrics.activeHeight)
+    .moyeoListCard()
   }
 }
 
@@ -514,6 +665,11 @@ private struct ProfileEditView: View {
   @State private var selectedInterestRegions: Set<String>
   @State private var isTasteEditorPresented: Bool
   @State private var saveMessage: String?
+  /// 실서버 프로필·취향 후보 — 로그인 세션이 있을 때만 채워진다
+  @State private var serverProfile: ServerMyProfile?
+  @State private var serverOptions: ServerProfileOptions?
+  @State private var styleOptions = TravelTasteSelection.styleOptions
+  @State private var regionOptions = TravelTasteSelection.interestRegionOptions
 
   init(profile: ProfileSummary, opensTasteEditor: Bool = false) {
     self.profile = profile
@@ -528,7 +684,11 @@ private struct ProfileEditView: View {
     VStack(spacing: 0) {
       CompactDetailHeader(title: "프로필 수정") {
         Button {
-          saveMessage = "프로필 변경사항이 저장됐어요."
+          if serverProfile != nil {
+            saveProfileToServer()
+          } else {
+            saveMessage = "프로필 변경사항이 저장됐어요."
+          }
         } label: {
           Text("저장")
             .font(.caption.weight(.heavy))
@@ -559,7 +719,7 @@ private struct ProfileEditView: View {
                 .clipShape(Circle())
                 .overlay(Circle().stroke(MoyeoTheme.line))
             }
-            Text(ProfileEditMockData.privateNickname)
+            Text(displayName)
               .font(.title3.weight(.heavy))
               .foregroundStyle(MoyeoTheme.ink)
             Text("한 번 정한 친구는 바꿀 수 없어요")
@@ -573,7 +733,9 @@ private struct ProfileEditView: View {
           ProfileEditListRow(label: "자기소개", value: bio, showsChevron: true)
           ProfileTravelTasteBlock(
             travelStyles: Array(selectedTravelStyles),
-            interestRegions: Array(selectedInterestRegions)
+            interestRegions: Array(selectedInterestRegions),
+            styleOrder: styleOptions,
+            regionOrder: regionOptions
           ) {
             isTasteEditorPresented = true
           }
@@ -582,8 +744,16 @@ private struct ProfileEditView: View {
           // 닉네임과 캐릭터는 선택 후 바꿀 수 없다 — 잠금 표시로 알린다
           ProfileEditListRow(label: "닉네임", value: displayName, locked: true)
           ProfileEditListRow(label: "캐릭터", value: "고정됨", locked: true)
-          ProfileEditListRow(label: "생년월일", value: "1998.04.12", showsChevron: true)
-          ProfileEditListRow(label: "성별", value: "여성", showsChevron: true)
+          if let serverProfile {
+            // 서버 프로필 — 서버가 준 값만 보여준다 (생년월일 미입력이면 그 줄을 숨긴다)
+            if let birthDateText = serverProfile.birthDateText {
+              ProfileEditListRow(label: "생년월일", value: birthDateText, showsChevron: true)
+            }
+            ProfileEditListRow(label: "성별", value: serverProfile.genderText, showsChevron: true)
+          } else {
+            ProfileEditListRow(label: "생년월일", value: "1998.04.12", showsChevron: true)
+            ProfileEditListRow(label: "성별", value: "여성", showsChevron: true)
+          }
 
           Text("비공개 정보는 다른 여행자에게 보이지 않아요.")
             .font(.caption2)
@@ -598,10 +768,16 @@ private struct ProfileEditView: View {
     .background(MoyeoTheme.background.ignoresSafeArea())
     .toolbar(.hidden, for: .navigationBar)
     .accessibilityIdentifier("screen.profileEdit")
+    .task {
+      await loadServerProfile()
+    }
     .sheet(isPresented: $isTasteEditorPresented) {
       ProfileTravelTasteEditSheet(
         travelStyles: $selectedTravelStyles,
-        interestRegions: $selectedInterestRegions
+        interestRegions: $selectedInterestRegions,
+        styleOptions: styleOptions,
+        regionOptions: regionOptions,
+        onSave: serverProfile != nil ? { saveProfileToServer() } : nil
       )
       .presentationDetents([.height(720)])
       .presentationDragIndicator(.hidden)
@@ -626,19 +802,76 @@ private struct ProfileEditView: View {
       Text(saveMessage ?? "")
     }
   }
+
+  /// 서버 프로필과 취향 후보(options)를 불러와 화면 상태를 서버 값으로 바꾼다.
+  /// 서버 후보가 기획 옵션과 다르면 서버 값을 쓴다.
+  private func loadServerProfile() async {
+    guard MoyeoServerSync.isEnabled, serverProfile == nil else { return }
+    guard let loaded = try? await UserProfileAPIClient.shared.myProfile() else { return }
+    serverProfile = loaded
+    displayName = loaded.nickname
+    bio = loaded.introduction ?? ""
+    selectedTravelStyles = Set(loaded.travelStyles.map(\.label))
+    selectedInterestRegions = Set(loaded.interestedRegions.map(\.signguName))
+
+    if let options = try? await UserProfileAPIClient.shared.profileOptions() {
+      serverOptions = options
+      styleOptions = options.travelStyles.map(\.label)
+      regionOptions = options.interestedRegions.map(\.signguName)
+    }
+  }
+
+  /// 현재 선택을 PUT users/me/profile 로 저장한다 (여행 취향 시트 저장 포함)
+  private func saveProfileToServer() {
+    guard let serverProfile, let serverOptions else {
+      saveMessage = "서버 프로필을 불러오지 못해 저장할 수 없어요."
+      return
+    }
+    guard let birthDate = serverProfile.birthDate else {
+      saveMessage = "생년월일이 등록되지 않아 저장할 수 없어요."
+      return
+    }
+    let styleIDs = serverOptions.travelStyles
+      .filter { selectedTravelStyles.contains($0.label) }
+      .map(\.id)
+    let regionIDs = serverOptions.interestedRegions
+      .filter { selectedInterestRegions.contains($0.signguName) }
+      .map(\.id)
+    let update = ServerProfileUpdate(
+      introduction: bio.isEmpty ? nil : bio,
+      travelStyleIds: styleIDs,
+      interestedRegionIds: regionIDs,
+      birthDate: birthDate,
+      gender: serverProfile.gender
+    )
+    Task {
+      do {
+        let updated = try await UserProfileAPIClient.shared.updateProfile(update)
+        self.serverProfile = updated
+        selectedTravelStyles = Set(updated.travelStyles.map(\.label))
+        selectedInterestRegions = Set(updated.interestedRegions.map(\.signguName))
+        saveMessage = "프로필 변경사항이 저장됐어요."
+      } catch {
+        saveMessage = (error as? LocalizedError)?.errorDescription
+          ?? "저장하지 못했어요. 잠시 후 다시 시도해주세요."
+      }
+    }
+  }
 }
 
 private struct ProfileTravelTasteBlock: View {
   let travelStyles: [String]
   let interestRegions: [String]
+  var styleOrder = TravelTasteSelection.styleOptions
+  var regionOrder = TravelTasteSelection.interestRegionOptions
   let action: () -> Void
 
   private var orderedTravelStyles: [String] {
-    TravelTasteSelection.styleOptions.filter(travelStyles.contains)
+    styleOrder.filter(travelStyles.contains)
   }
 
   private var orderedInterestRegions: [String] {
-    TravelTasteSelection.interestRegionOptions.filter(interestRegions.contains)
+    regionOrder.filter(interestRegions.contains)
   }
 
   var body: some View {
@@ -721,15 +954,26 @@ private struct ProfileTravelTasteEditSheet: View {
   @Binding private var interestRegions: Set<String>
   @State private var draftTravelStyles: Set<String>
   @State private var draftInterestRegions: Set<String>
+  /// 후보 목록 — 서버 연동 시 GET users/me/profile/options 의 값을 받는다
+  private let styleOptions: [String]
+  private let regionOptions: [String]
+  /// 서버 연동 시 저장 직후 PUT users/me/profile 호출
+  private let onSave: (() -> Void)?
 
   init(
     travelStyles: Binding<Set<String>>,
-    interestRegions: Binding<Set<String>>
+    interestRegions: Binding<Set<String>>,
+    styleOptions: [String] = TravelTasteSelection.styleOptions,
+    regionOptions: [String] = TravelTasteSelection.interestRegionOptions,
+    onSave: (() -> Void)? = nil
   ) {
     _travelStyles = travelStyles
     _interestRegions = interestRegions
     _draftTravelStyles = State(initialValue: travelStyles.wrappedValue)
     _draftInterestRegions = State(initialValue: interestRegions.wrappedValue)
+    self.styleOptions = styleOptions
+    self.regionOptions = regionOptions
+    self.onSave = onSave
   }
 
   private var canSave: Bool {
@@ -764,14 +1008,14 @@ private struct ProfileTravelTasteEditSheet: View {
           TravelTasteOptionSection(
             title: "여행 스타일",
             requirementHint: "1개 이상",
-            options: TravelTasteSelection.styleOptions,
+            options: styleOptions,
             selectedItems: $draftTravelStyles,
             accessibilityPrefix: "profile.taste.style"
           )
           TravelTasteOptionSection(
             title: "관심 지역",
             requirementHint: "경북 안에서 1곳 이상",
-            options: TravelTasteSelection.interestRegionOptions,
+            options: regionOptions,
             selectedItems: $draftInterestRegions,
             accessibilityPrefix: "profile.taste.region"
           )
@@ -796,6 +1040,7 @@ private struct ProfileTravelTasteEditSheet: View {
           AuthPrimaryButton(title: "저장", accessibilityIdentifier: "profile.taste.save") {
             travelStyles = draftTravelStyles
             interestRegions = draftInterestRegions
+            onSave?()
             dismiss()
           }
           .disabled(!canSave)
@@ -1009,6 +1254,8 @@ private struct PublicProfileView: View {
   let profile: ProfileSummary
   let onAuthenticationRequired: () -> Void
   @State private var selectedDestination: ProfileDestination?
+  /// 실서버 프로필 — 로그인 세션이 있고 프로필 API가 성공했을 때만 채워진다
+  @State private var serverProfile: ServerMyProfile?
 
   var body: some View {
     VStack(spacing: 0) {
@@ -1041,39 +1288,47 @@ private struct PublicProfileView: View {
                 .offset(y: 38)
             }
             Spacer().frame(height: 46)
-            Text(profile.name)
+            Text(serverProfile?.nickname ?? profile.name)
               .font(.title3.weight(.heavy))
               .foregroundStyle(MoyeoTheme.ink)
-            HStack(spacing: 4) {
-              Text("매너 점수 4.7점")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(MoyeoTheme.muted)
-              Image(systemName: "star")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(MoyeoTheme.muted)
+            // 서버는 내 매너 점수를 내려주지 않는다 — 서버 프로필 상태에서는 숨긴다
+            if serverProfile == nil {
+              HStack(spacing: 4) {
+                Text("매너 점수 4.7점")
+                  .font(.caption.weight(.bold))
+                  .foregroundStyle(MoyeoTheme.muted)
+                Image(systemName: "star")
+                  .font(.system(size: 11, weight: .semibold))
+                  .foregroundStyle(MoyeoTheme.muted)
+              }
+              .padding(.top, 4)
             }
-            .padding(.top, 4)
           }
 
-          StatGrid(profile: profile)
+          // 서버는 여행·주최·피드 수를 내려주지 않는다 — 서버 프로필 상태에서는 숨긴다
+          if serverProfile == nil {
+            StatGrid(profile: profile)
+              .padding(.horizontal, 18)
+          }
+
+          if serverProfile == nil || serverProfile?.introduction?.isEmpty == false {
+            VStack(alignment: .leading, spacing: 6) {
+              Text("소개").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+              Text(serverProfile?.introduction ?? profile.publicIntro)
+                .font(.subheadline)
+                .foregroundStyle(MoyeoTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                .stroke(MoyeoTheme.softLine, lineWidth: 1)
+            }
             .padding(.horizontal, 18)
-
-          VStack(alignment: .leading, spacing: 6) {
-            Text("소개").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
-            Text(profile.publicIntro)
-              .font(.subheadline)
-              .foregroundStyle(MoyeoTheme.muted)
-              .fixedSize(horizontal: false, vertical: true)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(14)
-          .background(MoyeoTheme.card)
-          .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-              .stroke(MoyeoTheme.softLine, lineWidth: 1)
-          }
-          .padding(.horizontal, 18)
 
           ProfileMenuPanel { destination in
             selectedDestination = destination
@@ -1095,6 +1350,10 @@ private struct PublicProfileView: View {
       case .blocked:
         BlockedUsersView()
       }
+    }
+    .task {
+      guard MoyeoServerSync.isEnabled, serverProfile == nil else { return }
+      serverProfile = try? await UserProfileAPIClient.shared.myProfile()
     }
     .accessibilityIdentifier("screen.profile")
   }
@@ -1253,6 +1512,8 @@ private struct FriendDexView: View {
   @State private var isSearching = false
   @State private var query = ""
   @State private var selectedFilter: DogamFriendFilter = .all
+  /// 실서버 여행 도감 — 로그인 세션이 있고 도감 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  @State private var serverDex: ServerTravelDex?
 
   private var filteredFriends: [DogamFriend] {
     MockData.dogamFriends
@@ -1262,6 +1523,21 @@ private struct FriendDexView: View {
         return trimmedQuery.isEmpty
           || friend.nickname.localizedCaseInsensitiveContains(trimmedQuery)
       }
+  }
+
+  private var filteredServerCompanions: [ServerTravelDexCompanion]? {
+    guard let serverDex else { return nil }
+    return serverDex.companions
+      .filter { selectedFilter.includesServer($0) }
+      .filter { companion in
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedQuery.isEmpty
+          || companion.nickname.localizedCaseInsensitiveContains(trimmedQuery)
+      }
+  }
+
+  private var visibleFriendCount: Int {
+    filteredServerCompanions?.count ?? filteredFriends.count
   }
 
   var body: some View {
@@ -1295,7 +1571,7 @@ private struct FriendDexView: View {
                   .font(.caption2)
                   .foregroundStyle(MoyeoTheme.muted)
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                  Text("\(filteredFriends.count)")
+                  Text("\(visibleFriendCount)")
                     .font(.system(size: 28, weight: .heavy))
                     .foregroundStyle(MoyeoTheme.forest)
                   Text("마리")
@@ -1317,7 +1593,9 @@ private struct FriendDexView: View {
             HStack(spacing: 6) {
               ForEach(DogamFriendFilter.allCases) { filter in
                 DogamFilterChip(
-                  title: filter.title,
+                  title: serverDex == nil
+                    ? filter.title
+                    : filter.serverTitle(companions: serverDex?.companions ?? []),
                   selected: selectedFilter == filter
                 ) {
                   selectedFilter = filter
@@ -1326,13 +1604,27 @@ private struct FriendDexView: View {
             }
 
             // 여행이 끝났는데 한 줄 메시지를 안 남긴 친구가 있으면 도감 상단에서 유도한다 (화면기획 27)
-            NavigationLink(value: SupportRoute.tripMessage) {
-              DogamEmptyBackNoticeCard()
+            // 서버 도감에는 해당 목데이터 친구가 없으므로 목데이터 상태에서만 보여준다
+            if serverDex == nil {
+              NavigationLink(value: SupportRoute.tripMessage) {
+                DogamEmptyBackNoticeCard()
+              }
+              .buttonStyle(.plain)
+              .accessibilityIdentifier("friendDex.emptyBackNotice")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("friendDex.emptyBackNotice")
 
-            if filteredFriends.isEmpty {
+            if let serverCompanions = filteredServerCompanions {
+              // 실서버 도감 — 서버가 준 동행자만 그린다
+              if serverCompanions.isEmpty {
+                ServerDogamEmptyView(hasAnyCompanion: (serverDex?.totalCount ?? 0) > 0)
+              } else {
+                LazyVGrid(columns: columns, spacing: 8) {
+                  ForEach(serverCompanions) { companion in
+                    ServerDogamCard(companion: companion)
+                  }
+                }
+              }
+            } else if filteredFriends.isEmpty {
               DogamEmptyResultView()
             } else {
               LazyVGrid(columns: columns, spacing: 8) {
@@ -1370,7 +1662,87 @@ private struct FriendDexView: View {
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     .toolbar(.hidden, for: .navigationBar)
+    .task {
+      guard MoyeoServerSync.isEnabled, serverDex == nil else { return }
+      serverDex = try? await SocialAPIClient.shared.travelDex()
+    }
     .accessibilityIdentifier("screen.friendDex")
+  }
+}
+
+/// 실서버 도감 카드 — 서버가 준 값(닉네임·동행 횟수·최근 여행일·프로필 이미지)만 그린다
+private struct ServerDogamCard: View {
+  let companion: ServerTravelDexCompanion
+
+  var body: some View {
+    VStack(spacing: 6) {
+      ZStack(alignment: .topTrailing) {
+        CachedRemoteImage(url: companion.profileImageURL) { image in
+          image
+            .resizable()
+            .scaledToFill()
+        } placeholder: {
+          MoyeoTheme.leaf
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(Circle())
+        if companion.tripCount > 1 {
+          Text("\(companion.tripCount)x")
+            .font(.system(size: 8, weight: .heavy))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .frame(height: 16)
+            .background(MoyeoTheme.forest)
+            .clipShape(Capsule())
+            .offset(x: 8, y: -5)
+        }
+      }
+
+      Text(companion.nickname.split(separator: " ").prefix(2).joined(separator: " "))
+        .font(.caption2.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.ink)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+      Text(ServerTripMapper.displayDate(companion.latestTripDate))
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(MoyeoTheme.muted)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: 92)
+    .background(MoyeoTheme.card)
+    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+        .stroke(MoyeoTheme.softLine, lineWidth: 1)
+    }
+    .accessibilityIdentifier("friendDex.server.\(companion.userId)")
+  }
+}
+
+/// 실서버 도감이 비어 있을 때의 상태 — 아직 함께 여행한 친구가 없다
+private struct ServerDogamEmptyView: View {
+  let hasAnyCompanion: Bool
+
+  var body: some View {
+    VStack(spacing: 6) {
+      Text(hasAnyCompanion ? "검색 결과가 없어요" : "아직 함께 여행한 친구가 없어요")
+        .font(.subheadline.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.ink)
+      Text(hasAnyCompanion ? "이름이나 필터를 바꿔 다시 찾아보세요." : "여행을 마치면 동행자가 도감에 기록돼요.")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MoyeoTheme.muted)
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: 112)
+    .background(MoyeoTheme.card)
+    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+        .stroke(MoyeoTheme.softLine, lineWidth: 1)
+    }
+    .accessibilityIdentifier("friendDex.server.empty")
   }
 }
 
@@ -1412,6 +1784,43 @@ private enum DogamFriendFilter: String, CaseIterable, Identifiable {
     case .recent:
       return friend.lastMetAt.contains("일 전")
     }
+  }
+
+  // MARK: 실서버 도감
+
+  func includesServer(_ companion: ServerTravelDexCompanion) -> Bool {
+    switch self {
+    case .all:
+      return true
+    case .repeated:
+      return companion.tripCount >= 2
+    case .recent:
+      return Self.isWithinRecentMonth(companion.latestTripDate)
+    }
+  }
+
+  /// 서버 도감의 필터 칩은 서버 데이터 기준으로 개수를 센다
+  func serverTitle(companions: [ServerTravelDexCompanion]) -> String {
+    let count = companions.filter { includesServer($0) }.count
+    switch self {
+    case .all:
+      return "전체 \(count)"
+    case .repeated:
+      return "2회 이상 \(count)"
+    case .recent:
+      return "최근 1개월 \(count)"
+    }
+  }
+
+  private static func isWithinRecentMonth(_ isoDate: String) -> Bool {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    guard let date = formatter.date(from: isoDate) else { return false }
+    guard let threshold = Calendar.current.date(byAdding: .month, value: -1, to: Date()) else {
+      return false
+    }
+    return date >= threshold
   }
 }
 
@@ -1576,7 +1985,13 @@ private struct SettingsView: View {
   @State private var deadlineEnabled = true
   @State private var friendEnabled = true
   @State private var marketingEnabled = false
+  /// 실서버 알림 설정 — 로그인 세션이 있고 설정 API가 성공했을 때만 켜진다
+  @State private var isServerSettingsLoaded = false
+  @State private var serverChatMode = "ALL"
+  @State private var serverDNDSettings: ServerNotificationSettings?
   @State private var selectedAction: SettingsMockAction?
+  /// 29 설정 › 화면 › 테마. 행을 탭하면 시스템 기본 → 라이트 → 다크 순으로 순환한다.
+  @ObservedObject private var themeStore = MoyeoThemeStore.shared
   @State private var isPerformingAccountAction = false
   @State private var accountErrorMessage: String?
   @State private var isShowingProviderManagement = false
@@ -1616,7 +2031,10 @@ private struct SettingsView: View {
             }
 
             SettingsSectionGroup("화면") {
-              SettingsValueRow(action: .theme) { selectedAction = $0 }
+              // 기획에 테마 선택 UI가 없어 시트·새 화면을 만들지 않고 행에서 순환한다
+              SettingsValueRow(action: .theme, valueOverride: themeRowValue) { _ in
+                advanceTheme()
+              }
               SettingsValueRow(action: .language) { selectedAction = $0 }
             }
             .id("settings.middle")
@@ -1640,6 +2058,10 @@ private struct SettingsView: View {
               SettingsValueRow(action: .version) { selectedAction = $0 }
               SettingsValueRow(action: .contact) { selectedAction = $0 }
               SettingsValueRow(action: .rate) { selectedAction = $0 }
+              // changeLog17 — `앱 평가하기` 다음, `로그아웃` 위
+              SettingsValueRow(action: .ossLicenses) { _ in
+                supportRoute = .ossLicenses
+              }
               SettingsDangerRow(action: .logout) { selectedAction = $0 }
               SettingsDangerRow(action: .deleteAccount) { _ in
                 supportRoute = .accountDelete
@@ -1690,7 +2112,58 @@ private struct SettingsView: View {
     .navigationDestination(item: $supportRoute) { route in
       SupportDestinationView(route: route, onAuthCompleted: onAuthenticationRequired)
     }
+    .task {
+      await loadServerNotificationSettings()
+    }
+    .onChange(of: chatEnabled) { _, _ in pushServerNotificationSettings() }
+    .onChange(of: deadlineEnabled) { _, _ in pushServerNotificationSettings() }
+    .onChange(of: friendEnabled) { _, _ in pushServerNotificationSettings() }
+    .onChange(of: marketingEnabled) { _, _ in pushServerNotificationSettings() }
     .accessibilityIdentifier("screen.settings")
+  }
+
+  /// 캡처 모드에서는 기획대로 `시스템 기본` 고정, 그 밖에는 저장된 사용자 설정을 보여준다
+  private var themeRowValue: String {
+    UITestPlanningMockData.isActive ? MoyeoThemeMode.system.rowValue : themeStore.mode.rowValue
+  }
+
+  private func advanceTheme() {
+    // 캡처는 강제 테마를 쓰므로 행을 눌러도 값이 흔들리지 않아야 한다
+    guard !UITestPlanningMockData.isActive else { return }
+    themeStore.advance()
+  }
+
+  /// 29-2 알림 설정 — 채팅 모드·3개 토글은 프로필 응답에, 방해 금지는 알림 설정 응답에 있다
+  private func loadServerNotificationSettings() async {
+    guard MoyeoServerSync.isEnabled, !isServerSettingsLoaded else { return }
+    guard let profile = try? await UserProfileAPIClient.shared.myProfile() else { return }
+    serverChatMode = profile.chatNotificationMode
+    chatEnabled = profile.chatNotificationMode != "NONE"
+    deadlineEnabled = profile.recruitmentDeadlineEnabled
+    friendEnabled = profile.socialActivityEnabled
+    marketingEnabled = profile.marketingEnabled
+    serverDNDSettings = try? await NotificationAPIClient.shared.settings()
+    isServerSettingsLoaded = true
+  }
+
+  private func pushServerNotificationSettings() {
+    guard isServerSettingsLoaded else { return }
+    let chatMode = chatEnabled ? (serverChatMode == "NONE" ? "ALL" : serverChatMode) : "NONE"
+    let update = ServerNotificationSettingsUpdate(
+      chatNotificationMode: chatMode,
+      recruitmentDeadlineEnabled: deadlineEnabled,
+      socialActivityEnabled: friendEnabled,
+      marketingEnabled: marketingEnabled,
+      doNotDisturbEnabled: serverDNDSettings?.doNotDisturbEnabled ?? false,
+      doNotDisturbStartTime: serverDNDSettings?.doNotDisturbStartTime,
+      doNotDisturbEndTime: serverDNDSettings?.doNotDisturbEndTime,
+      doNotDisturbDays: serverDNDSettings?.doNotDisturbDays ?? []
+    )
+    Task {
+      if let updated = try? await NotificationAPIClient.shared.updateSettings(update) {
+        serverDNDSettings = updated
+      }
+    }
   }
 
   private var accountErrorBinding: Binding<Bool> {
@@ -2067,6 +2540,8 @@ private struct SettingsToggleRow: View {
 
 private struct SettingsValueRow: View {
   let action: SettingsMockAction
+  /// 사용자 설정에 따라 바뀌는 값(테마)은 화면에서 넣어준다
+  var valueOverride: String?
   let onTap: (SettingsMockAction) -> Void
 
   var body: some View {
@@ -2078,7 +2553,7 @@ private struct SettingsValueRow: View {
           .font(.system(size: 14, weight: .heavy))
           .foregroundStyle(MoyeoTheme.ink)
         Spacer()
-        if let value = action.rowValue {
+        if let value = valueOverride ?? action.rowValue {
           Text(value)
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(MoyeoTheme.muted)
@@ -2157,6 +2632,8 @@ private enum SettingsMockAction: Identifiable {
   case version
   case contact
   case rate
+  /// changeLog17 — 29-4 오픈소스 라이선스로 이동하는 행
+  case ossLicenses
   case logout
   case deleteAccount
 
@@ -2184,6 +2661,8 @@ private enum SettingsMockAction: Identifiable {
       return "contact"
     case .rate:
       return "rate"
+    case .ossLicenses:
+      return "ossLicenses"
     case .logout:
       return "logout"
     case .deleteAccount:
@@ -2213,6 +2692,8 @@ private enum SettingsMockAction: Identifiable {
       return "문의하기"
     case .rate:
       return "앱 평가하기"
+    case .ossLicenses:
+      return "오픈소스 라이선스"
     case .logout:
       return "로그아웃"
     case .deleteAccount:
@@ -2225,7 +2706,8 @@ private enum SettingsMockAction: Identifiable {
     case .notificationDetail:
       return "방해금지 22:30~07:00"
     case .theme:
-      return "시스템 기본"
+      // 캡처 기본값. 실제 값은 SettingsView 가 사용자 설정으로 덮어쓴다.
+      return MoyeoThemeMode.system.rowValue
     case .language:
       return "한국어"
     case .loginMethod:
@@ -2233,7 +2715,8 @@ private enum SettingsMockAction: Identifiable {
     case .blockedUsers:
       return "2명"
     case .version:
-      return "1.0.4 (최신)"
+      // 최신 버전 조회 API가 없어 `(최신)` 판정은 붙이지 않는다. 캡처 모드만 기획값을 유지한다.
+      return AppVersionInfo.rowValue
     case .deleteAccount:
       return nil
     default:
@@ -2263,6 +2746,8 @@ private enum SettingsMockAction: Identifiable {
       return "문의하기"
     case .rate:
       return "앱 평가하기"
+    case .ossLicenses:
+      return "오픈소스 라이선스"
     case .logout:
       return "로그아웃 안내"
     case .deleteAccount:
@@ -2287,11 +2772,14 @@ private enum SettingsMockAction: Identifiable {
     case .terms:
       return "여행 모집, 채팅, 후기 이용 규칙을 확인하는 약관 화면이에요."
     case .version:
-      return "현재 설치된 버전은 1.0.4이며 최신 상태로 표시돼요."
+      return AppVersionInfo.dialogBody
     case .contact:
-      return "채팅, 모집, 결제 문의를 남기는 고객센터 진입 화면이에요."
+      return "채팅, 모집, 결제 문의를 남기는 고객센터로 이어져요."
     case .rate:
-      return "스토어 평가로 이동하기 전, 모여트립 사용 경험을 확인해요."
+      return "스토어 평가로 이동하기 전, 모여트립 사용 경험을 한 번 더 확인해요."
+    case .ossLicenses:
+      // 다이얼로그를 쓰지 않고 29-4로 이동하는 행이라 본문이 필요 없다
+      return ""
     case .logout:
       return "이 기기에서 로그아웃하고 로그인 화면으로 돌아갈까요?"
     case .deleteAccount:

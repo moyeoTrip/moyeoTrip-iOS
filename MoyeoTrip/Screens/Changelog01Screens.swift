@@ -1254,6 +1254,8 @@ struct NoticeHistoryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var notices: [TripNotice]
     @State private var showComposer = false
+    /// 실서버 공지 이력을 받았는지 — 받았으면 서버 공지만 그린다 (20-3)
+    @State private var usesServerNotices = false
 
     init(thread: ChatThread, onCreate: @escaping (ChatThread, TripNotice) -> Void = { _, _ in }) {
         self.thread = thread
@@ -1278,13 +1280,22 @@ struct NoticeHistoryView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    NoticeSectionTitle(title: "상단 고정 중")
-                    ForEach(notices.filter(\.isPinned)) { notice in
-                        NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
-                    }
-                    NoticeSectionTitle(title: "지난 공지")
-                    ForEach(notices.filter { !$0.isPinned }) { notice in
-                        NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                    if usesServerNotices, notices.isEmpty {
+                        Text("아직 등록된 공지가 없어요.")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.muted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 34)
+                            .accessibilityIdentifier("noticeHistory.server.empty")
+                    } else {
+                        NoticeSectionTitle(title: "상단 고정 중")
+                        ForEach(notices.filter(\.isPinned)) { notice in
+                            NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                        }
+                        NoticeSectionTitle(title: "지난 공지")
+                        ForEach(notices.filter { !$0.isPinned }) { notice in
+                            NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                        }
                     }
 
                     Text("공지는 호스트만 올릴 수 있고, 고정은 최대 3개까지예요. 고정을 해제해도 이력에는 그대로 남아요.")
@@ -1315,6 +1326,12 @@ struct NoticeHistoryView: View {
             Button("취소", role: .cancel) {}
         } message: { Text("집합 장소나 준비물 변경을 모든 멤버에게 알려요.") }
         .background(MoyeoTheme.background.ignoresSafeArea())
+        .task {
+            guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, !usesServerNotices else { return }
+            guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else { return }
+            notices = history.allNotices.map(ServerTripMapper.notice(from:))
+            usesServerNotices = true
+        }
         .accessibilityIdentifier("screen.noticeHistory")
     }
 
@@ -1437,7 +1454,8 @@ private struct NoticeCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             HStack(spacing: 6) {
-                Text("숲속여행자 (호스트)")
+                // 서버 공지는 작성자 닉네임을 함께 준다
+                Text(notice.authorName.isEmpty ? "숲속여행자 (호스트)" : notice.authorName)
                 Text("·")
                 Text(notice.createdAt).monospacedDigit()
                 Spacer(minLength: 0)

@@ -28,13 +28,31 @@ private struct ChatThreadRow: View {
 
   var body: some View {
     HStack(alignment: .center, spacing: 12) {
-      MoyeoPhotoTile(
-        mascot: thread.mascot,
-        mood: thread.mood,
-        height: 56,
-        cornerRadius: 16
-      )
-      .frame(width: 56)
+      if let thumbnailURL = thread.thumbnailURL {
+        // 실서버 모임 — 서버가 준 대표 썸네일을 그린다
+        CachedRemoteImage(url: thumbnailURL) { image in
+          image
+            .resizable()
+            .scaledToFill()
+        } placeholder: {
+          MoyeoTheme.leaf
+        }
+        .frame(width: 56, height: 56)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      } else if thread.isServerBacked {
+        // 서버가 썸네일을 주지 않은 모임 — 목데이터 마스코트를 지어내지 않는다
+        MoyeoTheme.leaf
+          .frame(width: 56, height: 56)
+          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      } else {
+        MoyeoPhotoTile(
+          mascot: thread.mascot,
+          mood: thread.mood,
+          height: 56,
+          cornerRadius: 16
+        )
+        .frame(width: 56)
+      }
 
       VStack(alignment: .leading, spacing: 3) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -156,7 +174,19 @@ struct ChatRoomView: View {
       Text(toolbarMessage ?? "")
     }
     .navigationDestination(item: $supportRoute) { route in
-      SupportDestinationView(route: route)
+      // 서버 모임은 목데이터 스레드로 되돌아가지 않도록 이 스레드를 그대로 넘긴다
+      if thread.isServerBacked {
+        switch route {
+        case .chatMenu:
+          ChatSideMenuView(thread: thread)
+        case .noticeHistory:
+          NoticeHistoryView(thread: thread)
+        default:
+          SupportDestinationView(route: route)
+        }
+      } else {
+        SupportDestinationView(route: route)
+      }
     }
   }
 }
@@ -171,6 +201,8 @@ struct ChatRoomBody: View {
   @State private var messages: [ChatMessage]
   @State private var draft = ""
   @State private var pendingMessageIDs: Set<String>
+  /// 참여 중인 서버 방의 읽기 응답 — 403이거나 미로그인이면 nil로 남고 목데이터가 유지된다
+  @State private var serverContent: ServerChatRoomContent?
 
   init(
     thread: ChatThread,
@@ -188,89 +220,107 @@ struct ChatRoomBody: View {
     _pendingMessageIDs = State(initialValue: Set(pending.map(\.id)))
   }
 
+  /// 서버 읽기 응답을 받았으면 그것을 얹은 스레드로 그린다 (20)
+  private var displayThread: ChatThread {
+    guard let serverContent else { return thread }
+    return ServerTripMapper.chatThread(thread, applying: serverContent)
+  }
+
+  /// 메시지 응답에는 프로필 이미지가 없다 — 동행자 목록의 닉네임으로 붙인다
+  private var avatarURLsByNickname: [String: URL] {
+    guard let serverContent else { return [:] }
+    var result: [String: URL] = [:]
+    for member in serverContent.memberList.members {
+      if let url = member.profileImageURL {
+        result[member.nickname] = url
+      }
+    }
+    return result
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      ChatRoomStatusHeader(thread: thread)
+      ChatRoomStatusHeader(thread: displayThread)
 
       if isOffline {
         OfflineChatBanner()
       }
 
-      // 화면기획 20 고정 공지 바 — 공지 제목 + "공지 4개 · 고정 2 · 이력 보기"
-      Button {
-        onOpenRoute(.noticeHistory(thread.id))
-      } label: {
-        HStack(spacing: 9) {
-          Image(systemName: "pin.fill")
-          VStack(alignment: .leading, spacing: 2) {
-            Text(thread.pinnedNotices.first?.title ?? "07:50 청송 시외버스터미널 정문 앞 집합")
-              .lineLimit(1)
-            Text(noticeSummaryText)
-              .font(.caption2)
-              .foregroundStyle(MoyeoTheme.muted)
-          }
-          Spacer()
-          Image(systemName: "chevron.right")
-        }
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-        .padding(.horizontal, 16)
-        .frame(height: 52)
-        .background(MoyeoTheme.leaf)
+      if let roadmap = serverContent?.roadmap, roadmap.active {
+        // 여행 당일에만 서버가 로드맵을 활성으로 준다
+        ServerRoadmapBar(roadmap: roadmap)
       }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("chat.pinnedNotice")
+
+      // 화면기획 20 고정 공지 바 — 공지 제목 + "공지 4개 · 고정 2 · 이력 보기"
+      // 서버 모임에 공지가 없으면 지어내지 않고 바를 감춘다
+      if let noticeTitle = pinnedNoticeTitle {
+        Button {
+          onOpenRoute(.noticeHistory(thread.id))
+        } label: {
+          HStack(spacing: 9) {
+            Image(systemName: "pin.fill")
+            VStack(alignment: .leading, spacing: 2) {
+              Text(noticeTitle)
+                .lineLimit(1)
+              Text(noticeSummaryText)
+                .font(.caption2)
+                .foregroundStyle(MoyeoTheme.muted)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+          }
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+          .padding(.horizontal, 16)
+          .frame(height: 52)
+          .background(MoyeoTheme.leaf)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.pinnedNotice")
+      }
 
       // 화면기획 20 코스 바 — 코스 이름 + "방문지 4곳 · 호스트 직접 코스" + 경로 수정 버튼
-      Button {
-        let tripID =
-          thread.tripID ?? MockData.trips.first { $0.title == thread.tripTitle }?.id
-          ?? MockData.trips[0].id
-        let state: RouteEditState =
-          thread.statusSummary.contains("확정")
-          ? .tripConfirmed : (thread.courseSource == .custom ? .editable : .linkedLocked)
-        onOpenRoute(.courseEdit(tripID, state))
-      } label: {
-        HStack(spacing: 9) {
-          Image(systemName: "map.fill")
-          VStack(alignment: .leading, spacing: 2) {
-            Text(thread.courseDisplayName)
-            Text("방문지 \(thread.routeSummary.count)곳 · \(thread.courseSource.title)")
-              .font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
-          }
-          Spacer()
-          Text("경로 수정")
-            .font(.caption2.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.brandText)
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .overlay(Capsule().stroke(MoyeoTheme.forest.opacity(0.6)))
+      // 서버 모임의 경로 수정(PUT)은 연동 대상이 아니라 서버 모임에서는 정보만 보여준다
+      if thread.isServerBacked {
+        if !displayThread.courseDisplayName.isEmpty {
+          serverCourseBar
         }
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-        .padding(.horizontal, 16)
-        .frame(height: 52)
-        .background(MoyeoTheme.card)
+      } else {
+        Button {
+          let tripID =
+            thread.tripID ?? MockData.trips.first { $0.title == thread.tripTitle }?.id
+            ?? MockData.trips[0].id
+          let state: RouteEditState =
+            thread.statusSummary.contains("확정")
+            ? .tripConfirmed : (thread.courseSource == .custom ? .editable : .linkedLocked)
+          onOpenRoute(.courseEdit(tripID, state))
+        } label: {
+          courseBarLabel(showsEditButton: true)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.routeSummary")
       }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("chat.routeSummary")
 
       ScrollView {
         VStack(spacing: 14) {
-          if thread.isReadOnly {
-            ChatArchiveNotice(thread: thread)
+          if displayThread.isReadOnly {
+            ChatArchiveNotice(thread: displayThread)
           }
 
           ForEach(messages) { message in
-            MessageBubble(message: message, isPending: pendingMessageIDs.contains(message.id))
+            MessageBubble(
+              message: message,
+              isPending: pendingMessageIDs.contains(message.id),
+              avatarURL: avatarURLsByNickname[message.senderName]
+            )
           }
         }
         .padding(20)
       }
 
-      if thread.isReadOnly {
+      if displayThread.isReadOnly {
         VStack(spacing: 4) {
-          Text(thread.archiveStatus ?? "읽기 전용 보관")
+          Text(displayThread.archiveStatus ?? "읽기 전용 보관")
             .font(.caption.weight(.heavy))
             .foregroundStyle(MoyeoTheme.forest)
           Text("종료된 모임이라 새 메시지를 보낼 수 없어요.")
@@ -301,15 +351,68 @@ struct ChatRoomBody: View {
         flushPendingMessages()
       }
     }
+    .task {
+      guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, serverContent == nil else { return }
+      guard let content = await ChatRoomContentAPIClient.shared.content(roomID: roomID) else { return }
+      serverContent = content
+      applyServerMessages(content)
+    }
+  }
+
+  private var serverCourseBar: some View {
+    courseBarLabel(showsEditButton: false)
+      .accessibilityIdentifier("chat.routeSummary")
+  }
+
+  private func courseBarLabel(showsEditButton: Bool) -> some View {
+    HStack(spacing: 9) {
+      Image(systemName: "map.fill")
+      VStack(alignment: .leading, spacing: 2) {
+        Text(displayThread.courseDisplayName)
+        Text("방문지 \(displayThread.routeSummary.count)곳 · \(displayThread.courseSource.title)")
+          .font(.caption2).foregroundStyle(MoyeoTheme.muted).lineLimit(1)
+      }
+      Spacer()
+      if showsEditButton {
+        Text("경로 수정")
+          .font(.caption2.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.brandText)
+          .padding(.horizontal, 10)
+          .frame(height: 28)
+          .overlay(Capsule().stroke(MoyeoTheme.forest.opacity(0.6)))
+      }
+    }
+    .font(.caption.weight(.heavy))
+    .foregroundStyle(MoyeoTheme.ink)
+    .padding(.horizontal, 16)
+    .frame(height: 52)
+    .background(MoyeoTheme.card)
+  }
+
+  /// 서버 모임은 공지가 없으면 바를 감춘다. 목데이터 스레드는 기존 기준 문구를 유지한다.
+  private var pinnedNoticeTitle: String? {
+    if let title = displayThread.pinnedNotices.first?.title, !title.isEmpty {
+      return title
+    }
+    return thread.isServerBacked ? nil : "07:50 청송 시외버스터미널 정문 앞 집합"
   }
 
   /// 고정 공지 바 두 번째 줄 — 공지·고정 수는 스레드에 공지가 있으면 그 수를,
   /// 없으면 화면기획 20의 기준 값(공지 4 · 고정 2)을 쓴다.
   private var noticeSummaryText: String {
-    let total = thread.pinnedNotices.count
-    guard total > 0 else { return "공지 4개 · 고정 2 · 이력 보기" }
-    let pinned = thread.pinnedNotices.filter(\.isPinned).count
-    return "공지 \(total)개 · 고정 \(pinned) · 이력 보기"
+    let notices = displayThread.pinnedNotices
+    guard !notices.isEmpty else { return "공지 4개 · 고정 2 · 이력 보기" }
+    let pinned = notices.filter(\.isPinned).count
+    return "공지 \(notices.count)개 · 고정 \(pinned) · 이력 보기"
+  }
+
+  private func applyServerMessages(_ content: ServerChatRoomContent) {
+    let serverMessages = content.messages.map {
+      ServerTripMapper.chatMessage(from: $0, currentUserID: content.memberList.currentUserID)
+    }
+    let existingIDs = Set(serverMessages.map(\.id))
+    let pending = OfflineChatQueue.messages(for: thread.id)
+    messages = serverMessages + pending.filter { !existingIDs.contains($0.id) }.map(\.message)
   }
 
   private func sendMessage() {
@@ -349,6 +452,49 @@ struct ChatRoomBody: View {
     let sentIDs = Set(pending.map(\.id))
     pendingMessageIDs.subtract(sentIDs)
     OfflineChatQueue.remove(ids: sentIDs)
+  }
+}
+
+/// 화면기획 20 — 여행 당일 로드맵 진행 바. 서버가 active로 줄 때만 그린다.
+private struct ServerRoadmapBar: View {
+  let roadmap: ServerCurrentRoadmap
+
+  var body: some View {
+    HStack(spacing: 9) {
+      Image(systemName: "mappin.and.ellipse")
+      VStack(alignment: .leading, spacing: 2) {
+        Text(headline)
+          .lineLimit(1)
+        if let next = roadmap.nextPlace {
+          Text("다음 \(next.title)")
+            .font(.caption2)
+            .foregroundStyle(MoyeoTheme.muted)
+            .lineLimit(1)
+        }
+      }
+      Spacer()
+    }
+    .font(.caption.weight(.heavy))
+    .foregroundStyle(MoyeoTheme.forest)
+    .padding(.horizontal, 16)
+    .frame(height: 52)
+    .background(MoyeoTheme.leaf)
+    .accessibilityIdentifier("chat.roadmap")
+  }
+
+  private var headline: String {
+    let completed = roadmap.places.filter(\.isCompleted).count
+    var parts: [String] = []
+    if let dayNumber = roadmap.dayNumber {
+      parts.append("\(dayNumber)/\(roadmap.totalDays)일차")
+    }
+    if !roadmap.places.isEmpty {
+      parts.append("방문지 \(completed)/\(roadmap.places.count)")
+    }
+    if let current = roadmap.currentPlace {
+      parts.append(current.title)
+    }
+    return parts.joined(separator: " · ")
   }
 }
 
@@ -424,6 +570,7 @@ private struct ChatRoomStatusHeader: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 6) {
+          // 서버가 주지 않은 조건은 빈 문자열로 와 칩을 그리지 않는다
           conditionPill("wonsign.circle", thread.priceDisplayText)
           conditionPill("person.2", thread.ageRangeDisplayText)
           conditionPill("person.crop.circle", thread.genderDisplayText)
@@ -448,15 +595,18 @@ private struct ChatRoomStatusHeader: View {
     )
   }
 
+  @ViewBuilder
   private func conditionPill(_ icon: String, _ title: String) -> some View {
-    Label(title, systemImage: icon)
-      .font(.caption2.weight(.heavy))
-      .foregroundStyle(MoyeoTheme.text700)
-      .padding(.horizontal, 9)
-      .frame(height: 26)
-      .background(MoyeoTheme.subtleBackground)
-      .overlay(Capsule().stroke(MoyeoTheme.softLine))
-      .clipShape(Capsule())
+    if !title.isEmpty {
+      Label(title, systemImage: icon)
+        .font(.caption2.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.text700)
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(MoyeoTheme.subtleBackground)
+        .overlay(Capsule().stroke(MoyeoTheme.softLine))
+        .clipShape(Capsule())
+    }
   }
 }
 
@@ -466,12 +616,22 @@ extension ChatThread {
     if let tripID, let trip = MockData.trip(for: tripID), let course = MockData.course(for: trip.courseID) {
       return course.title
     }
-    return "코스 정보"
+    // 서버 모임은 코스 이름을 못 받았으면 비워 둔다 — 자리 채우기 문구를 쓰지 않는다
+    return isServerBacked ? "" : "코스 정보"
   }
 
-  var priceDisplayText: String { price.isEmpty ? "비용 협의" : price }
-  var ageRangeDisplayText: String { ageRange.isEmpty ? "20~100세" : ageRange }
-  var genderDisplayText: String { genderRestriction.isEmpty ? "성별 무관" : genderRestriction }
+  /// 서버가 값을 주지 않은 조건은 빈 문자열로 남긴다 — 서버 모임에서는 그 칩을 숨긴다
+  var priceDisplayText: String {
+    price.isEmpty ? (isServerBacked ? "" : "비용 협의") : price
+  }
+
+  var ageRangeDisplayText: String {
+    ageRange.isEmpty ? (isServerBacked ? "" : "20~100세") : ageRange
+  }
+
+  var genderDisplayText: String {
+    genderRestriction.isEmpty ? (isServerBacked ? "" : "성별 무관") : genderRestriction
+  }
 
   var chatStatusLine: String {
     chatStatusDeadline.isEmpty ? chatStatusLinePrefix : "\(chatStatusLinePrefix) · \(chatStatusDeadline)"
@@ -495,6 +655,8 @@ extension ChatThread {
 struct MessageBubble: View {
   let message: ChatMessage
   var isPending = false
+  /// 서버 메시지의 발신자 프로필 이미지 — 동행자 목록에서 붙인다
+  var avatarURL: URL?
 
   var body: some View {
     if message.kind == .routeChanged {
@@ -533,6 +695,16 @@ struct MessageBubble: View {
       HStack(alignment: .bottom, spacing: 8) {
         if message.isMine {
           Spacer(minLength: 42)
+        } else if let avatarURL {
+          CachedRemoteImage(url: avatarURL) { image in
+            image
+              .resizable()
+              .scaledToFill()
+          } placeholder: {
+            MoyeoTheme.leaf
+          }
+          .frame(width: 32, height: 32)
+          .clipShape(Circle())
         } else {
           MascotAvatar(mascot: message.avatar, size: 32, background: MoyeoTheme.leaf)
         }

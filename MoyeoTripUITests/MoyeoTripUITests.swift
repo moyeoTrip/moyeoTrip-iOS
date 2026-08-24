@@ -780,8 +780,9 @@ final class MoyeoTripUITests: XCTestCase {
         relaunch(startTab: "my")
         tapButton("설정", timeout: 5)
 
-        tapElement("settings.action.theme")
-        XCTAssertTrue(app.staticTexts["테마 설정"].waitForExistence(timeout: 3))
+        // 테마 행은 다이얼로그 대신 값을 순환한다(changeLog 클라이언트 기능 구현). 언어 행이 남은 안내 다이얼로그다.
+        tapElement("settings.action.language")
+        XCTAssertTrue(app.staticTexts["언어 설정"].waitForExistence(timeout: 3))
         tapButton("닫기")
 
         let logoutAction = element("settings.action.logout")

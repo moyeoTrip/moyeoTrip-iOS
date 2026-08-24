@@ -3,6 +3,8 @@
 //  MoyeoTrip
 //
 
+// 실서버 피드 연동 상태가 더해져 길어졌다 — 기존 화면 파일들과 같은 예외를 둔다.
+// swiftlint:disable file_length
 import SwiftUI
 
 private enum FeedSegment: String, CaseIterable, Hashable {
@@ -30,6 +32,8 @@ struct FeedView: View {
   @State private var segment: FeedSegment = .discover
   @State private var isWritingPost = false
   @State private var selectedPost: FeedPost?
+  /// 실서버 피드 — 로그인 세션이 있고 피드 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  @State private var serverPosts: [FeedPost]?
 
   init(
     feedPosts: Binding<[FeedPost]>,
@@ -49,6 +53,9 @@ struct FeedView: View {
   }
 
   private var filteredPosts: [FeedPost] {
+    if let serverPosts {
+      return serverPosts
+    }
     switch segment {
     case .following:
       return feedPosts.filter { $0.visibility == .friendsOnly }
@@ -95,6 +102,23 @@ struct FeedView: View {
       ScrollViewReader { proxy in
         ScrollView {
           VStack(spacing: 0) {
+            if let serverPosts, serverPosts.isEmpty {
+              // 실서버 피드가 비어 있을 때의 상태 UI
+              VStack(spacing: 8) {
+                Image(systemName: "doc.text.image")
+                  .font(.title3.weight(.bold))
+                  .foregroundStyle(MoyeoTheme.forest)
+                Text(segment == .following ? "친구의 피드가 아직 없어요" : "아직 올라온 피드가 없어요")
+                  .font(.subheadline.weight(.heavy))
+                  .foregroundStyle(MoyeoTheme.ink)
+                Text("여행을 마치면 피드로 기록을 남길 수 있어요.")
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(MoyeoTheme.muted)
+              }
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 64)
+              .accessibilityIdentifier("feed.server.empty")
+            }
             ForEach(Array(filteredPosts.enumerated()), id: \.element.id) { index, post in
               FeedPostCard(
                 post: post,
@@ -164,6 +188,12 @@ struct FeedView: View {
         isBottomNavigationSuppressed = false
       }
     }
+    .task(id: segment) {
+      guard MoyeoServerSync.isEnabled else { return }
+      let tab = segment == .following ? "FRIENDS" : "DISCOVER"
+      guard let page = try? await FeedAPIClient.shared.feeds(tab: tab) else { return }
+      serverPosts = page.feeds.map(ServerFeedMapper.post(from:))
+    }
     .accessibilityIdentifier("screen.feed")
   }
 
@@ -191,9 +221,20 @@ struct FeedDetailView: View {
   @State private var submittedComments: [String] = []
   @State private var optionMessage: String?
   @State private var supportRoute: SupportRoute?
+  /// 실서버 피드의 좋아요 토글 상태 (nil이면 서버 값 그대로)
+  @State private var likeOverride: (liked: Bool, count: Int)?
+  @State private var isSendingComment = false
 
   private var totalCommentCount: Int {
     post.commentCount + submittedComments.count
+  }
+
+  private var displayLikeCount: Int {
+    likeOverride?.count ?? post.likeCount
+  }
+
+  private var displayLiked: Bool {
+    likeOverride?.liked ?? post.serverLiked
   }
 
   var body: some View {
@@ -201,7 +242,7 @@ struct FeedDetailView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           HStack(spacing: 12) {
-            MascotAvatar(mascot: post.authorAvatar, size: 44, background: MoyeoTheme.leaf)
+            FeedAuthorAvatar(post: post, size: 44)
             VStack(alignment: .leading, spacing: 5) {
               Text(post.displayAuthorName)
                 .font(.system(size: 15, weight: .heavy))
@@ -259,20 +300,43 @@ struct FeedDetailView: View {
             .foregroundStyle(MoyeoTheme.ink)
             .fixedSize(horizontal: false, vertical: true)
 
+          // 서버 피드는 이동 거리·소요 시간을 내려주지 않는다 — 값이 있는 칸만 그린다
           HStack(spacing: 8) {
-            FeedMetricBox(title: "이동 거리", value: post.distanceText)
-            FeedMetricBox(title: "소요 시간", value: post.durationText)
-            FeedMetricBox(title: "방문지", value: post.visitCountText)
+            if !post.distanceText.isEmpty {
+              FeedMetricBox(title: "이동 거리", value: post.distanceText)
+            }
+            if !post.durationText.isEmpty {
+              FeedMetricBox(title: "소요 시간", value: post.durationText)
+            }
+            if !post.visitCountText.isEmpty {
+              FeedMetricBox(title: "방문지", value: post.visitCountText)
+            }
           }
 
           HStack(spacing: 18) {
-            Text("좋아요 \(post.likeCount)개")
-            Button("댓글 \(totalCommentCount)개 모두 보기 →") {
-              supportRoute = .feedComments(post.id)
+            if post.isServerBacked {
+              Button {
+                toggleServerLike()
+              } label: {
+                Label("좋아요 \(displayLikeCount)개", systemImage: displayLiked ? "heart.fill" : "heart")
+                  .foregroundStyle(displayLiked ? MoyeoTheme.coral : MoyeoTheme.text700)
+              }
+              .buttonStyle(.plain)
+              .accessibilityIdentifier("feed.detail.like")
+            } else {
+              Text("좋아요 \(post.likeCount)개")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(MoyeoTheme.forest)
-            .accessibilityIdentifier("feed.comments.openAll")
+            if post.isServerBacked {
+              // 서버 댓글 목록 화면은 아직 연동 전 — 목데이터 댓글 화면으로 잘못 이동하지 않게 개수만 보여준다
+              Text("댓글 \(totalCommentCount)개")
+            } else {
+              Button("댓글 \(totalCommentCount)개 모두 보기 →") {
+                supportRoute = .feedComments(post.id)
+              }
+              .buttonStyle(.plain)
+              .foregroundStyle(MoyeoTheme.forest)
+              .accessibilityIdentifier("feed.comments.openAll")
+            }
           }
           .font(.caption.weight(.semibold))
           .foregroundStyle(MoyeoTheme.text700)
@@ -316,10 +380,27 @@ struct FeedDetailView: View {
           }
         Button {
           let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !trimmed.isEmpty else { return }
-          submittedComments.append(trimmed)
-          onCommentSubmitted()
-          comment = ""
+          guard !trimmed.isEmpty, !isSendingComment else { return }
+          if let feedID = post.serverFeedID, MoyeoServerSync.isEnabled {
+            // 실서버 피드 — 댓글을 서버에 등록한다
+            isSendingComment = true
+            Task {
+              do {
+                try await FeedAPIClient.shared.postComment(feedID: feedID, content: trimmed)
+                submittedComments.append(trimmed)
+                onCommentSubmitted()
+                comment = ""
+              } catch {
+                optionMessage = (error as? LocalizedError)?.errorDescription
+                  ?? "댓글을 등록하지 못했어요. 잠시 후 다시 시도해주세요."
+              }
+              isSendingComment = false
+            }
+          } else {
+            submittedComments.append(trimmed)
+            onCommentSubmitted()
+            comment = ""
+          }
         } label: {
           Image(systemName: "paperplane.fill")
             .font(.subheadline.bold())
@@ -369,6 +450,21 @@ struct FeedDetailView: View {
       }
     )
   }
+
+  /// 실서버 피드 좋아요 토글 (POST /feeds/{id}/like)
+  private func toggleServerLike() {
+    guard let feedID = post.serverFeedID, MoyeoServerSync.isEnabled else { return }
+    Task {
+      do {
+        try await FeedAPIClient.shared.toggleLike(feedID: feedID)
+        let liked = !displayLiked
+        likeOverride = (liked, max(displayLikeCount + (liked ? 1 : -1), 0))
+      } catch {
+        optionMessage = (error as? LocalizedError)?.errorDescription
+          ?? "좋아요를 처리하지 못했어요. 잠시 후 다시 시도해주세요."
+      }
+    }
+  }
 }
 
 private struct FeedVisibilityBadge: View {
@@ -397,7 +493,7 @@ private struct FeedPostCard: View {
       Button(action: onOpenPost) {
         VStack(alignment: .leading, spacing: 0) {
           HStack(spacing: 9) {
-            MascotAvatar(mascot: post.authorAvatar, size: 34, background: MoyeoTheme.leaf)
+            FeedAuthorAvatar(post: post, size: 34)
             VStack(alignment: .leading, spacing: 2) {
               Text(post.displayAuthorName)
                 .font(MoyeoTypography.font(size: 12, weight: .bold, relativeTo: .subheadline))

@@ -5,7 +5,11 @@ struct SearchView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query: String
     @State private var submittedQuery = ""
-    @State private var recentSearches = ["경주", "단풍", "황리단길", "안동 한옥", "주왕산"]
+    /// 최근 검색어 — 서버 API가 없어 `UserDefaults` 에 영구 저장한다 (캡처 모드는 기획 목데이터 고정)
+    @StateObject private var recentSearchModel = RecentSearchModel.forCurrentRuntime()
+    /// 실서버 검색 결과 — 로그인 세션이 있고 검색 API가 성공했을 때만 채워진다 (nil = 목데이터)
+    @State private var serverResults: [ServerChatRoomSummary]?
+    @State private var selectedServerTrip: TripRecruitment?
 
     private let popularSearches = [
         PopularSearch(rank: 1, keyword: "주왕산", isRising: true),
@@ -26,6 +30,14 @@ struct SearchView: View {
         submittedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 칩은 한 줄에 4개까지 — 기획 캡처(5개 = 4 + 1)와 같은 줄바꿈을 유지한다
+    private var recentSearchChunks: [[String]] {
+        let searches = recentSearchModel.searches
+        return stride(from: 0, to: searches.count, by: 4).map { start in
+            Array(searches[start..<min(start + 4, searches.count)])
+        }
+    }
+
     private var results: [TravelCourse] {
         guard !trimmedQuery.isEmpty else { return [] }
         return MockData.courses.filter { course in
@@ -43,6 +55,16 @@ struct SearchView: View {
                 LazyVStack(spacing: 16) {
                     if submittedQuery.isEmpty {
                         discoveryContent
+                    } else if let serverResults {
+                        // 실서버 검색 결과 — 서버가 준 모임만 그린다
+                        if serverResults.isEmpty {
+                            SearchNoResultsView(query: trimmedQuery) {
+                                query = ""
+                                submittedQuery = ""
+                            }
+                        } else {
+                            serverSearchResults(serverResults)
+                        }
                     } else if results.isEmpty {
                         SearchNoResultsView(query: trimmedQuery) {
                             query = ""
@@ -62,7 +84,40 @@ struct SearchView: View {
         .navigationDestination(for: TravelCourse.self) { course in
             CourseDetailView(course: course, tripContext: tripContext)
         }
+        .navigationDestination(item: $selectedServerTrip) { trip in
+            TripDetailView(
+                trip: trip,
+                isApplied: tripContext.isApplied(trip),
+                threadProvider: tripContext.chatThreadProvider,
+                onApplied: tripContext.onApplyTrip,
+                onSendChatMessage: tripContext.onSendChatMessage
+            )
+        }
+        .task(id: submittedQuery) {
+            await loadServerResults()
+        }
         .accessibilityIdentifier("screen.search")
+    }
+
+    private func loadServerResults() async {
+        guard MoyeoServerSync.isEnabled, !trimmedQuery.isEmpty else {
+            serverResults = nil
+            return
+        }
+        serverResults = try? await ChatRoomAPIClient.shared.search(keyword: trimmedQuery)
+    }
+
+    private func serverSearchResults(_ rooms: [ServerChatRoomSummary]) -> some View {
+        ForEach(rooms) { room in
+            Button {
+                selectedServerTrip = ServerTripMapper.trip(from: room)
+            } label: {
+                ServerRoomSearchResultRow(room: room)
+                    .moyeoCard()
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("search.serverRoom.\(room.roomId)")
+        }
     }
 
     private var searchHeader: some View {
@@ -100,24 +155,30 @@ struct SearchView: View {
 
     @ViewBuilder
     private var discoveryContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("최근 검색어")
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                Spacer()
-                Button("전체 삭제") {
-                    recentSearches.removeAll()
+        // 비어 있으면 섹션 전체(제목 · 전체 삭제 · 칩)를 숨긴다 — 기획에 빈 상태 문구가 없다
+        if !recentSearchModel.searches.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("최근 검색어")
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Spacer()
+                    Button("전체 삭제") {
+                        recentSearchModel.clear()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("search.recent.clearAll")
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.muted)
-                .buttonStyle(.plain)
-            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                recentSearchRow(Array(recentSearches.prefix(4)))
-                recentSearchRow(Array(recentSearches.dropFirst(4)))
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(recentSearchChunks, id: \.first) { chunk in
+                        recentSearchRow(chunk)
+                    }
+                }
             }
+            .accessibilityIdentifier("search.recent.section")
         }
 
         VStack(alignment: .leading, spacing: 4) {
@@ -128,8 +189,7 @@ struct SearchView: View {
 
             ForEach(popularSearches) { item in
                 Button {
-                    query = item.keyword
-                    submittedQuery = item.keyword
+                    runSearch(item.keyword)
                 } label: {
                     HStack(spacing: 16) {
                         Text("\(item.rank)")
@@ -169,13 +229,14 @@ struct SearchView: View {
             ForEach(searches, id: \.self) { keyword in
                 HStack(spacing: 5) {
                     Button(keyword) {
-                        query = keyword
-                        submittedQuery = keyword
+                        runSearch(keyword)
                     }
                     .buttonStyle(.plain)
+                    // 사용자가 직접 입력한 긴 검색어가 캡슐 밖으로 줄바꿈되지 않게 한다
+                    .lineLimit(1)
 
                     Button {
-                        recentSearches.removeAll { $0 == keyword }
+                        recentSearchModel.remove(keyword)
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
@@ -196,7 +257,61 @@ struct SearchView: View {
     }
 
     private func submitSearch() {
-        submittedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        runSearch(query)
+    }
+
+    /// 검색 실행 — 입력창을 채우고 결과를 그리고, 최근 검색어에 기록한다
+    private func runSearch(_ keyword: String) {
+        let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        query = keyword
+        submittedQuery = trimmed
+        recentSearchModel.record(trimmed)
+    }
+}
+
+/// 실서버 검색 결과 행 — 서버가 내려준 값만 그린다
+private struct ServerRoomSearchResultRow: View {
+    let room: ServerChatRoomSummary
+
+    private var scheduleLine: String {
+        let schedule = ServerTripMapper.scheduleText(startDate: room.startDate, endDate: room.endDate)
+        return "\(schedule) · \(room.participantCount)/\(room.maxParticipants)명"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            CachedRemoteImage(url: room.thumbnailURL) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                MoyeoTheme.leaf
+            }
+            .frame(width: 72, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(room.title)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .lineLimit(1)
+                Text(
+                    ([room.courseTitle] + room.tagNames.prefix(2))
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " · ")
+                )
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.muted)
+                .lineLimit(1)
+                Text(scheduleLine)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.text700)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.text400)
+        }
     }
 }
 

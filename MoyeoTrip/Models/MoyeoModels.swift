@@ -116,6 +116,8 @@ struct TripNotice: Identifiable, Hashable {
     var body: String
     var createdAt: String
     var isPinned: Bool
+    /// 서버 공지의 작성자 닉네임 — 서버 공지일 때만 채워진다
+    var authorName: String = ""
 }
 
 enum ChatMessageKind: String, Hashable {
@@ -138,6 +140,15 @@ struct TravelCourse: Identifiable, Hashable {
     var source: CourseSource = .linked
     var itinerary: [ItineraryStop] = []
     var publishingInfo: CoursePublishingInfo?
+    /// 실서버 코스 연동 필드 — 서버 코스일 때만 채워진다
+    var thumbnailURL: URL?
+    var serverCourseID: Int64?
+    var serverAverageRating: Double?
+    var serverRatingCount: Int64?
+
+    var isServerBacked: Bool {
+        serverCourseID != nil
+    }
 
     var status: CourseStatus {
         switch parsedDistance {
@@ -191,6 +202,16 @@ struct TripRecruitment: Identifiable, Hashable {
     var routeEditState: RouteEditState = .linkedLocked
     var notices: [TripNotice] = []
     var applicationState: RecruitmentApplicationState = .none
+    /// 실서버 모임 연동 필드 — 서버 모임일 때만 채워진다.
+    /// 서버가 내려주지 않는 값(호스트 닉네임·매너 점수·최소 인원 등)은 화면에서 숨긴다.
+    var serverRoomID: Int64?
+    var heroImageURL: URL?
+    var hostProfileImageURL: URL?
+    var serverCourseTitle: String?
+
+    var isServerBacked: Bool {
+        serverRoomID != nil
+    }
 
     var remainingSeats: Int {
         max(capacity - joined, 0)
@@ -269,9 +290,9 @@ struct ChatThread: Identifiable, Hashable {
     let lastMessage: String
     let updatedAt: String
     let unreadCount: Int
-    let statusSummary: String
+    var statusSummary: String
     let statusDetail: String
-    let members: [Participant]
+    var members: [Participant]
     var messages: [ChatMessage]
     let isReadOnly: Bool
     var closureReason: String?
@@ -288,6 +309,15 @@ struct ChatThread: Identifiable, Hashable {
     var ageRange: String = ""
     var genderRestriction: String = ""
     var scheduleSummary: String = ""
+    /// 실서버 채팅방 연동 필드 — 서버 모임일 때만 채워진다.
+    /// 서버가 내려주지 않는 값(지역·마스코트·매너 점수)은 화면에서 숨긴다.
+    var serverRoomID: Int64?
+    var thumbnailURL: URL?
+    var meetupSummary: String = ""
+
+    var isServerBacked: Bool {
+        serverRoomID != nil
+    }
 }
 
 struct ChatMessage: Identifiable, Hashable {
@@ -328,6 +358,15 @@ struct FeedPost: Identifiable, Hashable {
     // 대표 피드의 경로는 주왕산 · 용연폭포 · 주산지 3곳이다 (4개 플랫폼 공통)
     var visitCountText: String = "3곳"
     var photoCountText: String = "1/10"
+    /// 실서버 피드 연동 필드 — 서버 피드일 때만 채워진다
+    var authorAvatarURL: URL?
+    var photoURL: URL?
+    var serverFeedID: Int64?
+    var serverLiked: Bool = false
+
+    var isServerBacked: Bool {
+        serverFeedID != nil
+    }
 }
 
 struct DogamFriend: Identifiable, Hashable {

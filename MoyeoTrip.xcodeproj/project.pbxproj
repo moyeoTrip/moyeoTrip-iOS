@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AF8CDA983032B1A700CD3FA7 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AF8CDA993032B1A700CD3FA7 /* Sentry */; };
 		D1A0A00130A0000100000001 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02130A0000100000001 /* FirebaseAuth */; };
 		D1A0A00230A0000100000001 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02230A0000100000001 /* FirebaseCore */; };
 		D1A0A00330A0000100000001 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = D1A0A02330A0000100000001 /* GoogleSignIn */; };
@@ -85,6 +86,7 @@
 				D1A0A00530A0000100000001 /* KakaoSDKAuth in Frameworks */,
 				D1A0A00630A0000100000001 /* KakaoSDKUser in Frameworks */,
 				D1A0A00830A0000100000001 /* KakaoMapsSDK-SPM in Frameworks */,
+				AF8CDA983032B1A700CD3FA7 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,6 +157,7 @@
 				D1A0A02530A0000100000001 /* KakaoSDKAuth */,
 				D1A0A02630A0000100000001 /* KakaoSDKUser */,
 				D1A0A02830A0000100000001 /* KakaoMapsSDK-SPM */,
+				AF8CDA993032B1A700CD3FA7 /* Sentry */,
 			);
 			productName = MoyeoTrip;
 			productReference = AF88FD1B2FC9D867000CF969 /* MoyeoTrip.app */;
@@ -492,7 +495,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = kr.hanchae.MoyeoTrip;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				SENTRY_DSN = "https://9a76b80c11f4fe12c509b295c0bea4f8@o4507323056652288.ingest.us.sentry.io/4511923930923008";
 				SENTRY_ENVIRONMENT = development;
 				SENTRY_RELEASE = "moyeotrip-ios@1.0+1";
 				SENTRY_TRACES_SAMPLE_RATE = 1.0;
@@ -545,7 +547,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = kr.hanchae.MoyeoTrip;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				SENTRY_DSN = "https://9a76b80c11f4fe12c509b295c0bea4f8@o4507323056652288.ingest.us.sentry.io/4511923930923008";
 				SENTRY_ENVIRONMENT = development;
 				SENTRY_RELEASE = "moyeotrip-ios@1.0+1";
 				SENTRY_TRACES_SAMPLE_RATE = 1.0;
@@ -742,6 +743,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AF8CDA993032B1A700CD3FA7 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AF8CDA973032B1A700CD3FA7 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 		C0A1B0032FCA000100000001 /* SwiftLintBuildToolPlugin */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C0A1B0012FCA000100000001 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */;
