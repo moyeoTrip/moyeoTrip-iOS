@@ -10,6 +10,9 @@ import Foundation
 @testable import MoyeoTrip
 import Testing
 
+// 실서버 응답 원문을 그대로 붙여 두는 파일이라 길이 제한을 끈다 — 페이로드를 요약하면 계약이 흐려진다.
+// swiftlint:disable file_length
+
 @Suite
 struct ServerChatRoomContractTests {
     // MARK: - chat-rooms/my (19 모임 목록 · 26 내 여행)
@@ -252,6 +255,299 @@ struct ServerChatRoomContractTests {
     }
 }
 
+// MARK: - 모임 검색 (10 탐색 · 11 탐색 지도 · 12 검색)
+
+/// 2026-08-24 서버 패치로 검색 응답에 들어온 9필드 계약.
+/// 본문 JSON은 실서버 `GET /chat-rooms/search` 응답을 그대로 고정한 값이다.
+@Suite
+struct ServerChatRoomSearchContractTests {
+    /// 첫 항목은 실서버 응답 원문(roomId 40)이다. 두 번째는 숙박(시간·집합 안내 null),
+    /// 세 번째는 좌표가 한쪽만 온 경우다.
+    private static let searchJSON = #"""
+    [
+      {"roomId":40,"title":"안동 하회마을 하루 코스","description":"가을 단풍을 함께 즐길 동행자를 구해요.",
+       "thumbnail":null,"tripType":"DAY_TRIP","startDate":"2026-09-12","endDate":null,
+       "dayTripStartTime":"09:00:00","dayTripEndTime":"18:00:00",
+       "recruitmentDeadlineDate":"2026-09-09","recruitmentDDay":15,"status":"RECRUITING","favorite":false,
+       "meetingLatitude":36.576,"meetingLongitude":128.97,"meetingDetails":"안동역 1번 출구 앞",
+       "meetingDateTime":"2026-09-12T08:30:00","hostId":62,"participantCount":2,"maxParticipants":5,
+       "courseTitle":"안동 하회마을 코스","tags":[{"tagId":4,"name":"자연"},{"tagId":7,"name":"역사"}]},
+      {"roomId":41,"title":"울릉도 2박 3일 섬 여행","description":null,"thumbnail":null,
+       "tripType":"OVERNIGHT","startDate":"2026-09-20","endDate":"2026-09-22",
+       "dayTripStartTime":null,"dayTripEndTime":null,
+       "recruitmentDeadlineDate":"2026-09-17","recruitmentDDay":0,"status":"CONFIRMED","favorite":true,
+       "meetingLatitude":null,"meetingLongitude":null,"meetingDetails":null,
+       "meetingDateTime":"2026-09-20T07:00:00","hostId":61,"participantCount":5,"maxParticipants":5,
+       "courseTitle":"울릉도 일주 코스","tags":[]},
+      {"roomId":42,"title":"좌표가 한쪽만 온 모임","description":null,"thumbnail":null,
+       "tripType":"DAY_TRIP","startDate":"2026-10-01","endDate":null,
+       "dayTripStartTime":"10:00","dayTripEndTime":"17:00",
+       "recruitmentDeadlineDate":"2026-09-28","recruitmentDDay":33,"status":"CANCELLED","favorite":false,
+       "meetingLatitude":36.1,"meetingLongitude":null,"meetingDetails":"미정 아님 · 좌표만 결측",
+       "meetingDateTime":"2026-10-01T09:30:00","hostId":61,"participantCount":1,"maxParticipants":4,
+       "courseTitle":"테스트 코스","tags":[]}
+    ]
+    """#
+
+    private func rooms() throws -> [ServerChatRoomSummary] {
+        try JSONDecoder().decode([ServerChatRoomSummary].self, from: Data(Self.searchJSON.utf8))
+    }
+
+    @Test func searchResponseDecodesNineNewFields() throws {
+        let rooms = try rooms()
+        #expect(rooms.count == 3)
+
+        let dayTrip = try #require(rooms.first { $0.roomId == 40 })
+        #expect(dayTrip.recruitmentDDay == 15)
+        #expect(dayTrip.status == "RECRUITING")
+        #expect(!dayTrip.favorite)
+        #expect(dayTrip.meetingLatitude == 36.576)
+        #expect(dayTrip.meetingLongitude == 128.97)
+        #expect(dayTrip.meetingDetails == "안동역 1번 출구 앞")
+        #expect(dayTrip.meetingDateTime == "2026-09-12T08:30:00")
+        #expect(dayTrip.dayTripStartTime == "09:00:00")
+        #expect(dayTrip.dayTripEndTime == "18:00:00")
+    }
+
+    @Test func dayTripTimesParseBothSecondAndMinutePrecision() throws {
+        let rooms = try rooms()
+        // 실제 응답은 HH:mm:ss 다
+        #expect(try #require(rooms.first { $0.roomId == 40 }).dayTripTimeText == "09:00 – 18:00")
+        // 문서상 포맷 HH:mm 도 같은 표기가 되어야 한다
+        #expect(try #require(rooms.first { $0.roomId == 42 }).dayTripTimeText == "10:00 – 17:00")
+        #expect(ServerTripMapper.shortTime("09:00:00") == "09:00")
+        #expect(ServerTripMapper.shortTime("09:00") == "09:00")
+        #expect(ServerTripMapper.shortTime(nil) == nil)
+        #expect(ServerTripMapper.shortTime("") == nil)
+    }
+
+    @Test func overnightRoomHidesDayTripTimesAndMeetingDetails() throws {
+        let overnight = try #require(try rooms().first { $0.roomId == 41 })
+        // 숙박이면 서버가 시간을 둘 다 null로 준다 — 표기를 숨긴다
+        #expect(overnight.dayTripTimeText == nil)
+        // 집합 안내가 null이면 "미정" 같은 문구를 지어내지 않는다
+        #expect(overnight.meetingDetailsText == nil)
+        #expect(overnight.meetingCoordinate == nil)
+        #expect(overnight.favorite)
+        #expect(overnight.recruitmentDDayText == "D-Day")
+    }
+
+    @Test func mapMarkersDropRoomsWithOnlyOneCoordinate() throws {
+        let rooms = try rooms()
+        let markers = ServerTripMapper.mapMarkers(from: rooms)
+        // 좌표가 둘 다 있는 40번만 남는다 (41번은 둘 다 null, 42번은 위도만 있다)
+        #expect(markers.count == 1)
+        #expect(markers[0].id == "server-room-40")
+        #expect(markers[0].coordinate.latitude == 36.576)
+        // 모임 집합 장소는 순번 원이 아니라 단일 핀이다
+        #expect(markers[0].order == nil)
+
+        let content = try #require(ServerTripMapper.mapContent(from: rooms))
+        #expect(content.markers.count == 1)
+        #expect(content.center.longitude == 128.97)
+        // 좌표가 없으면 목업 지도를 쓰도록 nil을 돌려준다
+        #expect(ServerTripMapper.mapContent(from: rooms.filter { $0.roomId == 41 }) == nil)
+    }
+
+    @Test func statusBadgeUsesPlanningWording() throws {
+        let rooms = try rooms()
+        #expect(try #require(rooms.first { $0.roomId == 40 }).statusBadgeText == "진행중")
+        #expect(try #require(rooms.first { $0.roomId == 41 }).statusBadgeText == "확정")
+        #expect(try #require(rooms.first { $0.roomId == 42 }).statusBadgeText == "모집취소")
+    }
+
+    @Test func summaryMapsIntoRecruitmentWithoutExtraDetailCall() throws {
+        let rooms = try rooms()
+        let dayTrip = ServerTripMapper.trip(from: try #require(rooms.first { $0.roomId == 40 }))
+        #expect(dayTrip.serverRoomID == 40)
+        #expect(dayTrip.status == .open)
+        // 마감 배지는 여행 시작이 아니라 모집 마감 D-day 다
+        #expect(dayTrip.recruitmentDeadline == "D-15 · 9/9")
+        #expect(dayTrip.scheduleDetails?.kind == .dayTrip)
+        #expect(dayTrip.scheduleDetails?.startTime == "09:00")
+        #expect(dayTrip.scheduleDetails?.endTime == "18:00")
+        #expect(dayTrip.meetingDetails?.latitude == 36.576)
+        #expect(dayTrip.meetingDetails?.meetingTime == "08:30")
+        #expect(dayTrip.meetupPoint == "안동역 1번 출구 앞")
+        // 서버가 주지 않는 값은 비워 둔다
+        #expect(dayTrip.region.isEmpty)
+        #expect(dayTrip.hostName.isEmpty)
+
+        let overnight = ServerTripMapper.trip(from: try #require(rooms.first { $0.roomId == 41 }))
+        #expect(overnight.status == .confirmed)
+        #expect(overnight.scheduleDetails?.kind == .overnight)
+        #expect(overnight.scheduleDetails?.startTime == nil)
+        #expect(overnight.scheduleDetails?.endTime == nil)
+        // 좌표가 없으면 집합 장소 지도 자체를 만들지 않는다
+        #expect(overnight.meetingDetails == nil)
+        #expect(overnight.recruitmentDeadline == "D-Day · 9/17")
+
+        let cancelled = ServerTripMapper.trip(from: try #require(rooms.first { $0.roomId == 42 }))
+        #expect(cancelled.status == .cancelled)
+        // 위도만 온 항목은 지도를 그리지 않는다
+        #expect(cancelled.meetingDetails == nil)
+    }
+}
+
+// MARK: - 모집 만들기 요청 조립 (17)
+
+@Suite
+struct ServerChatRoomCreateRequestContractTests {
+    private func dayTripDraft() -> RecruitmentDraft {
+        var draft = RecruitmentDraft.preview
+        draft.source = .linked
+        draft.course = serverCourse()
+        draft.schedule = TripScheduleDetails(
+            kind: .dayTrip, startDate: "2026. 09. 12 (토)", startTime: "09:00", endTime: "18:00"
+        )
+        draft.deadline = "2026. 09. 09 (수) 23:59"
+        return draft
+    }
+
+    private func serverCourse() -> TravelCourse {
+        var course = RecruitmentDraft.preview.course
+        course.serverCourseID = 21
+        return course
+    }
+
+    @Test func dayTripRequestSendsTimesWithoutEndDate() throws {
+        let request = try #require(
+            ServerChatRoomCreateRequestBuilder.request(from: dayTripDraft(), course: .publicCourse(21))
+        )
+        #expect(request.tripType == "DAY_TRIP")
+        #expect(request.startDate == "2026-09-12")
+        #expect(request.recruitmentDeadlineDate == "2026-09-09")
+        // DAY_TRIP: endDate 를 보내지 않고 시간 필드를 보낸다 (에러코드 40008)
+        #expect(request.endDate == nil)
+        #expect(request.dayTripStartTime == "09:00")
+        #expect(request.dayTripEndTime == "18:00")
+        // courseType 은 필수다
+        #expect(request.courseType == "PUBLIC")
+        #expect(request.courseId == 21)
+        #expect(request.customCourse == nil)
+
+        let json = try #require(try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(request)
+        ) as? [String: Any])
+        // nil 옵셔널은 키 자체가 빠져야 한다 — 서버가 상호배타를 키 존재로 판단한다
+        #expect(json["endDate"] == nil)
+        #expect(json["dayTripStartTime"] as? String == "09:00")
+        #expect(json["courseType"] as? String == "PUBLIC")
+    }
+
+    @Test func overnightRequestSendsEndDateWithoutTimes() throws {
+        var draft = dayTripDraft()
+        draft.schedule = TripScheduleDetails(
+            kind: .overnight, startDate: "2026. 09. 20 (일)", endDate: "2026. 09. 22 (화)"
+        )
+        let request = try #require(
+            ServerChatRoomCreateRequestBuilder.request(from: draft, course: .publicCourse(21))
+        )
+        #expect(request.tripType == "OVERNIGHT")
+        #expect(request.endDate == "2026-09-22")
+        // 1박 이상: 시간 필드를 보내지 않는다
+        #expect(request.dayTripStartTime == nil)
+        #expect(request.dayTripEndTime == nil)
+
+        let json = try #require(try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(request)
+        ) as? [String: Any])
+        #expect(json["endDate"] as? String == "2026-09-22")
+        #expect(json["dayTripStartTime"] == nil)
+        #expect(json["dayTripEndTime"] == nil)
+    }
+
+    @Test func overnightWithoutEndDateIsNotSent() {
+        var draft = dayTripDraft()
+        draft.schedule = TripScheduleDetails(kind: .overnight, startDate: "2026. 09. 20 (일)")
+        #expect(ServerChatRoomCreateRequestBuilder.request(from: draft, course: .publicCourse(21)) == nil)
+    }
+
+    @Test func dayTripWithoutTimesIsNotSent() {
+        var draft = dayTripDraft()
+        draft.schedule = TripScheduleDetails(kind: .dayTrip, startDate: "2026. 09. 12 (토)")
+        #expect(ServerChatRoomCreateRequestBuilder.request(from: draft, course: .publicCourse(21)) == nil)
+    }
+
+    @Test func linkedCourseWithoutServerIDIsNotSent() {
+        var draft = dayTripDraft()
+        draft.course = RecruitmentDraft.preview.course
+        // 목데이터 코스는 서버 courseId 가 없어 PUBLIC 요청을 만들 수 없다 — 지어내지 않는다
+        #expect(ServerChatRoomCreateRequestBuilder.courseSelection(for: draft, tagIDs: [4]) == nil)
+    }
+
+    @Test func customCourseNeedsTwoServerPlacesAndTags() throws {
+        var draft = dayTripDraft()
+        draft.source = .custom
+        draft.itinerary = [
+            ItineraryStop(id: "a", day: 1, order: 1, time: "09:00", name: "주왕산", memo: "", placeID: "2017064"),
+            ItineraryStop(id: "b", day: 1, order: 2, time: "14:00", name: "주산지", memo: "", placeID: "2599344")
+        ]
+        let value = try #require(
+            ServerChatRoomCreateRequestBuilder.customCourse(from: draft, tagIDs: [4, 7])
+        )
+        #expect(value.places.count == 2)
+        #expect(value.places.first?.contentId == 2_017_064)
+        #expect(value.places.first?.visitTime == "09:00")
+        #expect(value.tagIds == [4, 7])
+
+        // 태그 ID가 없으면 보내지 않는다 (서버 필수 조건)
+        #expect(ServerChatRoomCreateRequestBuilder.customCourse(from: draft, tagIDs: []) == nil)
+
+        // 서버 방문지 ID가 없는 항목은 제외되므로 2개를 못 채우면 보내지 않는다
+        var localOnly = draft
+        localOnly.itinerary = [
+            ItineraryStop(id: "a", day: 1, order: 1, time: "09:00", name: "주왕산", memo: "", placeID: "2017064"),
+            ItineraryStop(id: "b", day: 1, order: 2, time: "14:00", name: "새 방문지", memo: "")
+        ]
+        #expect(ServerChatRoomCreateRequestBuilder.customCourse(from: localOnly, tagIDs: [4]) == nil)
+
+        // 상호배타 규칙은 CUSTOM 에서도 같다
+        let request = ServerChatRoomCreateRequestBuilder.request(
+            from: draft, course: .custom(value)
+        )
+        #expect(request?.courseType == "CUSTOM")
+        #expect(request?.courseId == nil)
+        #expect(request?.endDate == nil)
+        #expect(request?.customCourse?.places.count == 2)
+    }
+
+    @Test func requestCarriesApprovalModeGenderAndFee() throws {
+        var draft = dayTripDraft()
+        draft.approvalMode = .manual
+        draft.genderRestriction = RecruitmentGenderCondition.women.rawValue
+        draft.estimatedCost = "1인 45,000원"
+        let request = try #require(
+            ServerChatRoomCreateRequestBuilder.request(from: draft, course: .publicCourse(21))
+        )
+        #expect(request.joinApprovalMode == "MANUAL")
+        #expect(request.genderRestriction == "FEMALE_ONLY")
+        #expect(request.participationFee == 45_000)
+        #expect(request.meetingDateTime == "2026-09-12T07:50:00")
+        #expect(request.maxParticipants == draft.capacity)
+
+        var automatic = draft
+        automatic.approvalMode = .automatic
+        automatic.genderRestriction = RecruitmentGenderCondition.any.rawValue
+        let autoRequest = try #require(
+            ServerChatRoomCreateRequestBuilder.request(from: automatic, course: .publicCourse(21))
+        )
+        #expect(autoRequest.joinApprovalMode == "AUTO")
+        #expect(autoRequest.genderRestriction == "NONE")
+    }
+
+    @Test func createResponseDecodesRoomID() throws {
+        let response = try JSONDecoder().decode(
+            ServerCreateChatRoomResponse.self, from: Data(#"{"roomId":41}"#.utf8)
+        )
+        #expect(response.roomId == 41)
+        // 응답의 roomId 로 15 모집 상세 진입용 껍데기를 만든다
+        let trip = ServerTripMapper.placeholderTrip(roomID: response.roomId, title: "새 모집")
+        #expect(trip.serverRoomID == 41)
+        #expect(trip.id == "server-room-41")
+    }
+}
+
 // MARK: - 코스 상세 (14)
 
 @Suite
@@ -301,6 +597,38 @@ struct ServerTravelCourseDetailContractTests {
         #expect(course.publishingInfo == nil)
         #expect(course.serverAverageRating == nil)
         #expect(course.distance == "5km")
+    }
+}
+
+// MARK: - 피드 댓글 (23-1)
+
+@Suite
+struct ServerFeedCommentContractTests {
+    /// 스펙(`/api-docs`)에는 단일 객체로 적혀 있지만 컨트롤러 반환형은 `List<FeedCommentResponse>` 다.
+    @Test func commentsDecodeAsArrayWithNestedReplies() throws {
+        let json = #"""
+        [{"commentId":1,"author":{"userId":61,"nickname":"즐거운 고양이 4760","profileImageUrl":null},
+          "content":"이 코스 저도 가보고 싶네요.","createdAt":"2026-09-15T20:00:00",
+          "replies":[{"commentId":2,"author":{"userId":62,"nickname":"따스한 기린 2334",
+            "profileImageUrl":null},"content":"당일치기로 충분해요!",
+            "createdAt":"2026-09-15T20:10:00","replies":[]}]},
+         {"commentId":3,"author":{"userId":62,"nickname":"따스한 기린 2334","profileImageUrl":null},
+          "content":"사진 더 올릴게요","createdAt":"2026-09-15T21:00:00","replies":[]}]
+        """#
+        let comments = try JSONDecoder().decode([ServerFeedComment].self, from: Data(json.utf8))
+        #expect(comments.count == 2)
+        #expect(comments[0].replyList.count == 1)
+        #expect(comments[0].replyList[0].content == "당일치기로 충분해요!")
+        #expect(comments[1].replyList.isEmpty)
+    }
+
+    @Test func commentWithoutRepliesKeyStillDecodes() throws {
+        let json = #"[{"commentId":9,"author":null,"content":null,"createdAt":null}]"#
+        let comments = try JSONDecoder().decode([ServerFeedComment].self, from: Data(json.utf8))
+        #expect(comments[0].replyList.isEmpty)
+        // 서버가 값을 주지 않으면 지어내지 않는다
+        #expect(comments[0].content == nil)
+        #expect(comments[0].author == nil)
     }
 }
 

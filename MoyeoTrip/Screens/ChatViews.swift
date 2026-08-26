@@ -126,6 +126,8 @@ struct ChatRoomView: View {
   let onSendMessage: (ChatMessage) -> Void
   @State private var toolbarMessage: String?
   @State private var supportRoute: SupportRoute?
+  /// 20-2에서 카드를 보내면 올라간다 — 본문이 서버 메시지를 다시 읽는 신호다
+  @State private var reloadToken = 0
 
   init(thread: ChatThread, onSendMessage: @escaping (ChatMessage) -> Void = { _ in }) {
     self.thread = thread
@@ -135,6 +137,7 @@ struct ChatRoomView: View {
   var body: some View {
     ChatRoomBody(
       thread: thread,
+      reloadToken: reloadToken,
       onSendMessage: onSendMessage,
       onOpenRoute: { supportRoute = $0 }
     )
@@ -181,6 +184,11 @@ struct ChatRoomView: View {
           ChatSideMenuView(thread: thread)
         case .noticeHistory:
           NoticeHistoryView(thread: thread)
+        case .chatAttach:
+          ChatAttachmentMenuView(
+            serverRoomID: thread.serverRoomID,
+            onShared: { reloadToken += 1 }
+          )
         default:
           SupportDestinationView(route: route)
         }
@@ -196,6 +204,8 @@ struct ChatRoomView: View {
 struct ChatRoomBody: View {
   @Environment(\.moyeoIsOffline) private var isOffline
   let thread: ChatThread
+  /// 20-2에서 카드를 보낸 뒤 서버 메시지를 다시 읽게 하는 신호
+  var reloadToken = 0
   var onSendMessage: (ChatMessage) -> Void = { _ in }
   var onOpenRoute: (SupportRoute) -> Void = { _ in }
   @State private var messages: [ChatMessage]
@@ -206,10 +216,12 @@ struct ChatRoomBody: View {
 
   init(
     thread: ChatThread,
+    reloadToken: Int = 0,
     onSendMessage: @escaping (ChatMessage) -> Void = { _ in },
     onOpenRoute: @escaping (SupportRoute) -> Void = { _ in }
   ) {
     self.thread = thread
+    self.reloadToken = reloadToken
     self.onSendMessage = onSendMessage
     self.onOpenRoute = onOpenRoute
     let pending = OfflineChatQueue.messages(for: thread.id)
@@ -352,11 +364,20 @@ struct ChatRoomBody: View {
       }
     }
     .task {
-      guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, serverContent == nil else { return }
-      guard let content = await ChatRoomContentAPIClient.shared.content(roomID: roomID) else { return }
-      serverContent = content
-      applyServerMessages(content)
+      guard serverContent == nil else { return }
+      await loadServerContent()
     }
+    .onChange(of: reloadToken) { _, _ in
+      Task { await loadServerContent() }
+    }
+  }
+
+  /// 참여 중인 서버 방의 읽기 응답을 받아 화면에 얹는다. 실패하면 기존 값을 그대로 둔다.
+  private func loadServerContent() async {
+    guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID else { return }
+    guard let content = await ChatRoomContentAPIClient.shared.content(roomID: roomID) else { return }
+    serverContent = content
+    applyServerMessages(content)
   }
 
   private var serverCourseBar: some View {
@@ -418,6 +439,22 @@ struct ChatRoomBody: View {
   private func sendMessage() {
     let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
+    // 서버 모임은 실제로 전송한 뒤 서버 메시지를 다시 읽는다 — 목데이터 말풍선을 끼워 넣지 않는다.
+    if !isOffline, MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID {
+      draft = ""
+      Task {
+        guard
+          (try? await ChatRoomWriteAPIClient.shared.sendMessage(roomID: roomID, content: trimmed)) != nil
+        else {
+          // 전송 실패는 입력을 되돌려 다시 보낼 수 있게 한다
+          draft = trimmed
+          return
+        }
+        await loadServerContent()
+      }
+      return
+    }
+
     let message = ChatMessage(
       id: UUID().uuidString,
       senderName: MockData.profile.name,

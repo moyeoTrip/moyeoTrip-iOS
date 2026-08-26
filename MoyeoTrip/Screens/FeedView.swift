@@ -34,6 +34,8 @@ struct FeedView: View {
   @State private var selectedPost: FeedPost?
   /// 실서버 피드 — 로그인 세션이 있고 피드 API가 성공했을 때만 채워진다 (nil = 목데이터)
   @State private var serverPosts: [FeedPost]?
+  /// changeLog18 — 작성자를 눌러 여는 25 프로필 카드
+  @State private var authorProfileRoute: SupportRoute?
 
   init(
     feedPosts: Binding<[FeedPost]>,
@@ -125,6 +127,9 @@ struct FeedView: View {
                 onOpenPost: {
                   selectedPost = post
                 },
+                onOpenAuthor: {
+                  authorProfileRoute = .publicProfile(post.authorProfileSubject)
+                },
                 onWritePost: {
                   isWritingPost = true
                 }
@@ -168,6 +173,9 @@ struct FeedView: View {
       FeedDetailView(post: post) {
         incrementCommentCount(for: post.id)
       }
+    }
+    .navigationDestination(item: $authorProfileRoute) { route in
+      SupportDestinationView(route: route)
     }
     .navigationDestination(isPresented: $isWritingPost) {
       FeedWriteView(initialStep: feedWriteInitialStep) { post in
@@ -242,14 +250,21 @@ struct FeedDetailView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           HStack(spacing: 12) {
-            FeedAuthorAvatar(post: post, size: 44)
-            VStack(alignment: .leading, spacing: 5) {
-              Text(post.displayAuthorName)
-                .font(.system(size: 15, weight: .heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-              Text(post.createdAt)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.muted)
+            // changeLog18 — 작성자를 누르면 25 프로필 카드로 간다
+            HStack(spacing: 12) {
+              FeedAuthorAvatar(post: post, size: 44)
+              VStack(alignment: .leading, spacing: 5) {
+                Text(post.displayAuthorName)
+                  .font(.system(size: 15, weight: .heavy))
+                  .foregroundStyle(MoyeoTheme.ink)
+                Text(post.createdAt)
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(MoyeoTheme.muted)
+              }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+              supportRoute = .publicProfile(post.authorProfileSubject)
             }
             Spacer()
             // 공개 범위는 작성자 정보와 같은 줄에 둬서, 본문을 밀어내는 큰 단독 칩이 되지 않게 한다.
@@ -486,6 +501,7 @@ private struct FeedVisibilityBadge: View {
 private struct FeedPostCard: View {
   let post: FeedPost
   let onOpenPost: () -> Void
+  let onOpenAuthor: () -> Void
   let onWritePost: () -> Void
 
   var body: some View {
@@ -493,17 +509,23 @@ private struct FeedPostCard: View {
       Button(action: onOpenPost) {
         VStack(alignment: .leading, spacing: 0) {
           HStack(spacing: 9) {
-            FeedAuthorAvatar(post: post, size: 34)
-            VStack(alignment: .leading, spacing: 2) {
-              Text(post.displayAuthorName)
-                .font(MoyeoTypography.font(size: 12, weight: .bold, relativeTo: .subheadline))
-                .foregroundStyle(MoyeoTheme.ink)
-                .accessibilityIdentifier("feed.post.\(post.id).author")
-              Text(post.createdAt)
-                .font(MoyeoTypography.font(size: 10, relativeTo: .caption2))
-                .foregroundStyle(MoyeoTheme.muted)
-                .accessibilityIdentifier("feed.post.\(post.id).createdAt")
+            // changeLog18 — 작성자 영역만 25 프로필 카드로 간다.
+            // 카드 전체는 피드 상세로 가므로, 자식 탭 제스처가 먼저 먹도록 여기서 가로챈다.
+            HStack(spacing: 9) {
+              FeedAuthorAvatar(post: post, size: 34)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(post.displayAuthorName)
+                  .font(MoyeoTypography.font(size: 12, weight: .bold, relativeTo: .subheadline))
+                  .foregroundStyle(MoyeoTheme.ink)
+                  .accessibilityIdentifier("feed.post.\(post.id).author")
+                Text(post.createdAt)
+                  .font(MoyeoTypography.font(size: 10, relativeTo: .caption2))
+                  .foregroundStyle(MoyeoTheme.muted)
+                  .accessibilityIdentifier("feed.post.\(post.id).createdAt")
+              }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onOpenAuthor)
             Spacer()
             Image(systemName: "ellipsis")
               .foregroundStyle(MoyeoTheme.muted)

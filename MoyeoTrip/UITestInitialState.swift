@@ -40,9 +40,16 @@ struct UITestInitialState {
   }
 
   private mutating func applyMyRoute(_ screen: UITestScreenRequest) -> Bool {
-    if screen.matches("profile") {
+    // changeLog18 — 25 프로필 카드. 화면기획의 기준 목데이터는 27 도감의 '우직한 곰 7821'이다.
+    if screen.matches("profile", "public-profile", "publicprofile") {
       selectedTab = .my
-      myPath.append(MyRoute.profile)
+      myPath.append(MyRoute.profile(.planningMock, startsFlipped: false))
+      return true
+    }
+    // changeLog18 — 25-1 카드 뒷면. 뒤집힌 상태로 여는 캡처 전용 라우트다(실사용 기본값은 앞면).
+    if screen.matches("profile-back", "profileback", "public-profile-back", "publicprofileback") {
+      selectedTab = .my
+      myPath.append(MyRoute.profile(.planningMock, startsFlipped: true))
       return true
     }
     if screen.matches("profile-edit", "profileedit", "edit-profile", "editprofile") {

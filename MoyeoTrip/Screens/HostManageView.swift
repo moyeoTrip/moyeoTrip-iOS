@@ -13,6 +13,12 @@ struct HostManageView: View {
     @State private var isRecruitmentClosed: Bool
     @State private var selectedThread: ChatThread?
     @State private var routeDestination: SupportRoute?
+    /// 서버 승인 대기 목록을 받았는지. 받았으면(빈 배열이어도) 목데이터 대기자를 쓰지 않는다 (18)
+    @State private var usesServerApplications = false
+    /// 승인·거절 처리 중인 신청 — 중복 탭을 막는다
+    @State private var processingApplicationIDs = Set<Int64>()
+    /// 이 화면에서 실제로 합류(JOINED)한 인원. 대기열(WAITLISTED)로 간 승인은 세지 않는다.
+    @State private var serverJoinedDelta = 0
 
     init(
         trip: TripRecruitment,
@@ -39,7 +45,7 @@ struct HostManageView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HostManageTripSummary(
                         title: trip.title,
-                        participantText: "\(approvedApplicants.count + 1) / \(trip.capacity)명",
+                        participantText: "\(approvedCount) / \(trip.capacity)명",
                         status: isRecruitmentClosed
                             ? "모집 취소됨"
                             : (trip.recruitmentDeadline.isEmpty ? trip.status.rawValue : trip.recruitmentDeadline)
@@ -78,14 +84,14 @@ struct HostManageView: View {
                         .padding(.horizontal, 20)
 
                     // 화면기획 18 — 승인된 동행자 수는 본인을 포함해 센다 (4)
-                    HostManageSectionTitle(title: "승인된 동행자", count: approvedApplicants.count + 1)
+                    HostManageSectionTitle(title: "승인된 동행자", count: approvedCount)
                         .padding(.horizontal, 20)
                         .padding(.top, 24)
                         .padding(.bottom, 12)
 
                     HostApprovedCompanionsRow(
-                        avatars: [trip.hostAvatar] + approvedApplicants.map(\.avatar),
-                        count: approvedApplicants.count + 1
+                        avatars: approvedAvatars,
+                        count: approvedCount
                     )
                     .padding(.horizontal, 20)
                     .accessibilityIdentifier("hostApproved.companions")
@@ -137,7 +143,39 @@ struct HostManageView: View {
         .navigationDestination(item: $routeDestination) { route in
             SupportDestinationView(route: route)
         }
+        .task {
+            guard
+                MoyeoServerSync.isEnabled,
+                let roomID = trip.serverRoomID,
+                !usesServerApplications
+            else {
+                return
+            }
+            // 호스트가 아니면 서버가 403 을 준다 — 그때는 목데이터 대기자를 그대로 남긴다
+            guard
+                let applications = try? await ChatRoomWriteAPIClient.shared.applications(roomID: roomID)
+            else {
+                return
+            }
+            // 함수 참조 대신 클로저로 호출해 main-actor 격리를 유지한다(Swift 6).
+            pendingApplicants = applications.map { ServerTripMapper.hostApplicant(from: $0) }
+            usesServerApplications = true
+        }
         .accessibilityIdentifier("screen.hostManage")
+    }
+
+    /// 승인된 동행자 수(호스트 포함). 서버 모임은 서버가 준 참여 인원이 정답이다.
+    private var approvedCount: Int {
+        usesServerApplications
+            ? max(trip.joined, 1) + serverJoinedDelta
+            : approvedApplicants.count + 1
+    }
+
+    /// 서버 모임은 마스코트를 주지 않는다 — 빈 문자열로 두면 leaf 원만 그려진다(지어내지 않는다).
+    private var approvedAvatars: [String] {
+        usesServerApplications
+            ? Array(repeating: "", count: approvedCount)
+            : [trip.hostAvatar] + approvedApplicants.map(\.avatar)
     }
 
     @ViewBuilder
@@ -186,13 +224,59 @@ struct HostManageView: View {
         }
     }
 
+    /// 화면기획 18 승인. 서버 모임이면 실제로 승인한 뒤에만 목록에서 뺀다 —
+    /// 실패하면 대기 카드를 그대로 남겨 호스트가 다시 시도할 수 있게 한다.
     private func approve(_ applicant: HostApplicant) {
+        guard let roomID = trip.serverRoomID, let applicationID = applicant.serverApplicationID else {
+            applyApproved(applicant)
+            return
+        }
+        guard !processingApplicationIDs.contains(applicationID) else { return }
+        processingApplicationIDs.insert(applicationID)
+        Task {
+            let result = try? await ChatRoomWriteAPIClient.shared.approveApplication(
+                roomID: roomID, applicationID: applicationID
+            )
+            processingApplicationIDs.remove(applicationID)
+            guard let result else { return }
+            // 정원이 차 있으면 서버가 WAITLISTED 를 준다 — 그때는 참여 인원이 늘지 않는다
+            if !result.isWaitlisted {
+                serverJoinedDelta += 1
+            }
+            applyApproved(applicant)
+        }
+    }
+
+    private func reject(_ applicant: HostApplicant) {
+        guard let roomID = trip.serverRoomID, let applicationID = applicant.serverApplicationID else {
+            applyRejected(applicant)
+            return
+        }
+        guard !processingApplicationIDs.contains(applicationID) else { return }
+        processingApplicationIDs.insert(applicationID)
+        Task {
+            let rejected: Bool
+            do {
+                try await ChatRoomWriteAPIClient.shared.rejectApplication(
+                    roomID: roomID, applicationID: applicationID
+                )
+                rejected = true
+            } catch {
+                rejected = false
+            }
+            processingApplicationIDs.remove(applicationID)
+            guard rejected else { return }
+            applyRejected(applicant)
+        }
+    }
+
+    private func applyApproved(_ applicant: HostApplicant) {
         pendingApplicants.removeAll { $0.id == applicant.id }
         approvedApplicants.append(applicant)
         onApproveApplicant(trip, applicant.participant)
     }
 
-    private func reject(_ applicant: HostApplicant) {
+    private func applyRejected(_ applicant: HostApplicant) {
         pendingApplicants.removeAll { $0.id == applicant.id }
         rejectedApplicants.append(applicant)
         onRejectApplicant(trip, applicant.participant)
@@ -267,44 +351,6 @@ private struct HostManageActions: View {
     }
 }
 
-struct HostApplicant: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let avatar: String
-    /// 화면기획 18 — 나이·성별·매너·여행 횟수 요약 (예: "31세 · 남성 · 매너 4.9 · 여행 8회")
-    let meta: String
-    let note: String
-
-    var participant: Participant {
-        Participant(id: id, name: name, avatar: avatar)
-    }
-
-    // 화면기획 18 모집 관리의 승인 대기 2명
-    static let mockPending = [
-        HostApplicant(
-            id: "applicant-bear",
-            name: "우직한 곰 7821",
-            avatar: "🐻",
-            meta: "31세 · 남성 · 매너 4.9 · 여행 8회",
-            note: "단풍 보러 가요. 사진 좋아해서 풍경 잘 담아드릴 수 있어요!"
-        ),
-        HostApplicant(
-            id: "applicant-raccoon",
-            name: "호기심 많은 너구리 9027",
-            avatar: "🦝",
-            meta: "26세 · 여성 · 매너 4.7",
-            note: "야경 사진 찍는 걸 좋아해요. 잘 부탁드려요!"
-        )
-    ]
-
-    // 화면기획 18 — 본인 외 3명 (아바타 무리)
-    static let mockApproved = [
-        HostApplicant(id: "approved-deer", name: "숲속 사슴 2417", avatar: "🦌", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
-        HostApplicant(id: "approved-turtle", name: "잔잔한 거북이 9032", avatar: "🐢", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
-        HostApplicant(id: "approved-rabbit", name: "느긋한 토끼 7821", avatar: "🐰", meta: "매너 4.8 · 여행 8회", note: "기존 참여자")
-    ]
-}
-
 private struct HostManageSectionTitle: View {
     let title: String
     let count: Int
@@ -337,15 +383,17 @@ private struct HostApplicantCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HostApplicantHeader(applicant: applicant)
-            // 신청 한마디는 인용 블록으로 (화면기획)
-            Text("\u{201C}\(applicant.note)\u{201D}")
-                .font(.caption)
-                .foregroundStyle(MoyeoTheme.muted)
-                .lineLimit(2)
-                .padding(.horizontal, 12)
-                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                .background(MoyeoTheme.subtleBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // 신청 한마디는 인용 블록으로 (화면기획). 신청자가 안 남겼으면 빈 인용을 그리지 않는다.
+            if !applicant.note.isEmpty {
+                Text("\u{201C}\(applicant.note)\u{201D}")
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .lineLimit(2)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                    .background(MoyeoTheme.subtleBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
 
             HStack(spacing: 10) {
                 Button(action: onSecondary) {
@@ -391,11 +439,24 @@ private struct HostApplicantHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(applicant.avatar)
-                .font(.title3)
+            // 서버 신청자는 프로필 이미지를 준다. 없으면 leaf 원만 남기고 마스코트를 지어내지 않는다.
+            if let profileImageURL = applicant.profileImageURL {
+                CachedRemoteImage(url: profileImageURL) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    MoyeoTheme.leaf
+                }
                 .frame(width: 44, height: 44)
-                .background(MoyeoTheme.leaf)
                 .clipShape(Circle())
+            } else {
+                Text(applicant.avatar)
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+                    .background(MoyeoTheme.leaf)
+                    .clipShape(Circle())
+            }
             VStack(alignment: .leading, spacing: 3) {
                 Text(applicant.name)
                     .font(.subheadline.weight(.heavy))

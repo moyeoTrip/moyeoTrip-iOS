@@ -57,6 +57,8 @@ struct RecruitmentDraft: Hashable {
     var maximumAge = 35
     var genderRestriction = "성별 무관"
     var note = "천천히 걷고 사진도 함께 남기는 숲길 모임이에요."
+    /// 17-5 신청 승인 방식. 화면기획 기본값은 자동 승인이고, 서버 요청의 `joinApprovalMode` 가 된다.
+    var approvalMode = RecruitmentApprovalMode.automatic
 
     static let preview = RecruitmentDraft()
 
@@ -119,6 +121,12 @@ struct RecruitmentCreationFlowView: View {
     @State private var showCustomEditor = false
     @State private var createdTrip: TripRecruitment?
     @State private var createdThread: ChatThread?
+    /// 실서버로 방을 만든 결과. 응답의 `roomId` 로 15 모집 상세를 연다.
+    @State private var createdServerTrip: TripRecruitment?
+    @State private var isCreatingOnServer = false
+    @State private var creationErrorMessage: String?
+    /// 커스텀 코스의 `tagIds` 근거. 서버 태그 목록에서 초안 태그 이름과 일치하는 것만 쓴다.
+    @State private var serverCourseTags: [ServerCourseTag] = []
 
     init(
         courseID: String,
@@ -145,7 +153,13 @@ struct RecruitmentCreationFlowView: View {
     }
 
     var body: some View {
-        if let createdTrip {
+        if let createdServerTrip {
+            // 서버가 준 roomId 로 15 모집 상세를 연다 — 화면은 서버 상세 응답으로 스스로 채워진다.
+            TripDetailView(
+                trip: createdServerTrip,
+                onSendChatMessage: onSendChatMessage
+            )
+        } else if let createdTrip {
             HostManageView(
                 trip: createdTrip,
                 thread: createdThread,
@@ -171,7 +185,12 @@ struct RecruitmentCreationFlowView: View {
                 case 2: RecruitmentScheduleView(draft: $draft)
                 case 3: RecruitmentPeopleView(draft: $draft)
                 case 4: RecruitmentDetailView(draft: $draft)
-                default: RecruitmentSummaryView(draft: $draft, onCreate: createRecruitment)
+                default: RecruitmentSummaryView(
+                    draft: $draft,
+                    errorMessage: creationErrorMessage,
+                    isSubmitting: isCreatingOnServer,
+                    onCreate: createRecruitment
+                )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -204,6 +223,11 @@ struct RecruitmentCreationFlowView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationBarBackButtonHidden()
         .toolbar(.hidden, for: .navigationBar)
+        .task {
+            // 커스텀 코스 요청에는 서버 태그 ID가 필요하다. 실패하면 서버 전송을 시도하지 않는다.
+            guard MoyeoServerSync.isEnabled, serverCourseTags.isEmpty else { return }
+            serverCourseTags = (try? await TravelCourseAPIClient.shared.tags()) ?? []
+        }
         .accessibilityIdentifier("screen.createRecruitment.\(courseID).step\(step)")
     }
 
@@ -211,7 +235,43 @@ struct RecruitmentCreationFlowView: View {
         if step == 1 { dismiss() } else { step -= 1 }
     }
 
+    /// 초안 태그 이름 → 서버 태그 ID. 서버 목록에 없는 이름은 버린다(없는 ID를 지어내지 않는다).
+    private var serverTagIDs: [Int64] {
+        serverCourseTags.filter { draft.course.tags.contains($0.name) }.map(\.tagId)
+    }
+
     private func createRecruitment() {
+        guard !isCreatingOnServer else { return }
+        if MoyeoServerSync.isEnabled,
+           let selection = ServerChatRoomCreateRequestBuilder.courseSelection(
+               for: draft, tagIDs: serverTagIDs
+           ),
+           let request = ServerChatRoomCreateRequestBuilder.request(from: draft, course: selection) {
+            createOnServer(request)
+            return
+        }
+        createLocalRecruitment()
+    }
+
+    private func createOnServer(_ request: ServerCreateChatRoomRequest) {
+        isCreatingOnServer = true
+        creationErrorMessage = nil
+        Task {
+            do {
+                let response = try await ChatRoomAPIClient.shared.create(request: request)
+                createdServerTrip = ServerTripMapper.placeholderTrip(
+                    roomID: response.roomId,
+                    title: draft.recruitmentName
+                )
+            } catch {
+                creationErrorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "모집을 만들지 못했어요. 잠시 후 다시 시도해주세요."
+            }
+            isCreatingOnServer = false
+        }
+    }
+
+    private func createLocalRecruitment() {
         let id = "session-trip-\(UUID().uuidString)"
         let participants = Array(MockData.participants.prefix(1))
         let trip = TripRecruitment(
@@ -938,7 +998,6 @@ struct RecruitmentMeetingView: View {
 
 private struct RecruitmentDetailView: View {
     @Binding var draft: RecruitmentDraft
-    @State private var approvalMode = RecruitmentApprovalMode.automatic
 
     var body: some View {
         ScrollView {
@@ -985,8 +1044,8 @@ private struct RecruitmentDetailView: View {
                     Text("신청 승인 방식")
                         .font(.subheadline.weight(.heavy))
                     ForEach(RecruitmentApprovalMode.allCases, id: \.self) { mode in
-                        ApprovalModeCard(mode: mode, selected: approvalMode == mode) {
-                            approvalMode = mode
+                        ApprovalModeCard(mode: mode, selected: draft.approvalMode == mode) {
+                            draft.approvalMode = mode
                         }
                     }
                 }
@@ -1011,6 +1070,9 @@ struct RecruitmentDetailPreviewView: View {
 
 struct RecruitmentSummaryView: View {
     @Binding var draft: RecruitmentDraft
+    /// 서버 생성이 실패했을 때만 채워진다 — 서버가 준 문구를 그대로 보여준다.
+    var errorMessage: String?
+    var isSubmitting = false
     let onCreate: () -> Void
 
     var body: some View {
@@ -1050,11 +1112,21 @@ struct RecruitmentSummaryView: View {
                 )
                 // 화면기획 17-7 — 두 번째 안내 카드는 아이콘 없이 텍스트만 둔다
                 DesignInfoBox(icon: nil, text: "최소 \(draft.minimumParticipants)명이 모이면 채팅방이 자동으로 열리고, 마감일까지 못 채우면 자연스럽게 소멸돼요.")
+                if let errorMessage {
+                    DesignInfoBox(icon: "exclamationmark.triangle.fill", text: errorMessage)
+                        .accessibilityIdentifier("createSummary.error")
+                }
             }
             .padding(20)
         }
         .safeAreaInset(edge: .bottom) {
-            CreationFooter(backTitle: "이전", nextTitle: "모집 열기", back: {}, next: onCreate)
+            CreationFooter(
+                backTitle: "이전",
+                nextTitle: isSubmitting ? "모집 여는 중" : "모집 열기",
+                back: {},
+                next: onCreate
+            )
+            .disabled(isSubmitting)
         }
         .accessibilityIdentifier("screen.createSummary")
     }
@@ -1256,6 +1328,10 @@ struct NoticeHistoryView: View {
     @State private var showComposer = false
     /// 실서버 공지 이력을 받았는지 — 받았으면 서버 공지만 그린다 (20-3)
     @State private var usesServerNotices = false
+    /// 고정 토글 요청 중인 공지 — 중복 탭을 막는다
+    @State private var pinningNoticeIDs = Set<String>()
+    /// 고정 토글이 서버에 거절됐을 때의 안내 (예: 고정은 최대 3개)
+    @State private var pinFailureMessage: String?
 
     init(thread: ChatThread, onCreate: @escaping (ChatThread, TripNotice) -> Void = { _, _ in }) {
         self.thread = thread
@@ -1290,11 +1366,21 @@ struct NoticeHistoryView: View {
                     } else {
                         NoticeSectionTitle(title: "상단 고정 중")
                         ForEach(notices.filter(\.isPinned)) { notice in
-                            NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                            NoticeCard(
+                                notice: notice,
+                                meetingCoordinate: meetingCoordinate,
+                                isBusy: pinningNoticeIDs.contains(notice.id),
+                                onTogglePin: canTogglePin(notice) ? { togglePin(notice) } : nil
+                            )
                         }
                         NoticeSectionTitle(title: "지난 공지")
                         ForEach(notices.filter { !$0.isPinned }) { notice in
-                            NoticeCard(notice: notice, meetingCoordinate: meetingCoordinate)
+                            NoticeCard(
+                                notice: notice,
+                                meetingCoordinate: meetingCoordinate,
+                                isBusy: pinningNoticeIDs.contains(notice.id),
+                                onTogglePin: canTogglePin(notice) ? { togglePin(notice) } : nil
+                            )
                         }
                     }
 
@@ -1325,6 +1411,15 @@ struct NoticeHistoryView: View {
             Button("작성") { createNotice() }
             Button("취소", role: .cancel) {}
         } message: { Text("집합 장소나 준비물 변경을 모든 멤버에게 알려요.") }
+        .alert(
+            "공지 고정",
+            isPresented: Binding<Bool>(
+                get: { pinFailureMessage != nil },
+                set: { if !$0 { pinFailureMessage = nil } }
+            )
+        ) {
+            Button("확인", role: .cancel) { pinFailureMessage = nil }
+        } message: { Text(pinFailureMessage ?? "") }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .task {
             guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, !usesServerNotices else { return }
@@ -1344,6 +1439,40 @@ struct NoticeHistoryView: View {
             return nil
         }
         return MoyeoMapCoordinate(latitude: meeting.latitude, longitude: meeting.longitude)
+    }
+
+    /// 서버 공지만 고정 토글을 보낼 수 있다. 목데이터 공지(캡처·미로그인)는 기존처럼 정적 문구로 남는다.
+    private func canTogglePin(_ notice: TripNotice) -> Bool {
+        MoyeoServerSync.isEnabled
+            && thread.serverRoomID != nil
+            && ServerTripMapper.noticeID(fromNoticeID: notice.id) != nil
+    }
+
+    /// 20-3 "다시 고정" / "수정" → `PUT /chat-rooms/{id}/notices/{noticeId}` 고정 토글.
+    /// 서버가 204 를 준 뒤에 이력을 다시 읽어 화면을 갱신한다 — 낙관적 갱신을 하지 않는다.
+    private func togglePin(_ notice: TripNotice) {
+        guard
+            let roomID = thread.serverRoomID,
+            let noticeID = ServerTripMapper.noticeID(fromNoticeID: notice.id),
+            !pinningNoticeIDs.contains(notice.id)
+        else {
+            return
+        }
+        pinningNoticeIDs.insert(notice.id)
+        Task {
+            do {
+                try await ChatRoomWriteAPIClient.shared.setNoticePinned(
+                    roomID: roomID, noticeID: noticeID, pinned: !notice.isPinned
+                )
+                if let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) {
+                    notices = history.allNotices.map { ServerTripMapper.notice(from: $0) }
+                }
+            } catch {
+                pinFailureMessage =
+                    (error as? LocalizedError)?.errorDescription ?? "공지 고정을 바꾸지 못했어요."
+            }
+            pinningNoticeIDs.remove(notice.id)
+        }
     }
 
     private func createNotice() {
@@ -1427,6 +1556,10 @@ private struct NoticeHistoryNavigationBar: View {
 private struct NoticeCard: View {
     let notice: TripNotice
     var meetingCoordinate: MoyeoMapCoordinate?
+    /// 고정 토글 요청 중이면 문구를 잠근다
+    var isBusy = false
+    /// 서버 공지일 때만 채워진다 — nil 이면 기존처럼 정적 문구를 그린다
+    var onTogglePin: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -1459,9 +1592,23 @@ private struct NoticeCard: View {
                 Text("·")
                 Text(notice.createdAt).monospacedDigit()
                 Spacer(minLength: 0)
-                Text(notice.isPinned ? "수정" : "다시 고정")
-                    .foregroundStyle(MoyeoTheme.forest)
-                    .fontWeight(.heavy)
+                // 화면기획 20-3 — 고정 공지는 "수정", 고정 해제된 공지는 "다시 고정".
+                // 서버 공지의 "다시 고정"만 실제 동작(PUT notices/{id})이 붙는다.
+                // "수정"은 기획에 내용 편집 화면이 없어 문구 그대로 남긴다.
+                if let onTogglePin, !notice.isPinned {
+                    Button(action: onTogglePin) {
+                        Text("다시 고정")
+                            .foregroundStyle(isBusy ? MoyeoTheme.text400 : MoyeoTheme.forest)
+                            .fontWeight(.heavy)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+                    .accessibilityIdentifier("noticeHistory.repin.\(notice.id)")
+                } else {
+                    Text(notice.isPinned ? "수정" : "다시 고정")
+                        .foregroundStyle(MoyeoTheme.forest)
+                        .fontWeight(.heavy)
+                }
             }
             .font(.caption2)
             .foregroundStyle(MoyeoTheme.muted)

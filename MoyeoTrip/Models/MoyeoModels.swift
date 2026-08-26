@@ -363,6 +363,8 @@ struct FeedPost: Identifiable, Hashable {
     var photoURL: URL?
     var serverFeedID: Int64?
     var serverLiked: Bool = false
+    /// changeLog18 — 작성자를 눌러 25 프로필 카드로 갈 때 쓰는 유저 id (서버 피드만 안다)
+    var serverAuthorID: Int64?
 
     var isServerBacked: Bool {
         serverFeedID != nil

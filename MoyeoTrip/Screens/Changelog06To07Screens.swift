@@ -28,19 +28,21 @@ enum TourismContentType: String, CaseIterable, Identifiable {
     }
 }
 
+/// 서버가 주지 않는 값은 지어내지 않는다 — nullable 필드는 nil 로 두고 화면에서 그 줄을 숨긴다 (17-1b).
 struct TourismPlace: Identifiable, Hashable {
     let id: String
     let type: TourismContentType
     let title: String
-    let address: String
-    let latitude: Double
-    let longitude: Double
+    let address: String?
+    let latitude: Double?
+    let longitude: Double?
     var thumbnailURL: URL?
-    let postalCode: String
-    let phone: String
-    let phoneLabel: String
-    let homepage: String
-    let summary: String
+    let postalCode: String?
+    let phone: String?
+    let phoneLabel: String?
+    /// 앵커 태그를 벗겨 낸 홈페이지 주소. 추출에 실패하면 nil 이고 화면은 그 줄을 숨긴다.
+    let homepage: String?
+    let summary: String?
     let imageLabels: [String]
     let menuImageLabels: [String]
     var imageURLs: [URL] = []
@@ -50,6 +52,12 @@ struct TourismPlace: Identifiable, Hashable {
 
     var showsMenuImages: Bool {
         type == .restaurant && !menuImageLabels.isEmpty
+    }
+
+    /// 좌표는 서버가 주지 않는 항목이 있다 — 둘 다 있을 때만 표기한다
+    var coordinateText: String? {
+        guard let latitude, let longitude else { return nil }
+        return String(format: "%.6f, %.6f", latitude, longitude)
     }
 }
 
@@ -122,13 +130,20 @@ struct PlaceSearchView: View {
         !model.contentTypes.isEmpty
     }
 
+    /// 검색어 매칭은 서버가 한다 (17-1a) — 화면에서 다시 걸러내면 이중 필터가 된다.
+    /// 서버 타입 목록이 없을 때(목데이터)만 기존 3종 타입 칩으로 거른다.
     private var filteredPlaces: [TourismPlace] {
-        model.places.filter { place in
-            let matchesType = usesServerTypes || selectedType == nil || place.type == selectedType
-            let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            let matchesQuery = normalized.isEmpty || place.title.contains(normalized) || place.address.contains(normalized)
-            return matchesType && matchesQuery
-        }
+        guard !usesServerTypes else { return model.places }
+        return model.places.filter { selectedType == nil || $0.type == selectedType }
+    }
+
+    /// 검색 결과 개수는 서버의 `totalElements` 를 쓴다. 목데이터 목록은 기존 "근처순" 표기를 유지한다.
+    /// 서버 타입 목록을 못 받아 화면이 직접 타입을 거른 경우에는 서버 전체 개수가 목록과 어긋나므로 쓰지 않는다.
+    private var countText: String {
+        guard model.isServerBacked else { return "\(filteredPlaces.count)곳 · 주왕산 코스 근처순" }
+        let filtersTypeLocally = !usesServerTypes && selectedType != nil
+        guard !filtersTypeLocally, let total = model.totalElements else { return "\(filteredPlaces.count)곳" }
+        return "\(total)곳"
     }
 
     var body: some View {
@@ -193,7 +208,7 @@ struct PlaceSearchView: View {
                     }
 
                     // 서버는 정렬 기준을 주지 않는다 — 서버 목록에서는 "근처순" 표기를 뺀다
-                    Text(model.isServerBacked ? "\(filteredPlaces.count)곳" : "\(filteredPlaces.count)곳 · 주왕산 코스 근처순")
+                    Text(countText)
                         .font(.caption)
                         .foregroundStyle(MoyeoTheme.muted)
                         .padding(.horizontal, 20)
@@ -263,12 +278,9 @@ struct PlaceSearchView: View {
         .navigationDestination(for: TourismPlace.self) { place in
             PlaceDetailView(place: place, onAdd: onAdd, service: model.service)
         }
-        .task {
-            await model.load()
-            // 서버에는 키워드 검색이 없다 — 서버 목록에서는 목데이터용 기본 검색어를 비운다
-            if model.isServerBacked {
-                query = ""
-            }
+        // 검색어가 바뀌면 이전 요청은 취소되고, 모델이 잠깐 기다렸다가 서버로 다시 검색한다
+        .task(id: query) {
+            await model.apply(keyword: query)
         }
         .accessibilityIdentifier("screen.placeSearch")
     }
@@ -327,9 +339,14 @@ private struct PlaceSearchRow: View {
                     Text(place.title).font(.subheadline.weight(.heavy)).lineLimit(1)
                     PlaceTypePill(type: place.type)
                 }
-                Text(place.address).font(.caption).foregroundStyle(MoyeoTheme.muted).lineLimit(2)
-                Text(String(format: "%.4f, %.4f", place.latitude, place.longitude))
-                    .font(.caption2).foregroundStyle(MoyeoTheme.text400).monospacedDigit()
+                // 서버는 주소·좌표를 주지 않는 항목이 있다 — 없으면 줄을 지운다
+                if let address = place.address {
+                    Text(address).font(.caption).foregroundStyle(MoyeoTheme.muted).lineLimit(2)
+                }
+                if let latitude = place.latitude, let longitude = place.longitude {
+                    Text(String(format: "%.4f, %.4f", latitude, longitude))
+                        .font(.caption2).foregroundStyle(MoyeoTheme.text400).monospacedDigit()
+                }
             }
             Spacer(minLength: 4)
             Button(action: onAdd) {
@@ -404,10 +421,11 @@ struct PlaceDetailView: View {
                     PlaceTypePill(type: place.type)
                 }
 
+                // 서버가 null 로 주는 줄은 숨긴다 — 값을 지어내지 않는다 (17-1b)
                 VStack(spacing: 12) {
-                    detailRow("mappin.and.ellipse", place.address, "우편번호 \(place.postalCode)")
+                    detailRow("mappin.and.ellipse", place.address, place.postalCode.map { "우편번호 \($0)" })
                     detailRow("phone", place.phone, place.phoneLabel)
-                    detailRow("map", String(format: "%.6f, %.6f", place.latitude, place.longitude), "지도에서 열기")
+                    detailRow("map", place.coordinateText, "지도에서 열기")
                     detailRow("globe", place.homepage, "홈페이지")
                 }
                 .padding(14)
@@ -415,8 +433,10 @@ struct PlaceDetailView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                Text("소개").font(.headline)
-                Text(place.summary).font(.subheadline).foregroundStyle(MoyeoTheme.text700)
+                if let summary = place.summary {
+                    Text("소개").font(.headline)
+                    Text(summary).font(.subheadline).foregroundStyle(MoyeoTheme.text700)
+                }
 
                 if isLoading {
                     ProgressView("상세 정보를 불러오고 있어요")
@@ -504,14 +524,20 @@ struct PlaceDetailView: View {
         return moods[index % moods.count]
     }
 
-    private func detailRow(_ icon: String, _ value: String, _ caption: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(value).font(.caption.weight(.heavy))
-                Text(caption).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+    /// 값이 없으면(서버가 null) 줄 자체를 그리지 않는다. 안내 문구도 값이 있을 때만 붙인다.
+    @ViewBuilder
+    private func detailRow(_ icon: String, _ value: String?, _ caption: String?) -> some View {
+        if let value, !value.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(value).font(.caption.weight(.heavy))
+                    if let caption, !caption.isEmpty {
+                        Text(caption).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+                    }
+                }
+                Spacer()
             }
-            Spacer()
         }
     }
 

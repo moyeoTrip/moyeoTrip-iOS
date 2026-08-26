@@ -9,6 +9,11 @@ import Foundation
 
 // MARK: - 응답 모델
 
+/// 검색 결과 항목 (`GET /chat-rooms/search`).
+///
+/// 2026-08-24 서버 패치로 `dayTripStartTime`·`dayTripEndTime`·`recruitmentDDay`·`status`·`favorite`·
+/// `meetingLatitude`·`meetingLongitude`·`meetingDetails`·`meetingDateTime` 9필드가 추가됐다.
+/// 그래서 카드 배지·찜 하트를 그리려고 항목마다 상세를 부를 필요가 없다.
 struct ServerChatRoomSummary: Decodable, Identifiable, Hashable {
     let roomId: Int64
     let title: String
@@ -17,7 +22,23 @@ struct ServerChatRoomSummary: Decodable, Identifiable, Hashable {
     let tripType: String
     let startDate: String
     let endDate: String?
+    /// 당일 여행 시간. 숙박이면 둘 다 null이라 표기를 숨긴다.
+    /// 문서엔 `HH:mm` 인데 실제 응답은 `HH:mm:ss` 다 — 양쪽 모두 파싱한다.
+    let dayTripStartTime: String?
+    let dayTripEndTime: String?
     let recruitmentDeadlineDate: String
+    let recruitmentDDay: Int64?
+    /// `RECRUITING` · `CONFIRMED` · `CANCELLED`
+    let status: String
+    /// 로그인 사용자의 찜 여부
+    let favorite: Bool
+    /// 집합 장소 좌표. 미정이면 null이고, **둘 다 있을 때만** 지도 마커를 찍는다.
+    let meetingLatitude: Double?
+    let meetingLongitude: Double?
+    /// 집합 장소 안내. 미정이면 null — "미정" 같은 문구를 지어내지 않고 표기를 숨긴다.
+    let meetingDetails: String?
+    let meetingDateTime: String
+
     let hostId: Int64
     let participantCount: Int
     let maxParticipants: Int
@@ -171,7 +192,9 @@ struct ServerKickHistory: Decodable, Identifiable, Hashable {
 final class ChatRoomAPIClient: @unchecked Sendable {
     static let shared = ChatRoomAPIClient()
 
-    private let api: MoyeoAPIClient
+    /// 17 모집 만들기 요청은 파일 길이 때문에 `ServerChatRoomCreateRequest.swift` 의 확장에 있다.
+    /// 그 확장이 같은 요청기를 쓰도록 모듈 내부까지 공개한다.
+    let api: MoyeoAPIClient
 
     init(api: MoyeoAPIClient = .shared) {
         self.api = api
@@ -276,7 +299,25 @@ enum ServerTripMapper {
     /// 검색 결과 요약 → 모집 상세 진입용 최소 TripRecruitment.
     /// 서버가 주지 않는 값은 비워 두고, 화면은 서버 상세 응답으로 다시 채운다.
     static func trip(from summary: ServerChatRoomSummary) -> TripRecruitment {
-        TripRecruitment(
+        var meeting: MeetingPointDetails?
+        if let coordinate = summary.meetingCoordinate {
+            meeting = MeetingPointDetails(
+                name: summary.meetingDetails ?? "",
+                address: "",
+                detail: "",
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                meetingTime: timeText(fromDateTime: summary.meetingDateTime)
+            )
+        }
+        // `map(displayDate)` 처럼 함수 참조로 넘기면 main-actor 격리가 벗겨져 Swift 6 경고가 난다.
+        // 호출을 이 컨텍스트 안에 둔다.
+        var endDateText: String?
+        if let endDate = summary.endDate {
+            endDateText = displayDate(endDate)
+        }
+
+        return TripRecruitment(
             id: "\(serverTripIDPrefix)\(summary.roomId)",
             courseID: "",
             title: summary.title,
@@ -285,12 +326,12 @@ enum ServerTripMapper {
             hostName: "",
             hostAvatar: "",
             schedule: scheduleText(startDate: summary.startDate, endDate: summary.endDate),
-            meetupPoint: "",
+            meetupPoint: summary.meetingDetails ?? "",
             price: "",
             capacity: summary.maxParticipants,
             joined: summary.participantCount,
             minimumParticipants: 0,
-            status: .open,
+            status: status(from: summary.status),
             summary: summary.description ?? "",
             vibe: "",
             tags: summary.tagNames,
@@ -298,12 +339,16 @@ enum ServerTripMapper {
             participants: [],
             scheduleDetails: TripScheduleDetails(
                 kind: summary.tripType == "OVERNIGHT" ? .overnight : .dayTrip,
-                startDate: summary.startDate,
-                endDate: summary.endDate,
-                startTime: nil,
-                endTime: nil
+                startDate: displayDate(summary.startDate),
+                endDate: endDateText,
+                startTime: shortTime(summary.dayTripStartTime),
+                endTime: shortTime(summary.dayTripEndTime)
             ),
-            recruitmentDeadline: deadlineText(deadlineDate: summary.recruitmentDeadlineDate, dDay: nil),
+            meetingDetails: meeting,
+            recruitmentDeadline: deadlineText(
+                deadlineDate: summary.recruitmentDeadlineDate,
+                dDay: summary.recruitmentDDay
+            ),
             minimumAge: 0,
             maximumAge: 0,
             genderRestriction: "",
@@ -356,7 +401,8 @@ enum ServerTripMapper {
             scheduleDetails: TripScheduleDetails(
                 kind: kind,
                 startDate: displayDate(detail.startDate),
-                endDate: detail.endDate.map(displayDate),
+                // 함수 참조로 넘기면 main-actor 격리가 벗겨져 Swift 6 에서 경고가 난다.
+                endDate: detail.endDate.map { displayDate($0) },
                 startTime: shortTime(detail.dayTripStartTime),
                 endTime: shortTime(detail.dayTripEndTime)
             ),
@@ -413,10 +459,13 @@ enum ServerTripMapper {
         return "\(displayDate(startDate)) ~ \(displayDate(endDate))"
     }
 
-    /// "09:00:00" → "09:00"
+    /// 서버 시각 → 화면 표기 `HH:mm`.
+    /// 문서는 `HH:mm`, 실제 응답은 `HH:mm:ss` 라 **양쪽 모두** 받는다.
     static func shortTime(_ time: String?) -> String? {
         guard let time, !time.isEmpty else { return nil }
-        return String(time.prefix(5))
+        let parts = time.split(separator: ":")
+        guard parts.count >= 2 else { return nil }
+        return "\(parts[0]):\(parts[1])"
     }
 
     /// "2026-09-12T08:30:00" → "08:30"

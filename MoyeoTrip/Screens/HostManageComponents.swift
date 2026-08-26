@@ -173,3 +173,47 @@ struct HostApprovedCompanionsRow: View {
         }
     }
 }
+
+/// 화면기획 18 모집 관리의 신청자. 서버 신청(`GET .../applications`)과
+/// 캡처용 목데이터가 같은 형태를 쓴다 — 파일 길이 규칙 때문에 이 파일에 둔다.
+struct HostApplicant: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let avatar: String
+    /// 화면기획 18 — 나이·성별·매너·여행 횟수 요약 (예: "31세 · 남성 · 매너 4.9 · 여행 8회")
+    let meta: String
+    let note: String
+    /// 실서버 신청 식별자 — 승인(`.../approve`)·거절(`DELETE .../{id}`)에 쓴다. 목데이터면 nil.
+    var serverApplicationID: Int64?
+    var serverUserID: Int64?
+    var profileImageURL: URL?
+
+    var participant: Participant {
+        Participant(id: id, name: name, avatar: avatar)
+    }
+
+    // 화면기획 18 모집 관리의 승인 대기 2명
+    static let mockPending = [
+        HostApplicant(
+            id: "applicant-bear",
+            name: "우직한 곰 7821",
+            avatar: "🐻",
+            meta: "31세 · 남성 · 매너 4.9 · 여행 8회",
+            note: "단풍 보러 가요. 사진 좋아해서 풍경 잘 담아드릴 수 있어요!"
+        ),
+        HostApplicant(
+            id: "applicant-raccoon",
+            name: "호기심 많은 너구리 9027",
+            avatar: "🦝",
+            meta: "26세 · 여성 · 매너 4.7",
+            note: "야경 사진 찍는 걸 좋아해요. 잘 부탁드려요!"
+        )
+    ]
+
+    // 화면기획 18 — 본인 외 3명 (아바타 무리)
+    static let mockApproved = [
+        HostApplicant(id: "approved-deer", name: "숲속 사슴 2417", avatar: "🦌", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
+        HostApplicant(id: "approved-turtle", name: "잔잔한 거북이 9032", avatar: "🐢", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
+        HostApplicant(id: "approved-rabbit", name: "느긋한 토끼 7821", avatar: "🐰", meta: "매너 4.8 · 여행 8회", note: "기존 참여자")
+    ]
+}

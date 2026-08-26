@@ -1,22 +1,22 @@
 {
-  "images" : [
+  "images": [
     {
-      "filename" : "weather-rain-hahoe.png",
-      "idiom" : "universal"
+      "filename": "weather-rain-hahoe.heic",
+      "idiom": "universal"
     },
     {
-      "appearances" : [
+      "appearances": [
         {
-          "appearance" : "luminosity",
-          "value" : "dark"
+          "appearance": "luminosity",
+          "value": "dark"
         }
       ],
-      "filename" : "weather-rain-hahoe-night.png",
-      "idiom" : "universal"
+      "filename": "weather-rain-hahoe-night.heic",
+      "idiom": "universal"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "xcode",
+    "version": 1
   }
 }

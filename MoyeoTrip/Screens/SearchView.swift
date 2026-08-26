@@ -9,6 +9,8 @@ struct SearchView: View {
     @StateObject private var recentSearchModel = RecentSearchModel.forCurrentRuntime()
     /// 실서버 검색 결과 — 로그인 세션이 있고 검색 API가 성공했을 때만 채워진다 (nil = 목데이터)
     @State private var serverResults: [ServerChatRoomSummary]?
+    /// 찜 토글 결과. 서버 응답(`favorite`)이 기준이고, 토글한 방만 여기서 덮어쓴다.
+    @State private var serverFavoriteOverrides: [Int64: Bool] = [:]
     @State private var selectedServerTrip: TripRecruitment?
 
     private let popularSearches = [
@@ -109,14 +111,32 @@ struct SearchView: View {
 
     private func serverSearchResults(_ rooms: [ServerChatRoomSummary]) -> some View {
         ForEach(rooms) { room in
-            Button {
-                selectedServerTrip = ServerTripMapper.trip(from: room)
-            } label: {
-                ServerRoomSearchResultRow(room: room)
-                    .moyeoCard()
+            ServerRoomSearchResultRow(
+                room: room,
+                isFavorite: isServerFavorite(room),
+                onOpen: {
+                    selectedServerTrip = ServerTripMapper.trip(from: room)
+                },
+                onToggleFavorite: {
+                    toggleServerFavorite(room)
+                }
+            )
+            .moyeoCard()
+        }
+    }
+
+    /// 서버가 준 `favorite` 이 기준이고, 이 세션에서 토글한 방만 응답값으로 덮어쓴다.
+    private func isServerFavorite(_ room: ServerChatRoomSummary) -> Bool {
+        serverFavoriteOverrides[room.roomId] ?? room.favorite
+    }
+
+    private func toggleServerFavorite(_ room: ServerChatRoomSummary) {
+        guard MoyeoServerSync.isEnabled else { return }
+        Task {
+            // 실패하면 화면 값을 바꾸지 않는다 — 서버 응답만 신뢰한다.
+            if let favorite = try? await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId) {
+                serverFavoriteOverrides[room.roomId] = favorite
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("search.serverRoom.\(room.roomId)")
         }
     }
 
@@ -269,48 +289,81 @@ struct SearchView: View {
     }
 }
 
-/// 실서버 검색 결과 행 — 서버가 내려준 값만 그린다
+/// 실서버 검색 결과 행 — 서버가 내려준 값만 그린다.
+/// 상태 배지·찜 하트는 10 탐색 카드와 같은 표기를 쓴다(서버 `status`·`favorite` 근거).
 private struct ServerRoomSearchResultRow: View {
     let room: ServerChatRoomSummary
+    let isFavorite: Bool
+    let onOpen: () -> Void
+    let onToggleFavorite: () -> Void
 
     private var scheduleLine: String {
         let schedule = ServerTripMapper.scheduleText(startDate: room.startDate, endDate: room.endDate)
-        return "\(schedule) · \(room.participantCount)/\(room.maxParticipants)명"
+        // 당일 여행이면 시간까지, 숙박이면 서버가 시간을 null로 주므로 그 부분을 숨긴다.
+        let dayTrip = room.dayTripTimeText.map { " · \($0)" } ?? ""
+        return "\(schedule)\(dayTrip) · \(room.participantCount)/\(room.maxParticipants)명"
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            CachedRemoteImage(url: room.thumbnailURL) { image in
-                image
-                    .resizable()
-                    .scaledToFill()
-            } placeholder: {
-                MoyeoTheme.leaf
-            }
-            .frame(width: 72, height: 60)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            Button(action: onOpen) {
+                HStack(spacing: 12) {
+                    CachedRemoteImage(url: room.thumbnailURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        MoyeoTheme.leaf
+                    }
+                    .frame(width: 72, height: 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(alignment: .bottomLeading) {
+                        Text(room.statusBadgeText)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(MoyeoTheme.forest)
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .padding(4)
+                    }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(room.title)
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .lineLimit(1)
-                Text(
-                    ([room.courseTitle] + room.tagNames.prefix(2))
-                        .filter { !$0.isEmpty }
-                        .joined(separator: " · ")
-                )
-                .font(.caption)
-                .foregroundStyle(MoyeoTheme.muted)
-                .lineLimit(1)
-                Text(scheduleLine)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(MoyeoTheme.text700)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(room.title)
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                            .lineLimit(1)
+                        Text(
+                            ([room.courseTitle] + room.tagNames.prefix(2))
+                                .filter { !$0.isEmpty }
+                                .joined(separator: " · ")
+                        )
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .lineLimit(1)
+                        Text(scheduleLine)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(MoyeoTheme.text700)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
             }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.text400)
+            .buttonStyle(.plain)
+            .accessibilityLabel(room.title)
+            .accessibilityIdentifier("search.serverRoom.\(room.roomId)")
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.text700)
+                    .frame(width: 32, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
+            .accessibilityValue(isFavorite ? "선택됨" : "선택 안 됨")
+            .accessibilityIdentifier("search.serverRoom.favorite.\(room.roomId)")
         }
     }
 }

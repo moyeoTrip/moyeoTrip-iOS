@@ -1,7 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "trip-confirmed-mascots-light.png",
+      "filename" : "trip-confirmed-mascots-light.heic",
       "idiom" : "universal",
       "scale" : "1x"
     },
@@ -12,9 +12,37 @@
           "value" : "dark"
         }
       ],
-      "filename" : "trip-confirmed-mascots-dark.png",
+      "filename" : "trip-confirmed-mascots-dark.heic",
       "idiom" : "universal",
       "scale" : "1x"
+    },
+    {
+      "idiom" : "universal",
+      "scale" : "2x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "idiom" : "universal",
+      "scale" : "2x"
+    },
+    {
+      "idiom" : "universal",
+      "scale" : "3x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "idiom" : "universal",
+      "scale" : "3x"
     }
   ],
   "info" : {

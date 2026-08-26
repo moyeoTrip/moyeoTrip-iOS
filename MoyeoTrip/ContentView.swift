@@ -87,7 +87,9 @@ enum MoyeoTab: CaseIterable, Hashable {
 }
 
 enum MyRoute: Hashable {
-    case profile
+    /// changeLog18 — 25 프로필 카드. 유저를 눌러 자세히 보는 모든 진입점이 이 화면으로 온다.
+    /// `startsFlipped` 는 25-1 뒷면 캡처 전용이다 (실사용 기본값은 앞면).
+    case profile(ProfileCardSubject, startsFlipped: Bool)
     case profileEdit
     case profileTasteEdit
     case myFeed

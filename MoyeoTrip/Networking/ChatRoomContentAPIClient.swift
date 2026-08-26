@@ -289,9 +289,17 @@ enum ServerDateTime {
 extension ServerTripMapper {
     static let serverThreadIDPrefix = "server-chat-"
 
+    static let serverNoticeIDPrefix = "server-notice-"
+
     static func roomID(fromThreadID threadID: String) -> Int64? {
         guard threadID.hasPrefix(serverThreadIDPrefix) else { return nil }
         return Int64(threadID.dropFirst(serverThreadIDPrefix.count))
+    }
+
+    /// 20-3 공지 카드의 화면 id → 서버 noticeId. 목데이터 공지면 nil 이다.
+    static func noticeID(fromNoticeID noticeID: String) -> Int64? {
+        guard noticeID.hasPrefix(serverNoticeIDPrefix) else { return nil }
+        return Int64(noticeID.dropFirst(serverNoticeIDPrefix.count))
     }
 
     /// 내 채팅방 목록 항목 → 19 모임 목록 행.
@@ -351,7 +359,7 @@ extension ServerTripMapper {
         let title = lines.first ?? ""
         lines.removeFirst()
         return TripNotice(
-            id: "server-notice-\(notice.noticeId)",
+            id: "\(serverNoticeIDPrefix)\(notice.noticeId)",
             title: title,
             body: lines.joined(separator: "\n"),
             createdAt: ServerDateTime.noticeTimeText(from: notice.createdAt),
@@ -406,12 +414,13 @@ extension ServerTripMapper {
     static func chatThread(_ thread: ChatThread, applying content: ServerChatRoomContent) -> ChatThread {
         var updated = thread
         let memberList = content.memberList
-        updated.members = memberList.members.map(member(from:))
+        // 함수 참조 대신 클로저로 호출해 main-actor 격리를 유지한다(Swift 6).
+        updated.members = memberList.members.map { member(from: $0) }
         updated.statusSummary = memberStatusSummary(thread: thread, memberList: memberList)
         updated.messages = content.messages.map {
             chatMessage(from: $0, currentUserID: memberList.currentUserID)
         }
-        updated.pinnedNotices = content.noticeHistory?.allNotices.map(notice(from:)) ?? []
+        updated.pinnedNotices = content.noticeHistory?.allNotices.map { notice(from: $0) } ?? []
         updated.isCurrentUserHost = memberList.members.contains { $0.me && $0.host }
 
         if let course = content.course {

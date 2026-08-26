@@ -56,8 +56,9 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         tapButton("진행중")
 
         assertElement("my.activeTrip.trip-ulleung-island.people", hasLabel: "4/5명")
-        tapButton("프로필 메뉴")
-        assertElement("profile.stat.joined.value", hasLabel: "13")
+        // changeLog18 — 25 가 프로필 카드로 바뀌어 지표 격자가 없어졌다.
+        // 여행 수는 26 마이의 지표 알약에서 확인한다.
+        assertElement("my.stat.joined.value", hasLabel: "13")
     }
 
     @MainActor
@@ -71,10 +72,10 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
 
         tapElement("tab.my")
         XCTAssertTrue(app.staticTexts["1/5명"].waitForExistence(timeout: 3))
-        tapButton("프로필 메뉴")
 
-        assertElement("profile.stat.hosted.value", hasLabel: "4")
-        assertElement("profile.stat.hosted.title", hasLabel: "호스트")
+        // changeLog18 — 호스트 수를 보여주던 25 의 지표 격자가 없어졌다(서버가 주지 않는 값이라
+        // 카드에도 넣지 않는다). 새로 만든 모집이 26 마이의 내 여행에 들어온 것으로 확인한다.
+        XCTAssertTrue(element("my.stat.joined.value").exists)
     }
 
     @MainActor

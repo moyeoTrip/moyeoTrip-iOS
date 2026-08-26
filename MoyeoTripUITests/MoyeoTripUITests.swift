@@ -724,11 +724,24 @@ final class MoyeoTripUITests: XCTestCase {
 
     @MainActor
     func testProfileMenuEditAndDogamPreviewOpenDedicatedScreens() {
+        // changeLog18 — 25 가 프로필 카드로 바뀌면서 관리 진입점(내 정보 수정 · 친구 관리)이
+        // 26 마이 메뉴로 옮겨졌다. 카드 안에는 그 두 줄이 더 이상 없다.
         relaunch(startTab: "my")
         tapElement("my.profileSummary")
         XCTAssertTrue(element("screen.profile").waitForExistence(timeout: 3))
+        // 카드 앞면에는 뒤집기 안내가 있고, 관리 메뉴 줄은 더 이상 없다
+        XCTAssertTrue(app.staticTexts["옆으로 밀면 함께한 여행과 평가를 볼 수 있어요"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["뒤집기"].waitForExistence(timeout: 3))
+        XCTAssertFalse(element("profile.menu.edit").exists)
 
-        tapElement("profile.menu.edit")
+        relaunch(startTab: "my")
+        let editShortcut = element("my.profileEditShortcut")
+        let scrollView = app.scrollViews.firstMatch
+        for _ in 0..<10 where !editShortcut.isHittable {
+            scrollView.swipeUp()
+        }
+        XCTAssertTrue(editShortcut.isHittable)
+        editShortcut.tap()
         XCTAssertTrue(element("screen.profileEdit").waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["닉네임"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["관심 지역"].exists)
@@ -737,10 +750,12 @@ final class MoyeoTripUITests: XCTestCase {
         app.alerts["저장 완료"].buttons["확인"].tap()
 
         relaunch(startTab: "my")
-        tapElement("my.profileSummary")
-        XCTAssertTrue(element("screen.profile").waitForExistence(timeout: 3))
-        // 프로필 메뉴는 내 정보 수정 · 친구 관리 · 차단한 사용자 세 줄이다
-        tapElement("profile.menu.friends")
+        let friendsShortcut = element("my.friendsShortcut")
+        for _ in 0..<10 where !friendsShortcut.isHittable {
+            app.scrollViews.firstMatch.swipeUp()
+        }
+        XCTAssertTrue(friendsShortcut.isHittable)
+        friendsShortcut.tap()
         XCTAssertTrue(element("screen.friends").waitForExistence(timeout: 3))
         XCTAssertTrue(element("friends.dexNotice").exists)
     }

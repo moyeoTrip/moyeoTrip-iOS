@@ -85,7 +85,7 @@ struct MyView: View {
 
       ScrollView {
         VStack(spacing: 10) {
-          NavigationLink(value: MyRoute.profile) {
+          NavigationLink(value: MyRoute.profile(.planningMock, startsFlipped: false)) {
             MyProfileSummaryCard(profile: profile, serverProfile: serverProfile)
           }
           .buttonStyle(.plain)
@@ -151,8 +151,8 @@ struct MyView: View {
     }
     .navigationDestination(for: MyRoute.self) { route in
       switch route {
-      case .profile:
-        PublicProfileView(profile: profile, onAuthenticationRequired: onAuthenticationRequired)
+      case .profile(let subject, let startsFlipped):
+        ProfileCardView(subject: subject, startsFlipped: startsFlipped)
       case .profileEdit:
         ProfileEditView(profile: profile)
       case .profileTasteEdit:
@@ -495,6 +495,16 @@ private struct MyHubMenuPanel: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("my.friendDexShortcut")
+        Divider().padding(.leading, 16)
+        // changeLog18 — 25 가 프로필 카드로 바뀌면서 관리 진입점이 여기로 왔다.
+        // 옮기지 않으면 28 프로필 수정이 어디서도 열리지 않는다.
+        Button {
+          openRoute(.profileEdit)
+        } label: {
+          MyHubMenuRow(title: "내 정보 수정", subtitle: "프로필과 여행 취향을 관리해요")
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("my.profileEditShortcut")
         Divider().padding(.leading, 16)
         Button {
           openRoute(.friends)
@@ -1250,197 +1260,6 @@ private enum ProfileEditMockData {
   static let bio = "느긋한 여행 좋아해요"
 }
 
-private struct PublicProfileView: View {
-  let profile: ProfileSummary
-  let onAuthenticationRequired: () -> Void
-  @State private var selectedDestination: ProfileDestination?
-  /// 실서버 프로필 — 로그인 세션이 있고 프로필 API가 성공했을 때만 채워진다
-  @State private var serverProfile: ServerMyProfile?
-
-  var body: some View {
-    VStack(spacing: 0) {
-      CompactDetailHeader(title: "프로필") {
-        Button {
-          selectedDestination = .settings
-        } label: {
-          Label("설정", systemImage: "gearshape.fill")
-            .labelStyle(.iconOnly)
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(MoyeoTheme.forest)
-            .frame(width: 34, height: 34)
-            .background(MoyeoTheme.leaf)
-            .clipShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("profile.settings")
-      }
-
-      ScrollView {
-        VStack(spacing: 14) {
-          // 커버 위에 아바타가 걸치는 공개 프로필 헤더 (화면기획)
-          VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-              MoyeoTheme.mapGreen.frame(height: 132)
-              AuthenticatedProfileAvatar(profile: profile, size: 74)
-                .padding(6)
-                .background(MoyeoTheme.leaf)
-                .clipShape(Circle())
-                .offset(y: 38)
-            }
-            Spacer().frame(height: 46)
-            Text(serverProfile?.nickname ?? profile.name)
-              .font(.title3.weight(.heavy))
-              .foregroundStyle(MoyeoTheme.ink)
-            // 서버는 내 매너 점수를 내려주지 않는다 — 서버 프로필 상태에서는 숨긴다
-            if serverProfile == nil {
-              HStack(spacing: 4) {
-                Text("매너 점수 4.7점")
-                  .font(.caption.weight(.bold))
-                  .foregroundStyle(MoyeoTheme.muted)
-                Image(systemName: "star")
-                  .font(.system(size: 11, weight: .semibold))
-                  .foregroundStyle(MoyeoTheme.muted)
-              }
-              .padding(.top, 4)
-            }
-          }
-
-          // 서버는 여행·주최·피드 수를 내려주지 않는다 — 서버 프로필 상태에서는 숨긴다
-          if serverProfile == nil {
-            StatGrid(profile: profile)
-              .padding(.horizontal, 18)
-          }
-
-          if serverProfile == nil || serverProfile?.introduction?.isEmpty == false {
-            VStack(alignment: .leading, spacing: 6) {
-              Text("소개").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
-              Text(serverProfile?.introduction ?? profile.publicIntro)
-                .font(.subheadline)
-                .foregroundStyle(MoyeoTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            .overlay {
-              RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                .stroke(MoyeoTheme.softLine, lineWidth: 1)
-            }
-            .padding(.horizontal, 18)
-          }
-
-          ProfileMenuPanel { destination in
-            selectedDestination = destination
-          }
-        }
-        .padding(.bottom, 32)
-      }
-    }
-    .background(MoyeoTheme.background.ignoresSafeArea())
-    .toolbar(.hidden, for: .navigationBar)
-    .navigationDestination(item: $selectedDestination) { destination in
-      switch destination {
-      case .edit:
-        ProfileEditView(profile: profile)
-      case .settings:
-        SettingsView(onAuthenticationRequired: onAuthenticationRequired)
-      case .friends:
-        FriendsManagementView()
-      case .blocked:
-        BlockedUsersView()
-      }
-    }
-    .task {
-      guard MoyeoServerSync.isEnabled, serverProfile == nil else { return }
-      serverProfile = try? await UserProfileAPIClient.shared.myProfile()
-    }
-    .accessibilityIdentifier("screen.profile")
-  }
-}
-
-private enum ProfileDestination: String, Identifiable {
-  case edit
-  case settings
-  case friends
-  case blocked
-
-  var id: String { rawValue }
-}
-
-private struct ProfileMenuPanel: View {
-  let onSelect: (ProfileDestination) -> Void
-
-  var body: some View {
-    VStack(spacing: 0) {
-      ProfileMenuButton(
-        title: "내 정보 수정",
-        subtitle: "프로필과 여행 취향을 관리해요",
-        destination: .edit,
-        identifier: "profile.menu.edit",
-        onSelect: onSelect
-      )
-      Divider().padding(.leading, 14)
-      ProfileMenuButton(
-        title: "친구 관리",
-        subtitle: "함께 다녀온 친구와 신청을 관리해요",
-        destination: .friends,
-        identifier: "profile.menu.friends",
-        onSelect: onSelect
-      )
-      Divider().padding(.leading, 14)
-      ProfileMenuButton(
-        title: "차단한 사용자",
-        subtitle: "차단을 해제하면 다시 만날 수 있어요",
-        destination: .blocked,
-        identifier: "profile.menu.blocked",
-        onSelect: onSelect
-      )
-    }
-    .background(MoyeoTheme.card)
-    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-        .stroke(MoyeoTheme.softLine, lineWidth: 1)
-    }
-  }
-}
-
-private struct ProfileMenuButton: View {
-  let title: String
-  let subtitle: String
-  let destination: ProfileDestination
-  let identifier: String
-  let onSelect: (ProfileDestination) -> Void
-
-  var body: some View {
-    Button {
-      onSelect(destination)
-    } label: {
-      HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(title)
-            .font(.subheadline.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.ink)
-          Text(subtitle)
-            .font(.caption)
-            .foregroundStyle(MoyeoTheme.muted)
-            .lineLimit(1)
-        }
-        Spacer()
-        Image(systemName: "chevron.right")
-          .font(.caption.bold())
-          .foregroundStyle(MoyeoTheme.text400)
-      }
-      .frame(height: 76)
-      .contentShape(Rectangle())
-      .padding(.horizontal, 14)
-    }
-    .buttonStyle(.plain)
-    .accessibilityIdentifier(identifier)
-  }
-}
-
 private struct MySegmentBar: View {
   let segments: [String]
   @Binding var selectedSegment: String
@@ -1620,7 +1439,13 @@ private struct FriendDexView: View {
               } else {
                 LazyVGrid(columns: columns, spacing: 8) {
                   ForEach(serverCompanions) { companion in
-                    ServerDogamCard(companion: companion)
+                    // 카드를 탭하면 25 프로필 카드로 넘어간다 (changeLog18)
+                    NavigationLink(
+                      value: MyRoute.profile(.serverCompanion(companion), startsFlipped: false)
+                    ) {
+                      ServerDogamCard(companion: companion)
+                    }
+                    .buttonStyle(.plain)
                   }
                 }
               }
@@ -1629,8 +1454,14 @@ private struct FriendDexView: View {
             } else {
               LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(Array(filteredFriends.enumerated()), id: \.element.id) { index, friend in
-                  DogamFriendCard(friend: friend)
-                    .id(index == 6 ? "friendDex.middle" : friend.id)
+                  // 카드를 탭하면 25 프로필 카드로 넘어간다 (changeLog18)
+                  NavigationLink(
+                    value: MyRoute.profile(.mockFriend(friend.id), startsFlipped: false)
+                  ) {
+                    DogamFriendCard(friend: friend)
+                  }
+                  .buttonStyle(.plain)
+                  .id(index == 6 ? "friendDex.middle" : friend.id)
                 }
               }
             }
@@ -3145,47 +2976,6 @@ private struct AuthenticatedProfileAvatar: View {
     Text(emojiOverride ?? profile.avatar)
       .font(.system(size: size * 0.48))
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
-
-private struct StatGrid: View {
-  let profile: ProfileSummary
-
-  var body: some View {
-    HStack(spacing: 12) {
-      StatCard(title: "여행", value: "\(profile.joinedTrips)", identifier: "profile.stat.joined")
-      StatCard(title: "호스트", value: "\(profile.hostedTrips)", identifier: "profile.stat.hosted")
-      StatCard(title: "피드", value: "\(profile.feedCount)", identifier: "profile.stat.feed")
-    }
-  }
-}
-
-private struct StatCard: View {
-  let title: String
-  let value: String
-  let identifier: String
-
-  var body: some View {
-    VStack(spacing: 8) {
-      Text(value)
-        .font(.title3.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-        .accessibilityIdentifier("\(identifier).value")
-      Text(title)
-        .font(.subheadline)
-        .foregroundStyle(MoyeoTheme.muted)
-        .accessibilityIdentifier("\(identifier).title")
-    }
-    .frame(maxWidth: .infinity)
-    .padding(.vertical, 18)
-    .background(MoyeoTheme.card)
-    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-        .stroke(MoyeoTheme.line, lineWidth: 1)
-    }
   }
 }
 

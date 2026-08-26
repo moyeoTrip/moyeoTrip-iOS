@@ -87,6 +87,19 @@ extension FeedPost {
         authorName
     }
 
+    /// changeLog18 — 작성자 아바타·닉네임을 누르면 열리는 25 프로필 카드 대상.
+    /// 목데이터 피드는 유저 id 가 없어 화면기획 기준 카드를 그린다(웹 프로토타입과 같다).
+    var authorProfileSubject: ProfileCardSubject {
+        guard let serverAuthorID else { return .planningMock }
+        return .serverUser(
+            ProfileCardUserReference(
+                userID: serverAuthorID,
+                nickname: authorName,
+                profileImageUrl: authorAvatarURL?.absoluteString
+            )
+        )
+    }
+
     var feedTitle: String {
         if let title, !title.isEmpty {
             return title

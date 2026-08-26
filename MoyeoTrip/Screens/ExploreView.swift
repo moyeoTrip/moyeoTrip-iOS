@@ -13,6 +13,8 @@ struct ExploreView: View {
     @State private var favoriteCourseIDs: Set<String> = ["course-cheongsong-juwangsan"]
     /// 실서버 모임 목록 — 로그인 세션이 있고 검색 API가 성공했을 때만 채워진다 (nil = 목데이터)
     @State private var serverRooms: [ServerChatRoomSummary]?
+    /// 찜 토글 결과. 서버 응답(`favorite`)이 기준이고, 토글한 방만 여기서 덮어쓴다.
+    @State private var serverFavoriteOverrides: [Int64: Bool] = [:]
     @State private var selectedServerTrip: TripRecruitment?
 
     private let categories = ["전체", "자연", "역사", "체험", "힐링"]
@@ -41,6 +43,11 @@ struct ExploreView: View {
         }
     }
 
+    /// 11 탐색 지도 하단 카드에 그릴 서버 모임 — 좌표가 있어 지도에 실제로 찍히는 첫 모임이다.
+    private var selectedMapServerRoom: ServerChatRoomSummary? {
+        serverRooms?.first { $0.meetingCoordinate != nil }
+    }
+
     private var filteredCourses: [TravelCourse] {
         MockData.courses.filter { course in
             let matchesSearch = searchText.isEmpty
@@ -59,7 +66,10 @@ struct ExploreView: View {
             if showingMap {
                 ExploreMapView(
                     tripContext: tripContext,
+                    serverRooms: serverRooms,
+                    selectedServerRoom: selectedMapServerRoom,
                     isSelectedCourseFavorite: favoriteCourseIDs.contains(MockData.courses[0].id),
+                    isSelectedServerRoomFavorite: selectedMapServerRoom.map(isServerFavorite) ?? false,
                     onClose: {
                         showingMap = false
                     },
@@ -68,6 +78,12 @@ struct ExploreView: View {
                     },
                     onToggleSelectedCourseFavorite: {
                         toggleFavorite(MockData.courses[0])
+                    },
+                    onOpenSelectedServerRoom: { room in
+                        selectedServerTrip = ServerTripMapper.trip(from: room)
+                    },
+                    onToggleSelectedServerRoomFavorite: { room in
+                        toggleServerFavorite(room)
                     }
                 )
             } else {
@@ -110,9 +126,16 @@ struct ExploreView: View {
                                         ExploreEmptyResultView()
                                     } else {
                                         ForEach(serverRoomList) { room in
-                                            ExploreServerRoomRow(room: room) {
-                                                selectedServerTrip = ServerTripMapper.trip(from: room)
-                                            }
+                                            ExploreServerRoomRow(
+                                                room: room,
+                                                isFavorite: isServerFavorite(room),
+                                                onOpen: {
+                                                    selectedServerTrip = ServerTripMapper.trip(from: room)
+                                                },
+                                                onToggleFavorite: {
+                                                    toggleServerFavorite(room)
+                                                }
+                                            )
                                         }
                                     }
                                 } else if filteredCourses.isEmpty {
@@ -216,6 +239,21 @@ struct ExploreView: View {
             favoriteCourseIDs.remove(course.id)
         } else {
             favoriteCourseIDs.insert(course.id)
+        }
+    }
+
+    /// 서버가 준 `favorite` 이 기준이고, 이 세션에서 토글한 방만 응답값으로 덮어쓴다.
+    private func isServerFavorite(_ room: ServerChatRoomSummary) -> Bool {
+        serverFavoriteOverrides[room.roomId] ?? room.favorite
+    }
+
+    private func toggleServerFavorite(_ room: ServerChatRoomSummary) {
+        guard MoyeoServerSync.isEnabled else { return }
+        Task {
+            // 실패하면 화면 값을 바꾸지 않는다 — 서버 응답만 신뢰한다.
+            if let favorite = try? await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId) {
+                serverFavoriteOverrides[room.roomId] = favorite
+            }
         }
     }
 }
@@ -363,10 +401,17 @@ private struct MapPreviewCard: View {
 
 private struct ExploreMapView: View {
     var tripContext = TripInteractionContext()
+    /// 실서버 모임 목록 (nil = 미로그인·캡처 모드 → 목데이터 지도)
+    let serverRooms: [ServerChatRoomSummary]?
+    /// 하단 선택 카드에 그릴 서버 모임 (nil = 목데이터 코스 카드)
+    let selectedServerRoom: ServerChatRoomSummary?
     let isSelectedCourseFavorite: Bool
+    let isSelectedServerRoomFavorite: Bool
     let onClose: () -> Void
     let onOpenSelectedCourse: () -> Void
     let onToggleSelectedCourseFavorite: () -> Void
+    let onOpenSelectedServerRoom: (ServerChatRoomSummary) -> Void
+    let onToggleSelectedServerRoomFavorite: (ServerChatRoomSummary) -> Void
 
     private let clusters = [
         MapCluster(x: 0.20, y: 0.33, count: 1),
@@ -384,8 +429,17 @@ private struct ExploreMapView: View {
     private let mapHill = adaptiveColor(light: "#D8E8D5", dark: "#182C22")
     private let mapWater = adaptiveColor(light: "#C9E0E5", dark: "#17303B")
 
-    /// 목데이터 위경도가 있는 명소만 실지도 마커로 찍는다. 원 안 숫자는 그 지역의 모집 수다.
+    /// 서버 모임 마커 → 없으면 목데이터 마커.
+    /// 서버는 `meetingLatitude`/`meetingLongitude` 가 **둘 다** 있는 모임만 좌표를 주므로 그 항목만 찍힌다.
     private var mapContent: MoyeoMapContent {
+        if let serverRooms, let serverContent = ServerTripMapper.mapContent(from: serverRooms) {
+            return serverContent
+        }
+        return mockMapContent
+    }
+
+    /// 목데이터 위경도가 있는 명소만 실지도 마커로 찍는다. 원 안 숫자는 그 지역의 모집 수다.
+    private var mockMapContent: MoyeoMapContent {
         let markers = MockData.spots.compactMap { spot -> MoyeoMapMarker? in
             guard let coordinate = MoyeoMapCoordinate(latitude: spot.latitude, longitude: spot.longitude) else {
                 return nil
@@ -410,14 +464,27 @@ private struct ExploreMapView: View {
                 Spacer()
             }
 
-            ExploreMapSelectedCard(
-                course: MockData.courses[0],
-                isFavorite: isSelectedCourseFavorite,
-                onOpen: onOpenSelectedCourse,
-                onToggleFavorite: onToggleSelectedCourseFavorite
-            )
-            .padding(.horizontal, 18)
-            .padding(.bottom, 106)
+            // 서버 마커를 찍는 상태에서 목데이터 코스 카드를 함께 보여주면 근거가 섞인다.
+            // 서버 모임이 있으면 카드도 서버 값으로 그린다(카드 자리·생김새는 화면기획 그대로).
+            if let room = selectedServerRoom {
+                ExploreMapSelectedServerRoomCard(
+                    room: room,
+                    isFavorite: isSelectedServerRoomFavorite,
+                    onOpen: { onOpenSelectedServerRoom(room) },
+                    onToggleFavorite: { onToggleSelectedServerRoomFavorite(room) }
+                )
+                .padding(.horizontal, 18)
+                .padding(.bottom, 106)
+            } else {
+                ExploreMapSelectedCard(
+                    course: MockData.courses[0],
+                    isFavorite: isSelectedCourseFavorite,
+                    onOpen: onOpenSelectedCourse,
+                    onToggleFavorite: onToggleSelectedCourseFavorite
+                )
+                .padding(.horizontal, 18)
+                .padding(.bottom, 106)
+            }
         }
         .background(mapBase.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -605,6 +672,75 @@ private struct ExploreMapSelectedCard: View {
     }
 }
 
+/// 11 탐색 지도 하단 선택 카드의 실서버 판. 자리·크기·하트는 목데이터 카드와 같고 값만 서버가 준다.
+private struct ExploreMapSelectedServerRoomCard: View {
+    let room: ServerChatRoomSummary
+    let isFavorite: Bool
+    let onOpen: () -> Void
+    let onToggleFavorite: () -> Void
+
+    /// 집합 안내는 서버가 null 이면 표기 자체를 숨긴다 — "미정" 같은 문구를 지어내지 않는다.
+    private var meetingLine: String? {
+        guard let details = room.meetingDetailsText else { return nil }
+        return "\(room.meetingTimeText) \(details)"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onOpen) {
+                HStack(spacing: 12) {
+                    CachedRemoteImage(url: room.thumbnailURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        MoyeoTheme.leaf
+                    }
+                    .frame(width: 84, height: 76)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(room.title)
+                            .font(.caption.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                            .lineLimit(2)
+                        if let meetingLine {
+                            Text(meetingLine)
+                                .font(.caption2)
+                                .foregroundStyle(MoyeoTheme.muted)
+                                .lineLimit(1)
+                        }
+                        Text("\(room.participantCount)/\(room.maxParticipants)명")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(MoyeoTheme.text700)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(room.title)
+            .accessibilityIdentifier("explore.map.selectedServerRoom")
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.text700)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
+            .accessibilityValue(isFavorite ? "선택됨" : "선택 안 됨")
+            .accessibilityIdentifier("explore.map.serverRoom.favorite.\(room.roomId)")
+        }
+        .frame(height: 96)
+        .padding(10)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: MoyeoTheme.ink.opacity(0.10), radius: 16, x: 0, y: 8)
+    }
+}
+
 private struct ExploreCourseRow: View {
     let course: TravelCourse
     let isFavorite: Bool
@@ -679,65 +815,82 @@ private struct ExploreCourseRow: View {
     }
 }
 
-/// 실서버 모임 행 — 서버가 내려준 값(제목·코스명·태그·인원·썸네일)만 그린다
+/// 실서버 모임 행 — 서버가 내려준 값(제목·코스명·태그·인원·썸네일·상태·찜)만 그린다.
+/// 배지·하트는 목데이터 카드(`ExploreCourseRow`)와 같은 자리·같은 생김새다.
 private struct ExploreServerRoomRow: View {
     let room: ServerChatRoomSummary
+    let isFavorite: Bool
     let onOpen: () -> Void
+    let onToggleFavorite: () -> Void
 
     var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 11) {
-                CachedRemoteImage(url: room.thumbnailURL) { image in
-                    image
-                        .resizable()
-                        .scaledToFill()
-                } placeholder: {
-                    MoyeoTheme.leaf
-                }
-                .frame(width: 88, height: 68)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(alignment: .bottomLeading) {
-                    Text("\(room.participantCount)/\(room.maxParticipants)명")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(MoyeoTheme.forest)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .padding(5)
-                }
+        HStack(spacing: 11) {
+            Button(action: onOpen) {
+                HStack(spacing: 11) {
+                    CachedRemoteImage(url: room.thumbnailURL) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        MoyeoTheme.leaf
+                    }
+                    .frame(width: 88, height: 68)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay(alignment: .bottomLeading) {
+                        Text(room.statusBadgeText)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(MoyeoTheme.forest)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .padding(5)
+                    }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(room.title)
-                        .font(.subheadline.weight(.heavy))
-                        .foregroundStyle(MoyeoTheme.ink)
-                        .lineLimit(2)
-                    Text(
-                        ([room.courseTitle] + room.tagNames.prefix(2))
-                            .filter { !$0.isEmpty }
-                            .joined(separator: " · ")
-                    )
-                    .font(.caption)
-                    .foregroundStyle(MoyeoTheme.muted)
-                    .lineLimit(1)
-                    Text(ServerTripMapper.scheduleText(startDate: room.startDate, endDate: room.endDate))
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(MoyeoTheme.text700)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(room.title)
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                            .lineLimit(2)
+                        Text(
+                            ([room.courseTitle] + room.tagNames.prefix(2))
+                                .filter { !$0.isEmpty }
+                                .joined(separator: " · ")
+                        )
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .lineLimit(1)
+                        Text("\(room.participantCount)/\(room.maxParticipants)명")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(MoyeoTheme.text700)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
-            .frame(height: 72)
-            .padding(10)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
+            .buttonStyle(.plain)
+            .accessibilityLabel(room.title)
+            .accessibilityIdentifier("explore.serverRoom.\(room.roomId)")
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.text700)
+                    .frame(width: 38, height: 44)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
+            .accessibilityValue(isFavorite ? "선택됨" : "선택 안 됨")
+            .accessibilityIdentifier("explore.serverRoom.favorite.\(room.roomId)")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(room.title)
-        .accessibilityIdentifier("explore.serverRoom.\(room.roomId)")
+        .frame(height: 72)
+        .padding(10)
+        .background(MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                .stroke(MoyeoTheme.softLine, lineWidth: 1)
+        }
     }
 }
 

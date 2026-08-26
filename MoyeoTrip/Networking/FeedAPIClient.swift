@@ -58,13 +58,17 @@ struct ServerFeedPlace: Decodable, Hashable {
     let visitTime: String?
 }
 
+/// 23-1 댓글. 서버는 대댓글을 `replies` 로 중첩해 내려준다 (`GET /feeds/{id}/comments` → 배열).
 struct ServerFeedComment: Decodable, Identifiable, Hashable {
     let commentId: Int64
     let author: ServerFeed.Author?
     let content: String?
     let createdAt: String?
+    let replies: [ServerFeedComment]?
 
     var id: Int64 { commentId }
+
+    var replyList: [ServerFeedComment] { replies ?? [] }
 }
 
 struct ServerFeedLikeResponse: Decodable {
@@ -99,6 +103,11 @@ final class FeedAPIClient: @unchecked Sendable {
 
     func toggleLike(feedID: Int64) async throws {
         try await api.sendVoid("/api/v1/feeds/\(feedID)/like", method: "POST")
+    }
+
+    /// 23-1 댓글 목록. 스펙(`/api-docs`)에는 단일 객체로 적혀 있지만 서버는 **배열**을 준다.
+    func comments(feedID: Int64) async throws -> [ServerFeedComment] {
+        try await api.get("/api/v1/feeds/\(feedID)/comments")
     }
 
     func postComment(feedID: Int64, content: String, parentCommentID: Int64? = nil) async throws {
@@ -147,7 +156,8 @@ enum ServerFeedMapper {
             photoURL: feed.images.min { $0.sequence < $1.sequence }
                 .flatMap { URL(string: $0.imageUrl) },
             serverFeedID: feed.feedId,
-            serverLiked: feed.liked
+            serverLiked: feed.liked,
+            serverAuthorID: feed.author.userId
         )
     }
 

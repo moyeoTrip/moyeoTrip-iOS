@@ -49,6 +49,9 @@ enum SupportRoute: Hashable, Identifiable {
   case ossLicenses
   /// changeLog17 — 29-4a 라이선스 전문. 값은 `oss-licenses-ios.json` 의 `name` 이다.
   case ossLicenseDetail(String)
+  /// changeLog18 — 25 프로필 카드. 마이 탭 밖(피드 작성자 23 · 멤버 액션 20-1a · 친구 목록 27-2)에서
+  /// 같은 화면으로 오기 위한 통로다. 화면은 `MyRoute.profile` 과 같은 `ProfileCardView` 하나뿐이다.
+  case publicProfile(ProfileCardSubject)
 
   var id: String {
     switch self {
@@ -116,6 +119,7 @@ enum SupportRoute: Hashable, Identifiable {
     case .signupLegalDocument(let document): return "signupLegalDocument.\(document.rawValue)"
     case .ossLicenses: return "ossLicenses"
     case .ossLicenseDetail(let name): return "ossLicenseDetail.\(name)"
+    case .publicProfile(let subject): return "publicProfile.\(subject.routeKey)"
     }
   }
 }
@@ -226,8 +230,9 @@ struct SupportDestinationView: View {
       ChatSideMenuView(thread: resolvedThread(threadID), startsWithMemberActions: true)
     case .chatMenuMemberRemove(let threadID):
       ChatSideMenuView(thread: resolvedThread(threadID), startsWithMemberRemoval: true)
-    case .chatAttach:
-      ChatAttachmentMenuView()
+    case .chatAttach(let threadID):
+      // 서버 모임에서 열린 20-2는 그 방으로 실제 카드를 보낸다. 목데이터·캡처면 roomID가 nil이다.
+      ChatAttachmentMenuView(serverRoomID: resolvedThread(threadID).serverRoomID)
     case .specialMessages:
       SpecialMessageCardsView()
     case .friends:
@@ -238,6 +243,8 @@ struct SupportDestinationView: View {
       ReportView()
     case .blockedUsers:
       BlockedUsersView()
+    case .publicProfile(let subject):
+      ProfileCardView(subject: subject)
     case .coursePublish:
       CoursePublishView()
     case .tripDay(let threadID):

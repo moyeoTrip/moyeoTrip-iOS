@@ -4,7 +4,6 @@
 //
 
 // 실서버 공개 코스 레일이 더해져 길어졌다 — 기존 화면 파일들과 같은 예외를 둔다.
-// swiftlint:disable file_length
 import SwiftUI
 
 struct HomeView: View {
@@ -18,7 +17,13 @@ struct HomeView: View {
     /// 실서버 공개 코스 — 로그인 세션이 있고 코스 API가 성공했을 때만 채워진다 (nil = 목데이터)
     @State private var serverCourses: [TravelCourse]?
     private let bottomScrollClearance: CGFloat = 86
-    private let weatherCondition = MockData.currentWeatherCondition
+    /// 09 히어로의 날씨. 로그인 상태면 서버가 정하고(GET /weather/gyeongbuk),
+    /// 아니면 목데이터로 떨어진다. 사용자가 고르는 값이 아니다.
+    @State private var serverWeather: ServerGyeongbukWeather?
+
+    private var weatherCondition: WeatherCondition {
+        serverWeather?.heroCondition ?? MockData.currentWeatherCondition
+    }
 
     private var recommendedCourses: [TravelCourse] {
         if let serverCourses {
@@ -50,7 +55,11 @@ struct HomeView: View {
                             if isOffline {
                                 OfflineHomeHeroCard()
                             } else {
-                                HomeHeroCard(content: WeatherHeroPolicy.content(for: weatherCondition))
+                                HomeHeroCard(
+                                    content: WeatherHeroPolicy.content(for: weatherCondition),
+                                    // 시안에 박힌 랜드마크 대신 실제 예보 지점을 보여준다.
+                                    place: serverWeather?.locationName
+                                )
                             }
 
                             // 실시간 추천과 인기 순위는 네트워크 없이 만들 수 없다.
@@ -207,6 +216,11 @@ struct HomeView: View {
             )
         }
         .task {
+            guard MoyeoServerSync.isEnabled, serverWeather == nil else { return }
+            // 날씨는 실패해도 목데이터 히어로가 그대로 뜬다 — 화면을 비우지 않는다.
+            serverWeather = try? await WeatherAPIClient.shared.gyeongbuk()
+        }
+        .task {
             guard MoyeoServerSync.isEnabled, serverCourses == nil else { return }
             // 인기 코스를 먼저, 비어 있으면 공개 코스 전체를 쓴다
             if let popular = try? await TravelCourseAPIClient.shared.popularCourses(), !popular.isEmpty {
@@ -236,106 +250,6 @@ struct HomeView: View {
         case .middle:
             return 180
         }
-    }
-}
-
-private struct HomeHeroCard: View {
-    let content: WeatherHeroContent
-    private let weatherTags = ["맑음", "구름", "비", "눈", "안개", "강풍", "폭우", "폭염", "미세먼지"]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("이번 주말, 어디로 떠나볼까요?")
-                        .font(MoyeoTypography.sectionTitle)
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                    Text(content.copy)
-                        .font(MoyeoTypography.cardBody)
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("home.weatherHero.copy")
-                }
-                Spacer(minLength: 10)
-                Text(content.badge)
-                    .font(MoyeoTypography.chip)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .background(.white.opacity(0.18))
-                    .clipShape(Capsule())
-            }
-
-            WeatherHeroImage(content: content)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 9) {
-                    ForEach(weatherTags, id: \.self) { tag in
-                        WeatherTagPill(
-                            text: tag,
-                            selected: tag == content.label,
-                            selectedForeground: content.state.cardColor
-                        )
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .background(content.state.cardColor)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .padding(.horizontal, 18)
-        .accessibilityIdentifier("home.weatherHero")
-    }
-}
-
-private struct WeatherTagPill: View {
-    let text: String
-    let selected: Bool
-    let selectedForeground: Color
-
-    var body: some View {
-        Text(text)
-            .font(MoyeoTypography.tab)
-            .foregroundStyle(selected ? selectedForeground : .white)
-            .padding(.horizontal, 11)
-            .frame(height: 30)
-            .background(selected ? .white.opacity(0.94) : .white.opacity(0.10))
-            .clipShape(Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(.white.opacity(selected ? 1 : 0.34), lineWidth: 1)
-            }
-    }
-}
-
-private struct WeatherHeroImage: View {
-    let content: WeatherHeroContent
-
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Image(content.imageAssetName)
-                .resizable()
-                .scaledToFill()
-                // 화면기획·웹과 같은 높이(144)와 아래쪽 기준 크롭 — 가운데로 자르면 첨성대가 잘려 나간다.
-                .frame(height: 144, alignment: .bottom)
-                .clipped()
-                .accessibilityIdentifier("home.weatherHero.image.\(content.imageAssetName)")
-                .accessibilityLabel("\(content.label) 날씨 \(content.place) 이미지")
-            Text("\(content.label) · \(content.place)")
-                .font(MoyeoTypography.cardMeta)
-                .foregroundStyle(content.state.selectedPillForeground)
-                .lineLimit(1)
-                .padding(.horizontal, 11)
-                .frame(height: 30)
-                .background(content.state.selectedPillBackground)
-                .clipShape(Capsule())
-                .padding(8)
-        }
-        .frame(height: 130)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

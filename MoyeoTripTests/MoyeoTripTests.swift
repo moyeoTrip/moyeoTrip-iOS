@@ -1168,7 +1168,8 @@ extension MoyeoTripTests {
         let list = try TourismAPIResponseParser.places(from: Data(listJSON.utf8))
         #expect(list.count == 1)
         #expect(list[0].type == .restaurant)
-        #expect(list[0].phone == "정보 없음")
+        // 목록 응답에는 전화가 없다 — "정보 없음" 같은 값을 지어내지 않고 nil 로 둔다 (17-1b)
+        #expect(list[0].phone == nil)
         #expect(list[0].thumbnailURL?.absoluteString == "https://cdn.example/list.jpg")
 
         let detailJSON = #"""
@@ -1222,7 +1223,7 @@ extension MoyeoTripTests {
             session: session,
             sessionStore: sessionStore
         )
-        _ = try await client.places()
+        _ = try await client.places(keyword: "", contentTypeID: nil)
         _ = try await client.place(id: "101")
 
         #expect(requestedPaths == [
@@ -1247,7 +1248,8 @@ extension MoyeoTripTests {
 
         #expect(restaurant?.showsMenuImages == true)
         #expect(nonRestaurants.allSatisfy { !$0.showsMenuImages })
-        #expect(TourismPlaceCatalog.places.allSatisfy { !$0.address.isEmpty && !$0.phone.isEmpty })
+        // 기획 목데이터는 캡처 기준 화면이라 주소·전화가 비어 있으면 안 된다
+        #expect(TourismPlaceCatalog.places.allSatisfy { ($0.address?.isEmpty == false) && ($0.phone?.isEmpty == false) })
     }
 
     @Test func recruitmentDataSeparatesRecruitmentAndCourseConditions() {

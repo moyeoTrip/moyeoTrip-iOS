@@ -134,7 +134,8 @@ struct MeetingsView: View {
     case .ended:
       rooms = serverRooms.filter(\.ended)
     }
-    return rooms.map(ServerTripMapper.chatThread(from:))
+    // 함수 참조 대신 클로저로 호출해 main-actor 격리를 유지한다(Swift 6).
+    return rooms.map { ServerTripMapper.chatThread(from: $0) }
   }
 
   private var serverSegmentCounts: [MeetingSegment: Int]? {
