@@ -98,7 +98,10 @@ struct ItineraryStop: Identifiable, Hashable {
 
 struct CoursePublishingInfo: Hashable {
     let travelerName: String
+    /// 프로필 이미지가 없을 때만 쓰는 대체 표시(닉네임에서 유도한 마스코트).
     let travelerAvatar: String
+    /// 작성자 프로필 이미지. 있으면 **반드시** 이걸 그린다 (`creatorProfileImageUrl`).
+    var travelerAvatarURL: URL?
     let publishedAt: String
     let tripCount: Int
 }
@@ -112,7 +115,9 @@ enum RecruitmentApplicationState: Hashable {
 
 struct TripNotice: Identifiable, Hashable {
     var id: String
-    var title: String
+    /// 공지는 **본문만** 있다. 제목 필드를 두지 않는다 —
+    /// 서버 모델도 `notice` 문자열 하나뿐이라 제목을 두면 클라가 지어내야 했다
+    /// (정본 `ATTACH-COMPOSER-CANON.md` §2, 기획 결정 2026-08-30).
     var body: String
     var createdAt: String
     var isPinned: Bool
@@ -145,6 +150,20 @@ struct TravelCourse: Identifiable, Hashable {
     var serverCourseID: Int64?
     var serverAverageRating: Double?
     var serverRatingCount: Int64?
+
+    /// 아직 코스를 고르지 않은 자리. 값을 지어내지 않으려고 전부 비워 둔다.
+    static let empty = TravelCourse(
+        id: "",
+        title: "",
+        region: "",
+        subtitle: "",
+        duration: "",
+        distance: "",
+        mascot: "",
+        mood: .forest,
+        tags: [],
+        stops: []
+    )
 
     var isServerBacked: Bool {
         serverCourseID != nil
@@ -266,22 +285,6 @@ struct Participant: Identifiable, Hashable {
     let avatar: String
 }
 
-struct ExploreSpot: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let region: String
-    let category: String
-    let address: String
-    let summary: String
-    let mapHint: String
-    let mascot: String
-    let tags: [String]
-    let linkedTripID: String?
-    // 실지도(화면기획 11)에 마커를 찍기 위한 위경도. 없으면 목업 지도로 남는다.
-    var latitude: Double?
-    var longitude: Double?
-}
-
 struct ChatThread: Identifiable, Hashable {
     let id: String
     let tripTitle: String
@@ -328,6 +331,10 @@ struct ChatMessage: Identifiable, Hashable {
     let time: String
     let isMine: Bool
     var kind: ChatMessageKind = .text
+    /// 서버 메시지의 원본. 장소 · 만날 위치 · 투표 · 정산 메모 · 사진은 **카드**로 그려야 하는데,
+    /// `body` 하나로 납작하게 눌러 담으면 좌표도 선택지도 사진도 사라진다.
+    /// 목데이터 스레드에서는 nil 이고 그때는 예전처럼 말풍선만 그린다.
+    var server: ServerChatMessage?
 }
 
 extension ChatMessage {
@@ -361,6 +368,8 @@ struct FeedPost: Identifiable, Hashable {
     /// 실서버 피드 연동 필드 — 서버 피드일 때만 채워진다
     var authorAvatarURL: URL?
     var photoURL: URL?
+    /// 서버 피드가 준 사진 전체(sequence 순). 22 타임라인은 웹 · 안드로이드처럼 앞의 2장을 나란히 그린다.
+    var photoURLs: [URL] = []
     var serverFeedID: Int64?
     var serverLiked: Bool = false
     /// changeLog18 — 작성자를 눌러 25 프로필 카드로 갈 때 쓰는 유저 id (서버 피드만 안다)
@@ -371,18 +380,9 @@ struct FeedPost: Identifiable, Hashable {
     }
 }
 
-struct DogamFriend: Identifiable, Hashable {
-    let id: String
-    let nickname: String
-    let avatar: String
-    let lastMetAt: String
-    let metCount: Int
-}
-
 struct ProfileSummary: Hashable {
     let name: String
     let handle: String
-    let avatar: String
     let profileImageURL: URL?
     let region: String
     let badges: [String]
@@ -391,4 +391,24 @@ struct ProfileSummary: Hashable {
     let feedCount: Int
     let points: Int
     let favoriteRegions: [String]
+
+    /// 아바타는 저장하지 않고 **닉네임에서 계산한다** (NO-MOCK-CANON R5).
+    /// 고정 이모지를 들고 있으면 서버 닉네임이 바뀌어도 동물이 따라오지 않는다.
+    var avatar: String {
+        ProfileCardCompanion.mascotEmoji(forNickname: name) ?? ProfileCardCompanion.unknownAnimalMascot
+    }
+
+    /// 로그인 전 · 서버 프로필이 오기 전의 자리. 지어낸 값을 두지 않는다.
+    static let empty = ProfileSummary(
+        name: "",
+        handle: "",
+        profileImageURL: nil,
+        region: "",
+        badges: [],
+        joinedTrips: 0,
+        hostedTrips: 0,
+        feedCount: 0,
+        points: 0,
+        favoriteRegions: []
+    )
 }

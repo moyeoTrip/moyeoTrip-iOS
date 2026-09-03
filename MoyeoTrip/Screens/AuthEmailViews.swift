@@ -1,42 +1,29 @@
 import SwiftUI
 
+/// 이메일로 시작하기.
+///
+/// **로그인/새 계정 만들기를 사용자가 먼저 고르지 않는다.** 이메일이 이미 있는 계정인지
+/// 사용자가 알아야 할 이유가 없다. 소셜 로그인과 같이 한 번 시도하고, 계정이 없으면
+/// 그대로 새 계정을 만들어 서버가 알려주는 가입 단계로 이어간다.
 struct AuthEmailCredentialsView: View {
-    let mode: AuthEmailMode
     @Binding var email: String
     @Binding var password: String
-    @Binding var passwordConfirmation: String
     let isSubmitting: Bool
     let errorMessage: String?
     let submitAction: () -> Void
-    let createAccountAction: () -> Void
-    let signInAction: () -> Void
     let forgotPasswordAction: () -> Void
 
-    private var isRegistration: Bool { mode == .createAccount }
     private var canSubmit: Bool {
-        EmailCredentialsPolicy.canSubmit(
-            email: email,
-            password: password,
-            passwordConfirmation: passwordConfirmation,
-            isRegistration: isRegistration
-        )
-    }
-    private var showsMismatch: Bool {
-        EmailCredentialsPolicy.showsPasswordMismatch(
-            password: password,
-            passwordConfirmation: passwordConfirmation
-        )
+        EmailCredentialsPolicy.canSubmit(email: email, password: password)
     }
 
     var body: some View {
         AuthStepContainer(
             title: "이메일로 시작하기",
-            subtitle: "가입했던 이메일로 로그인하거나 새 계정을 만들어요.",
+            subtitle: "이메일과 비밀번호를 입력하면 로그인하거나 새 계정을 만들어요.",
             showsFooterInset: false
         ) {
             VStack(spacing: 22) {
-                modeSegments
-
                 VStack(spacing: 12) {
                     // 라벨은 인풋 위에 둔다 — 값이 비었을 때 플레이스홀더와 구분되지 않으면
                     // 무엇을 넣는 칸인지 알 수 없다
@@ -51,15 +38,11 @@ struct AuthEmailCredentialsView: View {
                         )
                     }
 
-                    if isRegistration {
-                        registrationFields
-                    } else {
-                        Button("비밀번호를 잊으셨나요?", action: forgotPasswordAction)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(MoyeoTheme.forest)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .accessibilityIdentifier("auth.email.forgotPassword")
-                    }
+                    Button("비밀번호를 잊으셨나요?", action: forgotPasswordAction)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.forest)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .accessibilityIdentifier("auth.email.forgotPassword")
 
                     if let errorMessage {
                         AuthInlineError(message: errorMessage, accessibilityIdentifier: "auth.email.error")
@@ -75,73 +58,16 @@ struct AuthEmailCredentialsView: View {
         }
     }
 
-    /// 로그인 / 새 계정 만들기는 하나의 세그먼트다 — 떨어진 버튼 2개로 보이면 서로 다른 동작처럼 읽힌다
-    private var modeSegments: some View {
-        HStack(spacing: 0) {
-            segment(title: "로그인", isSelected: !isRegistration, identifier: "auth.email.mode.signIn") {
-                if isRegistration { signInAction() }
-            }
-            Divider().overlay(MoyeoTheme.line).frame(width: 1)
-            segment(title: "새 계정 만들기", isSelected: isRegistration, identifier: "auth.email.mode.create") {
-                if !isRegistration { createAccountAction() }
-            }
-        }
-        .frame(height: 48)
-        .background(MoyeoTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                .stroke(MoyeoTheme.line, lineWidth: 1)
-        }
-    }
-
-    private func segment(
-        title: String,
-        isSelected: Bool,
-        identifier: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(isSelected ? .heavy : .semibold))
-                .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.ink)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(isSelected ? MoyeoTheme.leaf : Color.clear)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(identifier)
-    }
-
-    @ViewBuilder
-    private var registrationFields: some View {
-        AuthLabeledField(label: "비밀번호 확인") {
-            AuthSecureField(
-                title: "비밀번호를 다시 입력",
-                text: $passwordConfirmation,
-                accessibilityIdentifier: "auth.email.passwordConfirmation",
-                contentType: nil
-            )
-        }
-        if showsMismatch {
-            Text("비밀번호가 서로 같지 않아요.")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.coral)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("auth.email.passwordMismatch")
-        }
-    }
-
     private var inlineFooter: some View {
         VStack(spacing: 10) {
             AuthPrimaryButton(
-                title: isSubmitting ? "확인하고 있어요..." : (isRegistration ? "새 계정 만들기" : "로그인"),
+                title: isSubmitting ? "확인하고 있어요..." : "계속하기",
                 accessibilityIdentifier: "auth.email.submit",
                 action: submitAction
             )
             .disabled(!canSubmit || isSubmitting)
 
-            Text("이메일 인증 후에도 가입 진행 단계는 서버 응답에 따라 이어집니다.")
+            Text("처음 쓰는 이메일이면 새 계정을 만들고, 가입 진행 단계는 서버 응답에 따라 이어집니다.")
                 .font(.caption)
                 .foregroundStyle(MoyeoTheme.muted)
                 .multilineTextAlignment(.center)
@@ -156,18 +82,10 @@ struct AuthEmailCredentialsView: View {
 enum EmailCredentialsPolicy {
     static let minimumPasswordLength = 6
 
-    static func canSubmit(
-        email: String,
-        password: String,
-        passwordConfirmation: String,
-        isRegistration: Bool
-    ) -> Bool {
-        guard email.contains("@"), password.count >= minimumPasswordLength else { return false }
-        return !isRegistration || password == passwordConfirmation
-    }
-
-    static func showsPasswordMismatch(password: String, passwordConfirmation: String) -> Bool {
-        !passwordConfirmation.isEmpty && password != passwordConfirmation
+    /// 로그인/가입을 따로 고르지 않으므로 "비밀번호 확인" 입력이 없다 —
+    /// 로그인일 수도 있는 입력에 확인란을 요구할 수 없다.
+    static func canSubmit(email: String, password: String) -> Bool {
+        email.contains("@") && password.count >= minimumPasswordLength
     }
 }
 
@@ -187,6 +105,12 @@ struct AuthLabeledField<Content: View>: View {
     }
 }
 
+/// 08-H 비밀번호 재설정. 08-A 이메일 로그인의 `비밀번호를 잊으셨나요?` 에서 온다.
+///
+/// 로그인하지 못하는 사람이 스스로 풀 수 있는 **유일한 길**이라, 없으면 문의 말고는 방법이 없다.
+/// 메일을 보낸 뒤에도 화면을 닫지 않는다 — 메일이 안 오면 다시 보낼 곳이 필요하다 (기획 주석).
+///
+/// 근거: Firebase 비밀번호 재설정 메일 (`Auth.auth().sendPasswordReset`). 서버 API 가 아니다.
 struct AuthPasswordResetView: View {
     @Binding var email: String
     let isSubmitting: Bool
@@ -194,24 +118,42 @@ struct AuthPasswordResetView: View {
     let successMessage: String?
     let submitAction: () -> Void
 
+    private var isSent: Bool { successMessage != nil }
+
     var body: some View {
-        AuthStepContainer(title: "비밀번호 재설정", subtitle: "가입한 이메일로 재설정 링크를 보내드려요.") {
-            VStack(spacing: 12) {
-                AuthEmailField(text: $email, accessibilityIdentifier: "auth.reset.email")
+        AuthStepContainer(
+            title: isSent ? "메일을 보냈어요" : "가입하신 이메일을 알려주세요",
+            subtitle: isSent
+                ? "\(email) 으로 재설정 링크를 보냈어요.\n메일함을 확인해 주세요."
+                : "비밀번호를 새로 정할 수 있는 링크를 보내드려요."
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if !isSent {
+                    AuthEmailField(text: $email, accessibilityIdentifier: "auth.reset.email")
+                }
                 if let errorMessage {
                     AuthInlineError(message: errorMessage, accessibilityIdentifier: "auth.reset.error")
                 }
-                if let successMessage {
-                    Label(successMessage, systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.bold))
+                AttachNoteBox(lines: isSent
+                    ? [
+                        "링크는 1시간 동안만 쓸 수 있어요.",
+                        "메일이 안 보이면 스팸함도 확인해 주세요."
+                    ]
+                    : [
+                        "카카오로 가입하셨다면 비밀번호가 없어요. 로그인 화면에서 카카오로 다시 들어와 주세요."
+                    ])
+                if isSent {
+                    Button("다시 보내기", action: submitAction)
+                        .font(.subheadline.weight(.heavy))
                         .foregroundStyle(MoyeoTheme.forest)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("auth.reset.success")
+                        .disabled(isSubmitting)
+                        .accessibilityIdentifier("auth.reset.resend")
                 }
             }
+            .accessibilityIdentifier("auth.reset.body")
         } footer: {
             AuthPrimaryButton(
-                title: isSubmitting ? "메일을 보내고 있어요..." : "재설정 메일 보내기",
+                title: isSubmitting ? "메일을 보내고 있어요..." : "재설정 링크 보내기",
                 accessibilityIdentifier: "auth.reset.submit",
                 action: submitAction
             )
@@ -226,13 +168,25 @@ private struct AuthEmailField: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            TextField("name@example.com", text: $text)
-                .textContentType(.emailAddress)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .foregroundStyle(MoyeoTheme.ink)
-                .accessibilityIdentifier(accessibilityIdentifier)
+            // 플레이스홀더를 직접 그린다.
+            //
+            // `textContentType(.emailAddress)` 가 붙은 TextField 는 iOS 가 자동완성 표시색(파랑)으로
+            // 플레이스홀더를 그려서, 회색인 비밀번호 칸·안드로이드·웹과 색이 어긋났다.
+            ZStack(alignment: .leading) {
+                if text.isEmpty {
+                    Text(verbatim: "name@example.com")
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .allowsHitTesting(false)
+                }
+                TextField("", text: $text)
+                    .textContentType(.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .accessibilityLabel("이메일")
+                    .accessibilityIdentifier(accessibilityIdentifier)
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: 52)

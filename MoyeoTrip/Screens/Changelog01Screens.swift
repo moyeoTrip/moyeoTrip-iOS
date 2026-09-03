@@ -30,54 +30,71 @@ enum RecruitmentApprovalMode: String, CaseIterable, Hashable {
     }
 }
 
+extension Array where Element == String {
+    /// 비어 있지 않은 조각만 이어 붙인다 — 값이 없는 자리에 구분자만 남는 것을 막는다.
+    func joinedNonEmpty(_ separator: String) -> String {
+        filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: separator)
+    }
+}
+
 struct RecruitmentDraft: Hashable {
     var source: CourseSource = .linked
-    var course: TravelCourse = MockData.courses[0]
-    var itinerary: [ItineraryStop] = Self.previewStops
-    var schedule = TripScheduleDetails(
-        kind: .dayTrip,
-        startDate: "2026. 05. 25 (토)",
-        startTime: "08:00",
-        endTime: "18:00"
-    )
-    var deadline = "2026. 05. 22 (목) 23:59"
+    /// 고른 코스. 아직 못 고른 상태는 빈 코스다 — 기본 코스를 지어내지 않는다.
+    var course: TravelCourse = .empty
+    // 17-x 는 호스트가 채우는 입력 폼이다. 미리 채워 두면 남이 만든 모임이 내 초안처럼 보인다.
+    var itinerary: [ItineraryStop] = []
+    // 여행 시간 · 집합 시간 · 비용의 시작값은 **입력 폼의 기본값**이다 (남의 데이터가 아니다).
+    // 안드로이드 `RecruitmentDraft`(startTime 08:00 · endTime 18:00 · meetingTime 08:00 · 비용 0)와 같은 값으로,
+    // 인원·나이대·성별 기본값과 같은 성격이다. 날짜는 호스트가 골라야 하므로 비워 둔다.
+    var schedule = TripScheduleDetails(kind: .dayTrip, startDate: "", startTime: "08:00", endTime: "18:00")
+    var deadline = ""
+    /// 집합 장소. 이름·주소는 호스트가 지도를 끌어 정한다 —
+    /// 위경도만 경북 중심으로 시작한다(값 표시가 아니라 지도 카메라의 첫 위치다).
     var meeting = MeetingPointDetails(
-        name: "청송 시외버스터미널",
-        address: "경북 청송군 청송읍 중앙로 184",
-        detail: "정문 앞",
-        latitude: 36.435612,
-        longitude: 129.057214,
-        meetingTime: "07:50"
+        name: "",
+        address: "",
+        detail: "",
+        latitude: 36.4,
+        longitude: 128.9,
+        meetingTime: "08:00"
     )
     var capacity = 5
     var minimumParticipants = 3
-    var recruitmentName = "30대끼리 느긋하게 힐링 여행가요~"
-    var estimatedCost = "1인 45,000원"
+    var recruitmentName = ""
+    var estimatedCost = "0원"
     var minimumAge = 25
     var maximumAge = 35
     var genderRestriction = "성별 무관"
-    var note = "천천히 걷고 사진도 함께 남기는 숲길 모임이에요."
+    var note = ""
     /// 17-5 신청 승인 방식. 화면기획 기본값은 자동 승인이고, 서버 요청의 `joinApprovalMode` 가 된다.
     var approvalMode = RecruitmentApprovalMode.automatic
 
     static let preview = RecruitmentDraft()
 
-    static let previewStops = [
-        ItineraryStop(id: "stop-terminal", day: 1, order: 1, time: "09:00", name: "청송 시외버스터미널", memo: "집합 장소",
-                      latitude: 36.435612, longitude: 129.057214),
-        ItineraryStop(id: "stop-juwangsan", day: 1, order: 2, time: "10:30", name: "주왕산 국립공원", memo: "대전사 - 제3폭포",
-                      latitude: 36.3931, longitude: 129.1728),
-        ItineraryStop(id: "stop-jusanji", day: 1, order: 3, time: "14:00", name: "주산지", memo: "왕버들 산책로",
-                      latitude: 36.3494, longitude: 129.1436)
-    ]
-
+    /// 17-6 요약 카드의 일정 줄. **값이 없으면 구분자도 찍지 않는다** —
+    /// 예전에는 날짜·시간이 비면 `· · -` 처럼 구분자만 남았다.
     var scheduleSummary: String {
         switch schedule.kind {
         case .dayTrip:
-            return "\(compactDate(schedule.startDate)) 당일치기 · \(schedule.startTime ?? "") - \(schedule.endTime ?? "")"
+            let head = [compactDate(schedule.startDate), "당일치기"].joinedNonEmpty(" ")
+            let range = [schedule.startTime ?? "", schedule.endTime ?? ""].joinedNonEmpty(" - ")
+            return [head, range].joinedNonEmpty(" · ")
         case .overnight:
-            return "\(compactDate(schedule.startDate)) - \(compactDate(schedule.endDate ?? schedule.startDate))"
+            let start = compactDate(schedule.startDate)
+            let end = compactDate(schedule.endDate ?? schedule.startDate)
+            return start == end ? start : [start, end].joinedNonEmpty(" - ")
         }
+    }
+
+    /// 17-6 집합 줄 — 시간 · 장소 · 상세 안내 중 채워진 것만 잇는다.
+    var meetingSummary: String {
+        [meeting.meetingTime, meeting.name, meeting.detail].joinedNonEmpty(" ")
+    }
+
+    /// 17-6 비용 줄 — 아직 안 적었으면 `(예상)` 만 남기지 않고 아무것도 그리지 않는다.
+    var estimatedCostSummary: String {
+        let cost = estimatedCost.trimmingCharacters(in: .whitespaces)
+        return cost.isEmpty ? "" : "1인 \(cost) (예상)"
     }
 
     /// 리뷰(17-7) 요약 카드용 성별 조건 표기 — 제한이 없으면 "성별 제한 없음"으로 읽는다.
@@ -115,8 +132,19 @@ struct RecruitmentCreationFlowView: View {
     let onApproveApplicant: (TripRecruitment, Participant) -> Void
     let onRejectApplicant: (TripRecruitment, Participant) -> Void
     let onSetRecruitmentClosed: (TripRecruitment, Bool) -> Void
+    /// 캡처가 실제 플로우의 특정 단계로 바로 들어올 때 쓴다. 기본은 1단계다.
+    var initialStep = 1
+    /// 집합 장소 화면(17-3)을 열린 상태로 시작한다.
+    var startsAtMeetingPoint = false
+    /// 5단계 리뷰를 커스텀 코스(17-6) / 등록 코스(17-7) 중 무엇으로 볼지.
+    var initialSource: CourseSource?
+    /// 3단계(17-4a · 17-4b) 캡처용 최대 인원 시작값. nil 이면 폼 기본값(5)이다.
+    /// 멘트 3단계를 아트보드로 나눠 찍기 위한 것이고, 멘트 규칙 자체는 화면이 그대로 판단한다.
+    var initialCapacity: Int?
     @Environment(\.dismiss) private var dismiss
-    @State private var step = 1
+    @State private var step: Int
+    /// 17-3 집합 장소 지정. 2단계 일정 안에서 이어지는 화면이다(안드로이드와 같은 구성).
+    @State private var showsMeetingPoint = false
     @State private var draft: RecruitmentDraft
     @State private var showCustomEditor = false
     @State private var createdTrip: TripRecruitment?
@@ -130,6 +158,10 @@ struct RecruitmentCreationFlowView: View {
 
     init(
         courseID: String,
+        initialStep: Int = 1,
+        startsAtMeetingPoint: Bool = false,
+        initialSource: CourseSource? = nil,
+        initialCapacity: Int? = nil,
         onCreated: @escaping (TripRecruitment, ChatThread) -> Void = { _, _ in },
         onSendChatMessage: @escaping (ChatThread, ChatMessage) -> Void = { _, _ in },
         onApproveApplicant: @escaping (TripRecruitment, Participant) -> Void = { _, _ in },
@@ -137,17 +169,23 @@ struct RecruitmentCreationFlowView: View {
         onSetRecruitmentClosed: @escaping (TripRecruitment, Bool) -> Void = { _, _ in }
     ) {
         self.courseID = courseID
+        self.initialStep = initialStep
+        self.startsAtMeetingPoint = startsAtMeetingPoint
+        self.initialSource = initialSource
+        self.initialCapacity = initialCapacity
+        _step = State(initialValue: initialStep)
+        _showsMeetingPoint = State(initialValue: startsAtMeetingPoint)
         self.onCreated = onCreated
         self.onSendChatMessage = onSendChatMessage
         self.onApproveApplicant = onApproveApplicant
         self.onRejectApplicant = onRejectApplicant
         self.onSetRecruitmentClosed = onSetRecruitmentClosed
+        // 코스는 1단계에서 서버 공개 코스 중에 고른다 — 여기서 목 코스를 심지 않는다.
         var value = RecruitmentDraft.preview
-        value.course = MockData.course(for: courseID) ?? MockData.courses[0]
-        value.itinerary = value.course.stops.enumerated().map {
-            ItineraryStop(id: "\(value.course.id)-\($0.offset)", day: 1, order: $0.offset + 1,
-                          time: ["09:00", "11:00", "14:00", "16:30"][safe: $0.offset] ?? "17:00",
-                          name: $0.element, memo: $0.offset == 0 ? "집합 장소" : "방문 장소")
+        if let initialSource { value.source = initialSource }
+        if let initialCapacity {
+            // 폼이 허용하는 범위(최소 인원 + 1 ... 20) 안으로만 받는다 — 스테퍼와 같은 한계다.
+            value.capacity = min(20, max(value.minimumParticipants + 1, initialCapacity))
         }
         _draft = State(initialValue: value)
     }
@@ -182,7 +220,15 @@ struct RecruitmentCreationFlowView: View {
                 case 1: RecruitmentSourceView(draft: $draft) {
                     showCustomEditor = true
                 }
-                case 2: RecruitmentScheduleView(draft: $draft)
+                // 2단계 일정 → 집합 장소 지정(17-3) → 3단계 인원. 안드로이드와 같은 구성이다.
+                // 이전에는 집합 장소 화면이 플로우에 없어서, 사용자가 한 번도 고르지 않은
+                // 초안 기본 좌표(청송 시외버스터미널)가 그대로 서버로 나갔다.
+                case 2:
+                    if showsMeetingPoint {
+                        RecruitmentMeetingView(draft: $draft)
+                    } else {
+                        RecruitmentScheduleView(draft: $draft)
+                    }
                 case 3: RecruitmentPeopleView(draft: $draft)
                 case 4: RecruitmentDetailView(draft: $draft)
                 default: RecruitmentSummaryView(
@@ -199,16 +245,10 @@ struct RecruitmentCreationFlowView: View {
             if step < 5 {
                 CreationFooter(
                     backTitle: step == 1 ? "" : "이전",
-                    nextTitle: step == 1
-                        ? (draft.source == .custom ? "코스 만들러 가기" : "이 코스로 다음")
-                        : "다음",
+                    nextTitle: nextTitle,
                     back: goBack
                 ) {
-                    if step == 1, draft.source == .custom {
-                        showCustomEditor = true
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.2)) { step += 1 }
-                    }
+                    advance()
                 }
             }
         }
@@ -228,11 +268,42 @@ struct RecruitmentCreationFlowView: View {
             guard MoyeoServerSync.isEnabled, serverCourseTags.isEmpty else { return }
             serverCourseTags = (try? await TravelCourseAPIClient.shared.tags()) ?? []
         }
-        .accessibilityIdentifier("screen.createRecruitment.\(courseID).step\(step)")
+        .accessibilityIdentifier(
+            "screen.createRecruitment.\(courseID).step\(step)\(showsMeetingPoint ? ".meetingPoint" : "")"
+        )
+    }
+
+    private var nextTitle: String {
+        if step == 1 {
+            return draft.source == .custom ? "코스 만들러 가기" : "이 코스로 다음"
+        }
+        if step == 2, showsMeetingPoint { return "이 위치로 지정" }
+        return "다음"
+    }
+
+    private func advance() {
+        if step == 1, draft.source == .custom {
+            showCustomEditor = true
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if step == 2, !showsMeetingPoint {
+                showsMeetingPoint = true
+            } else {
+                showsMeetingPoint = false
+                step += 1
+            }
+        }
     }
 
     private func goBack() {
-        if step == 1 { dismiss() } else { step -= 1 }
+        if step == 2, showsMeetingPoint {
+            withAnimation(.easeInOut(duration: 0.2)) { showsMeetingPoint = false }
+        } else if step == 1 {
+            dismiss()
+        } else {
+            step -= 1
+        }
     }
 
     /// 초안 태그 이름 → 서버 태그 ID. 서버 목록에 없는 이름은 버린다(없는 ID를 지어내지 않는다).
@@ -271,23 +342,25 @@ struct RecruitmentCreationFlowView: View {
         }
     }
 
+    /// 서버로 만들지 못했을 때 이 세션 안에서만 쓰는 모집. 참가자·호스트 이름은 서버 값이라
+    /// 여기서 지어내지 않는다 — 비워 두면 화면이 그 줄을 그리지 않는다.
     private func createLocalRecruitment() {
         let id = "session-trip-\(UUID().uuidString)"
-        let participants = Array(MockData.participants.prefix(1))
         let trip = TripRecruitment(
             id: id, courseID: draft.course.id, title: draft.recruitmentName, region: draft.course.region,
-            coverMascot: draft.course.mascot, hostName: MockData.profile.name, hostAvatar: MockData.profile.avatar,
+            coverMascot: draft.course.mascot, hostName: "", hostAvatar: "",
             schedule: draft.scheduleSummary, meetupPoint: draft.meeting.name, price: draft.estimatedCost,
             capacity: draft.capacity, joined: 1, minimumParticipants: draft.minimumParticipants,
-            status: .open, summary: draft.note, vibe: "함께 속도를 맞추는 여행", tags: draft.course.tags,
-            route: draft.itinerary.map(\.name), participants: participants,
+            status: .open, summary: draft.note, vibe: "", tags: draft.course.tags,
+            route: draft.itinerary.map(\.name), participants: [],
             courseSource: draft.source, itinerary: draft.itinerary, scheduleDetails: draft.schedule,
             meetingDetails: draft.meeting, recruitmentDeadline: draft.deadline,
             minimumAge: draft.minimumAge, maximumAge: draft.maximumAge,
             genderRestriction: draft.genderRestriction,
-            routeEditState: draft.source == .custom ? .editable : .linkedLocked
+            routeEditState: draft.source == .custom ? .editable : .linkedLocked,
+            serverCourseTitle: draft.course.title
         )
-        var thread = trip.createdChatThread(profile: MockData.profile)
+        var thread = trip.createdChatThread(profile: .empty)
         thread.tripID = id
         thread.routeSummary = draft.itinerary
         thread.courseSource = draft.source
@@ -359,6 +432,10 @@ struct CreationFooter: View {
     let nextTitle: String
     let back: () -> Void
     let next: () -> Void
+    /// 채움 버튼을 누를 수 있는지. 못 누르면 회색으로 둔다.
+    var isNextEnabled = true
+    /// 화면마다 다른 접근성 식별자. 기본값은 모집 만들기 흐름의 것이다.
+    var nextIdentifier = "createRecruitment.next"
 
     var body: some View {
         HStack(spacing: 14) {
@@ -378,9 +455,10 @@ struct CreationFooter: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(MoyeoTheme.primary400)
+                .background(isNextEnabled ? MoyeoTheme.primary400 : MoyeoTheme.text400)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
-                .accessibilityIdentifier("createRecruitment.next")
+                .disabled(!isNextEnabled)
+                .accessibilityIdentifier(nextIdentifier)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
@@ -426,6 +504,14 @@ private struct RecruitmentSourceView: View {
     @Binding var draft: RecruitmentDraft
     let onOpenCustomEditor: () -> Void
     @State private var courseQuery = ""
+    /// 등록된 코스 후보 — 서버 공개 코스뿐이다 (NO-MOCK-CANON R1)
+    @State private var serverCourses: [TravelCourse] = []
+
+    private var filteredCourses: [TravelCourse] {
+        let query = courseQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return serverCourses }
+        return serverCourses.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    }
 
     var body: some View {
         ScrollView {
@@ -433,7 +519,7 @@ private struct RecruitmentSourceView: View {
                 DesignHeading("코스 선택", subtitle: "등록된 코스를 그대로 써도 되고, 직접 짜도 돼요.")
                 SourceCard(source: .linked, selected: draft.source == .linked,
                            title: "등록된 코스로 떠나기",
-                           detail: "TourAPI·경북나드리 기반으로 검증된 동선을 그대로 가져와요.",
+                           detail: "검증된 동선을 기반으로 검증된 동선을 그대로 가져와요.",
                            note: "경로 수정 불가 · 집합 정보만 설정",
                            noteIcon: "lock.fill",
                            icon: "map.fill") {
@@ -449,9 +535,16 @@ private struct RecruitmentSourceView: View {
                 }
                 if draft.source == .linked {
                     LabelledSearchField(text: $courseQuery, prompt: "등록된 코스 검색")
-                    VStack(spacing: 10) {
-                        ForEach(MockData.courses.prefix(3)) { course in
-                            linkedCourseRow(course)
+                    if filteredCourses.isEmpty {
+                        MoyeoEmptyStateView(
+                            message: "아직 공개된 코스가 없어요.",
+                            accessibilityIdentifier: "createSource.courses.empty"
+                        )
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(filteredCourses.prefix(10)) { course in
+                                linkedCourseRow(course)
+                            }
                         }
                     }
                     DesignInfoBox(
@@ -466,6 +559,11 @@ private struct RecruitmentSourceView: View {
             }
             .padding(20)
         }
+        .task {
+            guard MoyeoServerSync.isEnabled, serverCourses.isEmpty else { return }
+            serverCourses = (try? await TravelCourseAPIClient.shared.publicCourses())?
+                .map(ServerCourseMapper.course(from:)) ?? []
+        }
         .accessibilityIdentifier("screen.createSource")
     }
 
@@ -473,16 +571,25 @@ private struct RecruitmentSourceView: View {
         let selected = draft.course.id == course.id
         return Button {
             draft.course = course
+            // 등록 코스는 방문지·순서가 코스에 딸려 온다 — 초안 경로도 그 좌표로 채운다.
+            draft.itinerary = course.itinerary
         } label: {
             HStack(spacing: 10) {
-                MoyeoPhotoTile(mascot: course.mascot, mood: course.mood, height: 54, cornerRadius: 9)
-                    .frame(width: 54)
+                CachedRemoteImage(url: course.thumbnailURL, fallbackShape: .square) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    MoyeoTheme.leaf
+                }
+                .frame(width: 54, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(course.title)
                         .font(.subheadline.weight(.heavy))
                         .foregroundStyle(MoyeoTheme.ink)
                         .lineLimit(1)
-                    Text("\(course.region) · \(course.duration) · 방문지 \(course.stops.count)")
+                    Text("\(course.duration) · 방문지 \(course.stops.count)")
                         .font(.caption)
                         .foregroundStyle(MoyeoTheme.muted)
                 }
@@ -602,7 +709,7 @@ struct CustomCourseEditorView: View {
     @State private var includesNextDay = false
 
     init(
-        stops: Binding<[ItineraryStop]> = .constant(RecruitmentDraft.previewStops),
+        stops: Binding<[ItineraryStop]> = .constant([]),
         onContinue: @escaping () -> Void = {}
     ) {
         _stops = stops
@@ -637,7 +744,7 @@ struct CustomCourseEditorView: View {
                     } label: {
                         HStack(spacing: 9) {
                             Image(systemName: "magnifyingglass")
-                            Text(search.isEmpty ? "방문지 검색 (TourAPI · 경북 22개 시·군)" : search)
+                            Text(search.isEmpty ? "방문지 검색" : search)
                             Spacer()
                             Image(systemName: "chevron.right")
                         }
@@ -726,6 +833,8 @@ struct CustomCourseEditorView: View {
 
 struct RecruitmentScheduleView: View {
     @Binding var draft: RecruitmentDraft
+    /// 날짜·시각을 고르는 시트. 예전에는 이 줄들이 화살표만 있고 동작이 없었다.
+    @State private var editor: RecruitmentFieldEditor?
 
     var body: some View {
         ScrollView {
@@ -737,44 +846,76 @@ struct RecruitmentScheduleView: View {
                     subtitles: ["당일치기": "시작·종료 시간", "1박 이상": "시작·종료 날짜"]
                 )
                 DesignField(label: draft.schedule.kind == .dayTrip ? "여행 날짜 *" : "여행 시작 날짜 *",
-                            icon: "calendar", value: draft.schedule.startDate)
+                            icon: "calendar", value: draft.schedule.startDate,
+                            placeholder: "날짜 고르기",
+                            action: { editor = .startDate })
+                    .accessibilityIdentifier("createSchedule.startDate")
                 if draft.schedule.kind == .dayTrip {
                     HStack(spacing: 10) {
-                        DesignField(label: "여행 시작 시간 *", icon: "clock", value: draft.schedule.startTime ?? "08:00")
-                        DesignField(label: "여행 종료 시간 *", icon: "clock", value: draft.schedule.endTime ?? "18:00")
+                        DesignField(label: "여행 시작 시간 *", icon: "clock",
+                                    value: draft.schedule.startTime ?? "",
+                                    placeholder: "시간 고르기",
+                                    action: { editor = .startTime })
+                            .accessibilityIdentifier("createSchedule.startTime")
+                        DesignField(label: "여행 종료 시간 *", icon: "clock",
+                                    value: draft.schedule.endTime ?? "",
+                                    placeholder: "시간 고르기",
+                                    action: { editor = .endTime })
+                            .accessibilityIdentifier("createSchedule.endTime")
                     }
-                    DesignSummaryLine("당일치기   5/25(토) 08:00 - 18:00 · 10시간")
+                    // 요약은 호스트가 고른 값에서 만든다 — 예전에는 `5/25(토) 08:00 - 18:00` 이
+                    // 무엇을 고르든 그대로 남는 지어낸 문장이었다.
+                    if !dayTripSummary.isEmpty {
+                        DesignSummaryLine(dayTripSummary)
+                    }
                 } else {
-                    DesignField(label: "여행 종료 날짜 *", icon: "calendar", value: draft.schedule.endDate ?? "2026. 05. 26 (일)")
+                    DesignField(label: "여행 종료 날짜 *", icon: "calendar",
+                                value: draft.schedule.endDate ?? "",
+                                placeholder: "날짜 고르기",
+                                action: { editor = .endDate })
+                        .accessibilityIdentifier("createSchedule.endDate")
                 }
                 Divider().overlay(MoyeoTheme.softLine)
-                DesignField(label: "모집 마감일 *", icon: "clock", value: draft.deadline)
+                DesignField(label: "모집 마감일 *", icon: "clock", value: draft.deadline,
+                            placeholder: "마감일 고르기",
+                            action: { editor = .deadline })
+                    .accessibilityIdentifier("createSchedule.deadline")
                 Text("출발 3일 전까지만 선택할 수 있어요. 마감일에 최소 인원을 못 채우면 자동으로 소멸해요.")
                     .font(.caption).foregroundStyle(MoyeoTheme.muted)
+                // 집합 장소·시간은 다음 단계(15 집합 장소 정하기)에서 지도로 정한다 —
+                // 여기서는 정해진 값을 되짚어 보여주기만 한다. 그래서 화살표를 그리지 않는다.
                 DesignField(label: "집합 장소 · 집합 시간 *", icon: "mappin.and.ellipse",
-                            value: "\(draft.meeting.meetingTime) \(draft.meeting.name)", detail: draft.meeting.address)
+                            value: draft.meetingSummary, detail: draft.meeting.address,
+                            placeholder: "다음 단계에서 정해요")
                     .accessibilityIdentifier("createSchedule.meeting")
             }
             .padding(20)
         }
         .background(MoyeoTheme.background)
         .accessibilityIdentifier("screen.createSchedule")
-    }
-}
-
-struct RecruitmentSchedulePreviewView: View {
-    @State private var draft = RecruitmentDraft.preview
-
-    var body: some View {
-        RecruitmentStepScaffold(step: 2) {
-            RecruitmentScheduleView(draft: $draft)
+        .sheet(item: $editor) { field in
+            RecruitmentFieldSheet(field: field, draft: $draft) { editor = nil }
+                .presentationDetents([.height(field.shape == .date ? 520 : 340)])
+                .presentationCornerRadius(24)
+                .presentationBackground(MoyeoTheme.card)
         }
-        .accessibilityIdentifier("screen.createSchedule.preview")
+    }
+
+    /// 당일치기 요약 — 날짜·시간이 다 채워졌을 때만 만든다(부분 값으로 문장을 흉내내지 않는다).
+    private var dayTripSummary: String {
+        guard
+            let startTime = draft.schedule.startTime, !startTime.isEmpty,
+            let endTime = draft.schedule.endTime, !endTime.isEmpty,
+            !draft.schedule.startDate.isEmpty
+        else { return "" }
+        return "당일치기   \(draft.schedule.startDate) \(startTime) - \(endTime)"
     }
 }
 
 private struct RecruitmentPeopleView: View {
     @Binding var draft: RecruitmentDraft
+    /// 나이대 제한을 고치는 시트. 예전에는 화살표만 있고 동작이 없었다.
+    @State private var editor: RecruitmentFieldEditor?
 
     // 최대 인원에 따라 분위기 안내가 달라진다 (화면기획과 같은 구간)
     private var moodText: String {
@@ -858,8 +999,10 @@ private struct RecruitmentPeopleView: View {
                     DesignField(
                         label: "",
                         icon: "person.2",
-                        value: "\(draft.minimumAge) ~ \(draft.maximumAge)세"
+                        value: "\(draft.minimumAge) ~ \(draft.maximumAge)세",
+                        action: { editor = .ageRange }
                     )
+                    .accessibilityIdentifier("createPeople.ageRange")
                     // 화면기획 17-4 — 설명은 행 안이 아니라 행 아래 캡션이다
                     Text("최소·최대 모두 20~100세 사이에서 정할 수 있어요. 조건에 맞지 않는 사용자에게는 신청 버튼이 비활성으로 보여요.")
                         .font(.caption)
@@ -871,6 +1014,12 @@ private struct RecruitmentPeopleView: View {
             .padding(20)
         }
         .accessibilityIdentifier("screen.createPeople")
+        .sheet(item: $editor) { field in
+            RecruitmentFieldSheet(field: field, draft: $draft) { editor = nil }
+                .presentationDetents([.height(340)])
+                .presentationCornerRadius(24)
+                .presentationBackground(MoyeoTheme.card)
+        }
     }
 }
 
@@ -928,31 +1077,13 @@ private struct PeopleStepper: View {
     }
 }
 
-struct RecruitmentMeetingPreviewView: View {
-    @State private var draft = RecruitmentDraft.preview
-
-    var body: some View {
-        RecruitmentStepScaffold(step: 2, nextTitle: "이 위치로 지정") {
-            RecruitmentMeetingView(draft: $draft)
-        }
-        .accessibilityIdentifier("screen.createMeeting.preview")
-    }
-}
-
-struct RecruitmentPeoplePreviewView: View {
-    @State private var draft = RecruitmentDraft.preview
-
-    var body: some View {
-        RecruitmentStepScaffold(step: 3) {
-            RecruitmentPeopleView(draft: $draft)
-        }
-    }
-}
-
 struct RecruitmentMeetingView: View {
     @Binding var draft: RecruitmentDraft
     @State private var search = ""
-    @State private var detail = "터미널 정문 앞"
+    /// 상세 안내는 호스트가 적는 값이다 — 미리 채워 두면 남이 적은 안내가 내 초안처럼 보인다.
+    @State private var detail = ""
+    /// 집합 시간을 고치는 시트. 예전에는 화살표만 있고 동작이 없었다.
+    @State private var editor: RecruitmentFieldEditor?
 
     var body: some View {
         ScrollView {
@@ -961,10 +1092,28 @@ struct RecruitmentMeetingView: View {
                 ZStack(alignment: .top) {
                     MeetingMapCard(meeting: $draft.meeting)
                         .accessibilityIdentifier("createMeeting.map")
-                    LabelledSearchField(text: $search, prompt: "장소 검색 (TourAPI)")
+                        // 웹 · 안드로이드와 같은 자리(좌측 하단 14) · 같은 문구의 안내 칩이다.
+                        .overlay(alignment: .bottomLeading) {
+                            Text("핀을 끌어 위치를 조정하세요")
+                                .font(.caption2.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.text700)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 7)
+                                .background(MoyeoTheme.card)
+                                .overlay(Capsule().stroke(MoyeoTheme.line))
+                                .clipShape(Capsule())
+                                .padding(14)
+                                .accessibilityIdentifier("createMeeting.pinHint")
+                        }
+                    LabelledSearchField(text: $search, prompt: "장소 검색")
                         .padding(12)
                 }
-                DesignField(label: "집합 장소 *", icon: "mappin.and.ellipse", value: draft.meeting.name)
+                // 장소 이름은 위의 검색·지도 핀이 정한다 — 이 줄은 그 결과를 보여주는 자리라
+                // 화살표를 그리지 않는다(누를 곳이 아니다).
+                DesignField(label: "집합 장소 *", icon: "mappin.and.ellipse",
+                            value: draft.meeting.name,
+                            placeholder: "지도에서 핀을 옮겨 정해주세요")
+                    .accessibilityIdentifier("createMeeting.placeName")
                 // changeLog15 — 상세 안내는 추천 칩이 아니라 자유 텍스트 입력이다.
                 VStack(alignment: .leading, spacing: 7) {
                     Text("상세 안내")
@@ -985,30 +1134,47 @@ struct RecruitmentMeetingView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                 }
                 .accessibilityIdentifier("createMeeting.detailInput")
-                DesignSummaryLine(String(format: "좌표 (자동 저장)   %.6f, %.6f", draft.meeting.latitude, draft.meeting.longitude))
-                DesignField(label: "집합 시간", icon: "clock", value: draft.meeting.meetingTime)
+                // 좌표 문자열은 화면에 내보이지 않는다 (21·15·17-1a·17-1b 에서 뺀 것과 같다).
+                // 핀 위치는 지도가 보여주고, 값은 초안에 그대로 저장된다.
+                DesignField(label: "집합 시간", icon: "clock", value: draft.meeting.meetingTime,
+                            placeholder: "시간 고르기",
+                            action: { editor = .meetingTime })
+                    .accessibilityIdentifier("createMeeting.meetingTime")
                 DesignInfoBox(icon: "bell.fill", text: "집합 시간 30분 전에 모든 멤버에게 알림이 가고, 채팅방 상단 공지에도 자동으로 올라가요.")
             }
             .padding(20)
         }
         .background(MoyeoTheme.background)
         .accessibilityIdentifier("screen.createMeeting")
+        // 호스트가 적은 상세 안내를 초안에 담는다 — 예전에는 화면에만 남고 버려졌다.
+        .onChange(of: detail) { _, newValue in draft.meeting.detail = newValue }
+        .sheet(item: $editor) { field in
+            RecruitmentFieldSheet(field: field, draft: $draft) { editor = nil }
+                .presentationDetents([.height(340)])
+                .presentationCornerRadius(24)
+                .presentationBackground(MoyeoTheme.card)
+        }
     }
 }
 
 private struct RecruitmentDetailView: View {
     @Binding var draft: RecruitmentDraft
+    /// 예상 비용을 고치는 시트. 예전에는 화살표만 있고 동작이 없었다.
+    @State private var editor: RecruitmentFieldEditor?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 DesignHeading("어떤 여행인지 알려주세요", subtitle: "신청 전에 가장 많이 읽는 부분이에요.")
+                // 잠긴 줄이다 — 화살표를 그리지 않는다. 안내 문구가 "바꿀 수 없어요" 라고 하는데
+                // 화살표가 있어서 눌러도 되는 것처럼 보였다.
                 DesignField(
                     label: "코스",
                     icon: "lock.fill",
                     value: draft.course.title,
                     detail: "Step 1에서 고른 코스라 여기서는 바꿀 수 없어요."
                 )
+                .accessibilityIdentifier("createDetail.course")
                 VStack(alignment: .leading, spacing: 8) {
                     Text("모집 이름 (채팅방 이름) *")
                         .font(.subheadline.weight(.heavy))
@@ -1038,7 +1204,10 @@ private struct RecruitmentDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .accessibilityIdentifier("createDetail.noteCounter")
                 }
-                DesignField(label: "예상 1인당 비용", icon: "wonsign.circle", value: draft.estimatedCost)
+                DesignField(label: "예상 1인당 비용", icon: "wonsign.circle", value: draft.estimatedCost,
+                            placeholder: "금액 적기",
+                            action: { editor = .estimatedCost })
+                    .accessibilityIdentifier("createDetail.estimatedCost")
                 // 화면기획은 세그먼트가 아니라 설명이 붙은 선택 카드 두 장이다
                 VStack(alignment: .leading, spacing: 8) {
                     Text("신청 승인 방식")
@@ -1055,15 +1224,11 @@ private struct RecruitmentDetailView: View {
         }
         .background(MoyeoTheme.background)
         .accessibilityIdentifier("screen.createDetail")
-    }
-}
-
-struct RecruitmentDetailPreviewView: View {
-    @State private var draft = RecruitmentDraft.preview
-
-    var body: some View {
-        RecruitmentStepScaffold(step: 4) {
-            RecruitmentDetailView(draft: $draft)
+        .sheet(item: $editor) { field in
+            RecruitmentFieldSheet(field: field, draft: $draft) { editor = nil }
+                .presentationDetents([.height(340)])
+                .presentationCornerRadius(24)
+                .presentationBackground(MoyeoTheme.card)
         }
     }
 }
@@ -1092,11 +1257,11 @@ struct RecruitmentSummaryView: View {
                             .accessibilityIdentifier("createSummary.source")
                     }
                     SummaryRow("calendar", "일정", draft.scheduleSummary)
-                    SummaryRow("mappin.and.ellipse", "집합", "\(draft.meeting.meetingTime) \(draft.meeting.name) \(draft.meeting.detail)")
+                    SummaryRow("mappin.and.ellipse", "집합", draft.meetingSummary)
                     SummaryRow("map", "좌표", String(format: "%.6f, %.6f", draft.meeting.latitude, draft.meeting.longitude))
                     SummaryRow("person.2", "인원", "최소 \(draft.minimumParticipants)명 · 최대 \(draft.capacity)명")
                     SummaryRow("slider.horizontal.3", "조건", "\(draft.minimumAge)~\(draft.maximumAge)세 · \(draft.genderSummary)")
-                    SummaryRow("wonsign.circle", "비용", "\(draft.estimatedCost) (예상)")
+                    SummaryRow("wonsign.circle", "비용", draft.estimatedCostSummary)
                     SummaryRow("clock", "마감", draft.deadlineSummary)
                 }
                 .padding(16)
@@ -1132,25 +1297,6 @@ struct RecruitmentSummaryView: View {
     }
 }
 
-struct RecruitmentSummaryPreviewView: View {
-    let source: CourseSource
-    @State private var draft: RecruitmentDraft
-
-    init(source: CourseSource) {
-        self.source = source
-        var preview = RecruitmentDraft.preview
-        preview.source = source
-        _draft = State(initialValue: preview)
-    }
-
-    var body: some View {
-        RecruitmentStepScaffold(step: 5, showsFooter: false) {
-            RecruitmentSummaryView(draft: $draft, onCreate: {})
-        }
-        .accessibilityIdentifier("screen.createSummary.\(source.rawValue)")
-    }
-}
-
 struct CourseRouteEditView: View {
     let trip: TripRecruitment
     let state: RouteEditState
@@ -1158,6 +1304,12 @@ struct CourseRouteEditView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var stops: [ItineraryStop]
     @State private var showNoticeComposer = false
+
+    /// 이 모임이 실제로 가진 집합 시간·장소만 잇는다. 없는 값은 지어내지 않는다.
+    private var meetingSummary: String {
+        let time = trip.meetingDetails?.meetingTime ?? ""
+        return [time, trip.meetupPoint].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
 
     init(trip: TripRecruitment, state: RouteEditState? = nil,
          onSaved: @escaping (TripRecruitment, [ItineraryStop]) -> Void = { _, _ in }) {
@@ -1222,8 +1374,12 @@ struct CourseRouteEditView: View {
                             .buttonStyle(DesignOutlineButtonStyle(dashed: true))
                     }
                     Text("집합 정보").font(.headline.weight(.heavy))
+                    // 17-7 은 경로 편집 화면이다 — 집합 정보는 하단 「집합 정보 수정」이 고친다.
+                    // 그래서 이 줄은 읽기 전용이고 화살표를 그리지 않는다.
+                    // 시간도 모임이 가진 값만 쓴다 — 예전에는 어떤 모임이든 `07:50` 이었다.
                     DesignField(label: "집합 장소 · 집합 시간", icon: "mappin.and.ellipse",
-                                value: "07:50 · \(trip.meetupPoint)")
+                                value: meetingSummary,
+                                placeholder: "집합 정보가 아직 없어요")
                 }
                 .padding(20)
             }
@@ -1277,9 +1433,10 @@ struct CourseRouteEditView: View {
         .accessibilityIdentifier("screen.courseEdit.\(state.rawValue)")
     }
 
-    /// 화면기획 18-x 헤더 타이틀 — 코스 이름 (모집 이름이 아니다)
+    /// 화면기획 18-x 헤더 타이틀 — 코스 이름 (모집 이름이 아니다).
+    /// 서버가 코스 이름을 주지 않았으면 모집 이름으로 대신한다.
     private var headerTitle: String {
-        MockData.course(for: trip.courseID)?.title ?? trip.title
+        trip.serverCourseTitle.flatMap { $0.isEmpty ? nil : $0 } ?? trip.title
     }
 
     /// 화면기획 18-x 헤더 부제 — "5/25(토) 당일치기 · 방문지 4개 · 2/5명"
@@ -1328,15 +1485,21 @@ struct NoticeHistoryView: View {
     @State private var showComposer = false
     /// 실서버 공지 이력을 받았는지 — 받았으면 서버 공지만 그린다 (20-3)
     @State private var usesServerNotices = false
+    /// 서버 모임 상세 — 머리말의 코스 이름과 지도 미리보기의 집합 좌표가 여기서 나온다.
+    @State private var serverRoom: ServerChatRoomDetail?
     /// 고정 토글 요청 중인 공지 — 중복 탭을 막는다
     @State private var pinningNoticeIDs = Set<String>()
-    /// 고정 토글이 서버에 거절됐을 때의 안내 (예: 고정은 최대 3개)
+    /// 고정 토글이 서버에 거절됐을 때의 안내
     @State private var pinFailureMessage: String?
+    /// 20-3a 공지 수정 · 삭제. 서버 공지 원본이 있어야 열 수 있다 (내용·고정을 그대로 실어 보낸다).
+    @State private var serverNotices: [ServerChatRoomNotice] = []
+    @State private var editingNotice: ServerChatRoomNotice?
 
     init(thread: ChatThread, onCreate: @escaping (ChatThread, TripNotice) -> Void = { _, _ in }) {
         self.thread = thread
         self.onCreate = onCreate
-        _notices = State(initialValue: thread.pinnedNotices.isEmpty ? Self.previewNotices : thread.pinnedNotices)
+        // 공지가 없으면 없는 대로 둔다 — 목 공지를 채우지 않는다 (NO-MOCK-CANON R1).
+        _notices = State(initialValue: thread.pinnedNotices)
     }
 
     var body: some View {
@@ -1346,23 +1509,22 @@ struct NoticeHistoryView: View {
                 // 화면기획은 코스 이름과 공지 개수를 먼저 두고, 섹션은 "상단 고정 중" / "지난 공지"다
                 VStack(alignment: .leading, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(thread.courseName.isEmpty ? thread.tripTitle : thread.courseName)
+                        Text(headerTitle)
                             .font(.caption.weight(.heavy))
                             .foregroundStyle(MoyeoTheme.ink)
-                        Text("공지 \(notices.count)개 · 고정 \(notices.filter(\.isPinned).count) / 최대 3")
+                        // 상단 고정은 최대 1개다 (정본 R5-1, 기획 결정 2026-08-30)
+                        Text("공지 \(notices.count)개 · 고정 \(notices.filter(\.isPinned).count) / 최대 1")
                             .font(.caption2)
                             .foregroundStyle(MoyeoTheme.muted)
                             .monospacedDigit()
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if usesServerNotices, notices.isEmpty {
-                        Text("아직 등록된 공지가 없어요.")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(MoyeoTheme.muted)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 34)
-                            .accessibilityIdentifier("noticeHistory.server.empty")
+                    if notices.isEmpty {
+                        MoyeoEmptyStateView(
+                            message: MoyeoEmptyText.noNotices,
+                            accessibilityIdentifier: "noticeHistory.empty"
+                        )
                     } else {
                         NoticeSectionTitle(title: "상단 고정 중")
                         ForEach(notices.filter(\.isPinned)) { notice in
@@ -1370,7 +1532,10 @@ struct NoticeHistoryView: View {
                                 notice: notice,
                                 meetingCoordinate: meetingCoordinate,
                                 isBusy: pinningNoticeIDs.contains(notice.id),
-                                onTogglePin: canTogglePin(notice) ? { togglePin(notice) } : nil
+                                onTogglePin: canTogglePin(notice) ? { togglePin(notice) } : nil,
+                                onEdit: serverNotice(for: notice).map { server in
+                                    { editingNotice = server }
+                                }
                             )
                         }
                         NoticeSectionTitle(title: "지난 공지")
@@ -1379,12 +1544,18 @@ struct NoticeHistoryView: View {
                                 notice: notice,
                                 meetingCoordinate: meetingCoordinate,
                                 isBusy: pinningNoticeIDs.contains(notice.id),
-                                onTogglePin: canTogglePin(notice) ? { togglePin(notice) } : nil
+                                onTogglePin: canTogglePin(notice) ? { togglePin(notice) } : nil,
+                                onEdit: serverNotice(for: notice).map { server in
+                                    { editingNotice = server }
+                                }
                             )
                         }
                     }
 
-                    Text("공지는 호스트만 올릴 수 있고, 고정은 최대 3개까지예요. 고정을 해제해도 이력에는 그대로 남아요.")
+                    Text(
+                        "공지는 호스트만 올릴 수 있고, 상단 고정은 하나만 둘 수 있어요. "
+                            + "새로 고정하면 먼저 고정된 공지가 풀려요. 고정을 해제해도 이력에는 그대로 남아요."
+                    )
                         .font(.caption2)
                         .foregroundStyle(MoyeoTheme.text400)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1402,15 +1573,22 @@ struct NoticeHistoryView: View {
             AuthPrimaryButton(title: "＋ 새 공지 작성 (호스트)", accessibilityIdentifier: "noticeHistory.create") {
                 showComposer = true
             }
+            .disabled(thread.serverRoomID == nil)
             .padding(.horizontal, 20)
             .padding(.top, 10)
             .padding(.bottom, 28)
             .background(MoyeoTheme.card)
         }
-        .alert("새 공지", isPresented: $showComposer) {
-            Button("작성") { createNotice() }
-            Button("취소", role: .cancel) {}
-        } message: { Text("집합 장소나 준비물 변경을 모든 멤버에게 알려요.") }
+        // 20-3 하단 CTA → 20-2f 공지 작성 (정본 ATTACH-COMPOSER-CANON.md §2).
+        // 예전에는 알림창에서 "호스트 새 공지" 라는 가짜 공지를 만들어 목록에 끼워 넣었다.
+        .navigationDestination(isPresented: $showComposer) {
+            if let roomID = thread.serverRoomID {
+                AttachNoticeComposerView(roomID: roomID) {
+                    showComposer = false
+                    Task { await reloadNotices(roomID: roomID) }
+                }
+            }
+        }
         .alert(
             "공지 고정",
             isPresented: Binding<Bool>(
@@ -1423,25 +1601,53 @@ struct NoticeHistoryView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .task {
             guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, !usesServerNotices else { return }
+            // 상세는 공지와 별개로 받는다 — 하나가 실패해도 나머지는 실제 값으로 그린다.
+            serverRoom = try? await ChatRoomAPIClient.shared.detail(roomID: roomID)
             guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else { return }
+            serverNotices = history.allNotices
             notices = history.allNotices.map(ServerTripMapper.notice(from:))
             usesServerNotices = true
+        }
+        // 20-3a — 공지 카드의 `수정` 이 가는 곳. 예전에는 갈 곳이 없어 글자만 있었다.
+        .navigationDestination(item: $editingNotice) { notice in
+            if let roomID = thread.serverRoomID {
+                NoticeEditView(roomID: roomID, notice: notice) {
+                    Task { await reloadNotices(roomID: roomID) }
+                }
+            }
         }
         .accessibilityIdentifier("screen.noticeHistory")
     }
 
-    /// 20-3 공지의 지도 미리보기는 모집의 집합 좌표를 그대로 쓴다. 없으면 목업으로 남는다.
+    /// 머리말은 코스 이름이다. 서버 모임이면 서버가 준 코스 이름이 우선이다 —
+    /// 목데이터 스레드의 이름을 실서버 화면에 섞지 않는다.
+    private var headerTitle: String {
+        if let serverTitle = serverRoom?.courseTitle, !serverTitle.isEmpty { return serverTitle }
+        if let roomTitle = serverRoom?.title, !roomTitle.isEmpty { return roomTitle }
+        return thread.courseName.isEmpty ? thread.tripTitle : thread.courseName
+    }
+
+    /// 20-3 공지의 지도 미리보기는 **서버 상세의 집합 좌표**만 쓴다.
+    /// 좌표가 없으면 nil 이고 지도를 그리지 않는다 (NO-MOCK-CANON R4).
     private var meetingCoordinate: MoyeoMapCoordinate? {
+        MoyeoMapCoordinate(
+            latitude: serverRoom?.meetingLatitude,
+            longitude: serverRoom?.meetingLongitude
+        )
+    }
+
+    /// 화면 모델(`TripNotice`)에 대응하는 서버 공지 원본. 목데이터 공지면 nil 이고 수정할 수 없다.
+    private func serverNotice(for notice: TripNotice) -> ServerChatRoomNotice? {
         guard
-            let tripID = thread.tripID,
-            let meeting = MockData.trips.first(where: { $0.id == tripID })?.meetingDetails
+            thread.serverRoomID != nil,
+            let noticeID = ServerTripMapper.noticeID(fromNoticeID: notice.id)
         else {
             return nil
         }
-        return MoyeoMapCoordinate(latitude: meeting.latitude, longitude: meeting.longitude)
+        return serverNotices.first { $0.noticeId == noticeID }
     }
 
-    /// 서버 공지만 고정 토글을 보낼 수 있다. 목데이터 공지(캡처·미로그인)는 기존처럼 정적 문구로 남는다.
+    /// 서버 공지만 고정 토글을 보낼 수 있다.
     private func canTogglePin(_ notice: TripNotice) -> Bool {
         MoyeoServerSync.isEnabled
             && thread.serverRoomID != nil
@@ -1459,12 +1665,23 @@ struct NoticeHistoryView: View {
             return
         }
         pinningNoticeIDs.insert(notice.id)
+        let pinsNow = !notice.isPinned
         Task {
             do {
+                // 상단 고정은 하나만 남긴다 — 서버가 개수를 막지 않으므로 클라가 먼저 기존 고정을 푼다 (R5-1)
+                if pinsNow {
+                    for pinned in notices where pinned.isPinned {
+                        guard let oldID = ServerTripMapper.noticeID(fromNoticeID: pinned.id) else { continue }
+                        try? await ChatRoomWriteAPIClient.shared.setNoticePinned(
+                            roomID: roomID, noticeID: oldID, pinned: false
+                        )
+                    }
+                }
                 try await ChatRoomWriteAPIClient.shared.setNoticePinned(
-                    roomID: roomID, noticeID: noticeID, pinned: !notice.isPinned
+                    roomID: roomID, noticeID: noticeID, pinned: pinsNow
                 )
                 if let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) {
+                    serverNotices = history.allNotices
                     notices = history.allNotices.map { ServerTripMapper.notice(from: $0) }
                 }
             } catch {
@@ -1475,43 +1692,16 @@ struct NoticeHistoryView: View {
         }
     }
 
-    private func createNotice() {
-        let notice = TripNotice(id: UUID().uuidString, title: "호스트 새 공지", body: "집합 정보를 다시 확인해주세요.", createdAt: "지금", isPinned: notices.filter(\.isPinned).count < 3)
-        notices.insert(notice, at: 0)
-        onCreate(thread, notice)
+    /// 공지를 올린 뒤에는 서버 이력을 다시 읽는다 — 화면에서 만든 공지를 끼워 넣지 않는다.
+    private func reloadNotices(roomID: Int64) async {
+        guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else { return }
+        serverNotices = history.allNotices
+        notices = history.allNotices.map(ServerTripMapper.notice(from:))
+        usesServerNotices = true
+        if let latest = notices.first {
+            onCreate(thread, latest)
+        }
     }
-
-    // 공지 이력은 실제로 쌓였을 때의 다양함을 보여줘야 검수가 된다 (화면기획 기준 목데이터)
-    private static let previewNotices = [
-        TripNotice(
-            id: "notice-meet",
-            title: "집합 장소 · 시간",
-            body: "5/25(토) 07:50 청송 시외버스터미널 정문 앞\n08:00 정각에 출발해요. 늦으면 채팅방에 남겨주세요!",
-            createdAt: "5월 20일 오후 2:14",
-            isPinned: true
-        ),
-        TripNotice(
-            id: "notice-pack",
-            title: "준비물",
-            body: "편한 운동화, 얇은 바람막이, 물 500ml 정도면 충분해요.",
-            createdAt: "5월 21일 오전 10:02",
-            isPinned: true
-        ),
-        TripNotice(
-            id: "notice-parking",
-            title: "주차 안내",
-            body: "터미널 공영주차장 이용하시면 돼요 (하루 3,000원)",
-            createdAt: "5월 18일 오후 7:30",
-            isPinned: false
-        ),
-        TripNotice(
-            id: "notice-lunch",
-            title: "점심 메뉴 투표 결과",
-            body: "달기약수탕 백숙으로 정해졌어요 🍲",
-            createdAt: "5월 17일 오후 9:12",
-            isPinned: false
-        )
-    ]
 }
 
 private struct NoticeSectionTitle: View {
@@ -1560,16 +1750,17 @@ private struct NoticeCard: View {
     var isBusy = false
     /// 서버 공지일 때만 채워진다 — nil 이면 기존처럼 정적 문구를 그린다
     var onTogglePin: (() -> Void)?
+    /// 20-3a 공지 수정 · 삭제로 가는 길. 서버 공지일 때만 채워진다.
+    var onEdit: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            // 제목 줄을 두지 않는다 — 본문이 카드의 주인공이다
+            // (정본 `ATTACH-COMPOSER-CANON.md` §2, 기획 결정 2026-08-30).
             HStack(spacing: 6) {
                 Image(systemName: "note.text")
                     .font(.caption)
                     .foregroundStyle(notice.isPinned ? MoyeoTheme.forest : MoyeoTheme.muted)
-                Text(notice.title)
-                    .font(.caption.weight(.heavy))
-                    .foregroundStyle(notice.isPinned ? MoyeoTheme.forest : MoyeoTheme.text700)
                 Spacer(minLength: 0)
                 // 고정 여부를 배지로 — 화면기획과 같은 표기
                 Text(notice.isPinned ? "📌 고정" : "고정 해제됨")
@@ -1581,20 +1772,19 @@ private struct NoticeCard: View {
                     .clipShape(Capsule())
             }
             Text(notice.body).font(.subheadline).foregroundStyle(MoyeoTheme.ink)
-            if notice.id == "notice-meet" {
-                NoticeRoutePreview(coordinate: meetingCoordinate)
-                    .frame(height: 88)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
+            // 공지 카드에 지도를 띄우지 않는다 — 여기서 장소를 바꾸는 게 아니라 읽기만 한다
+            // (2026-08-31 사용자 지시). 집합 장소 변경은 18-5 집합 정보 수정에서 한다.
+            // 웹·안드로이드도 지도를 그리지 않는다 — iOS 만 달랐다.
             HStack(spacing: 6) {
-                // 서버 공지는 작성자 닉네임을 함께 준다
-                Text(notice.authorName.isEmpty ? "숲속여행자 (호스트)" : notice.authorName)
-                Text("·")
+                // 작성자는 서버 공지만 안다 — 모르면 이름을 지어내지 않고 그 자리를 비운다
+                if !notice.authorName.isEmpty {
+                    Text(notice.authorName)
+                    Text("·")
+                }
                 Text(notice.createdAt).monospacedDigit()
                 Spacer(minLength: 0)
                 // 화면기획 20-3 — 고정 공지는 "수정", 고정 해제된 공지는 "다시 고정".
-                // 서버 공지의 "다시 고정"만 실제 동작(PUT notices/{id})이 붙는다.
-                // "수정"은 기획에 내용 편집 화면이 없어 문구 그대로 남긴다.
+                // 둘 다 실제 동작이 붙는다: "다시 고정"은 PUT notices/{id}, "수정"은 20-3a 로 간다.
                 if let onTogglePin, !notice.isPinned {
                     Button(action: onTogglePin) {
                         Text("다시 고정")
@@ -1604,6 +1794,14 @@ private struct NoticeCard: View {
                     .buttonStyle(.plain)
                     .disabled(isBusy)
                     .accessibilityIdentifier("noticeHistory.repin.\(notice.id)")
+                } else if let onEdit {
+                    Button(action: onEdit) {
+                        Text("수정")
+                            .foregroundStyle(MoyeoTheme.forest)
+                            .fontWeight(.heavy)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("noticeHistory.edit.\(notice.id)")
                 } else {
                     Text(notice.isPinned ? "수정" : "다시 고정")
                         .foregroundStyle(MoyeoTheme.forest)
@@ -1620,60 +1818,9 @@ private struct NoticeCard: View {
     }
 }
 
-/// 집합 장소 공지의 지도 미리보기 (화면기획 20-3).
-/// 경로선을 그리면 선 그래프처럼 읽힌다 — 집합 한 지점이므로 지도면 + 가운데 핀만 둔다.
-private struct NoticeRoutePreview: View {
-    var coordinate: MoyeoMapCoordinate?
-
-    var body: some View {
-        if let coordinate {
-            MoyeoMapView(
-                content: MoyeoMapContent(
-                    center: coordinate,
-                    level: 16,
-                    markers: [MoyeoMapMarker(id: "notice-meet", coordinate: coordinate)],
-                    fitsContent: false
-                ),
-                isInteractive: false
-            ) {
-                mockup
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("집합 장소 지도")
-        } else {
-            mockup
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("집합 장소 지도")
-        }
-    }
-
-    private var mockup: some View {
-        GeometryReader { proxy in
-            ZStack {
-                MoyeoTheme.mapGreen
-                Path { path in
-                    path.move(to: CGPoint(x: 0, y: proxy.size.height * 0.72))
-                    path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height * 0.72))
-                    path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height))
-                    path.addLine(to: CGPoint(x: 0, y: proxy.size.height))
-                    path.closeSubpath()
-                }
-                .fill(MoyeoTheme.mapWater.opacity(0.45))
-                Image(systemName: "mappin")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(MoyeoTheme.forest)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(.white, lineWidth: 2.5))
-                    .position(x: proxy.size.width * 0.5, y: proxy.size.height * 0.44)
-            }
-        }
-    }
-}
-
 /// 여행 경로 지도 (화면기획 17-7 / 18-2 / 18-3).
-/// 방문지 위경도가 모두 있으면 실지도에 순번 마커 + 경로선을, 없으면 기존 도식을 그린다.
+/// 방문지 위경도가 모두 있을 때만 실지도에 순번 마커 + 경로선을 그린다.
+/// 좌표가 없으면 손으로 그린 도식을 대신 두지 않는다 (NO-MOCK-CANON R4).
 private struct RouteSchematic: View {
     let stops: [ItineraryStop]
 
@@ -1688,7 +1835,7 @@ private struct RouteSchematic: View {
 
     var body: some View {
         let markers = routeMarkers
-        if markers.count == stops.count, let first = markers.first {
+        if !markers.isEmpty, markers.count == stops.count, let first = markers.first {
             MoyeoMapView(
                 content: MoyeoMapContent(
                     center: first.coordinate,
@@ -1697,41 +1844,12 @@ private struct RouteSchematic: View {
                     polyline: markers.map(\.coordinate)
                 ),
                 isInteractive: false,
-                fallback: { schematic }
+                fallback: { MoyeoTheme.mapGreen }
             )
             .frame(height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 9))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("경로 지도, 방문지 \(stops.count)곳")
-        } else {
-            schematic
-                .frame(height: 160)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("경로 지도, 방문지 \(stops.count)곳")
-        }
-    }
-
-    private var schematic: some View {
-        GeometryReader { proxy in
-            ZStack {
-                MoyeoTheme.mapGreen
-                Path { path in
-                    let count = max(stops.count, 2)
-                    for index in 0..<count {
-                        let x = 55 + CGFloat(index) * max((proxy.size.width - 110) / CGFloat(count - 1), 1)
-                        let y = proxy.size.height - 38 - CGFloat(index) * 22
-                        if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
-                    }
-                }.stroke(MoyeoTheme.primary300, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                ForEach(Array(stops.prefix(6).enumerated()), id: \.element.id) { index, stop in
-                    let count = max(min(stops.count, 6), 2)
-                    Text("\(stop.order)").font(.caption.weight(.heavy)).foregroundStyle(.white)
-                        .frame(width: 30, height: 30).background(MoyeoTheme.primary300).clipShape(Circle())
-                        .position(x: 55 + CGFloat(index) * max((proxy.size.width - 110) / CGFloat(count - 1), 1),
-                                  y: proxy.size.height - 38 - CGFloat(index) * 22)
-                }
-            }
         }
     }
 }
@@ -1749,7 +1867,7 @@ private struct MeetingMapCard: View {
             ),
             draggablePin: true,
             onPinMove: updateCoordinate,
-            fallback: { mockup }
+            fallback: { MoyeoTheme.mapGreen }
         )
         .frame(height: 210).clipShape(RoundedRectangle(cornerRadius: 9))
         .accessibilityLabel("지도 핀, \(meeting.name)")
@@ -1758,17 +1876,6 @@ private struct MeetingMapCard: View {
     private func updateCoordinate(_ coordinate: MoyeoMapCoordinate) {
         meeting.latitude = coordinate.latitude
         meeting.longitude = coordinate.longitude
-    }
-
-    private var mockup: some View {
-        ZStack {
-            MoyeoTheme.mapGreen
-            VStack(spacing: 6) {
-                Image(systemName: "mappin.circle.fill").font(.system(size: 42)).foregroundStyle(MoyeoTheme.primary300)
-                Text(meeting.name).font(.caption.weight(.heavy))
-                Text("핀을 움직여 위치 조정").font(.caption2).foregroundStyle(MoyeoTheme.muted)
-            }
-        }
     }
 }
 
@@ -1817,17 +1924,59 @@ private struct DesignHeading: View {
     var body: some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.headline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink); if let subtitle { Text(subtitle).font(.caption).foregroundStyle(MoyeoTheme.muted) } } }
 }
 
+/// 17-x 입력 폼의 한 줄. 값이 아직 없으면 `placeholder` 를 흐리게 보여준다.
+///
+/// **`action` 이 있는 줄만 `chevron.right` 를 그린다.** 예전에는 모든 줄이 화살표를 그려
+/// 눌릴 것처럼 보였는데, 잠긴 코스 줄과 지도가 정하는 집합 장소 줄까지 화살표가 있었고
+/// 고칠 수 있어야 하는 줄들은 정작 아무 동작이 없었다.
 private struct DesignField: View {
     let label: String
     let icon: String
     let value: String
     var detail: String?
+    /// 값이 비었을 때 대신 보여줄 안내. 지어낸 기본값을 넣지 않기 위한 자리다.
+    var placeholder: String?
+    var action: (() -> Void)?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(label).font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.text700)
-            HStack(spacing: 10) { Image(systemName: icon).foregroundStyle(MoyeoTheme.muted); VStack(alignment: .leading, spacing: 2) { Text(value).font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink); if let detail { Text(detail).font(.caption2).foregroundStyle(MoyeoTheme.muted) } }; Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(MoyeoTheme.text400) }
-                .padding(.horizontal, 14).frame(minHeight: detail == nil ? 50 : 60).background(MoyeoTheme.card).overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.line)).clipShape(RoundedRectangle(cornerRadius: 9))
+            if !label.isEmpty {
+                Text(label).font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.text700)
+            }
+            if let action {
+                Button(action: action) { row }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(label.isEmpty ? value : "\(label) 고치기")
+            } else {
+                row
+            }
         }
+    }
+
+    private var isPlaceholder: Bool { value.isEmpty && placeholder != nil }
+
+    private var row: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(MoyeoTheme.muted)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isPlaceholder ? (placeholder ?? "") : value)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(isPlaceholder ? MoyeoTheme.muted : MoyeoTheme.ink)
+                if let detail {
+                    Text(detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+                }
+            }
+            Spacer()
+            if action != nil {
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(MoyeoTheme.text400)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: detail == nil ? 50 : 60)
+        .contentShape(Rectangle())
+        .background(MoyeoTheme.card)
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.line))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
     }
 }
 
@@ -1878,13 +2027,40 @@ private struct DesignWarningBox: View {
 private struct SummaryRow: View {
     let icon: String; let label: String; let value: String
     init(_ icon: String, _ label: String, _ value: String) { self.icon = icon; self.label = label; self.value = value }
-    var body: some View { HStack(alignment: .top, spacing: 10) { Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 18); Text(label).font(.caption).foregroundStyle(MoyeoTheme.muted).frame(width: 36, alignment: .leading); Text(value).font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink); Spacer(minLength: 0) } }
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 18)
+            Text(label).font(.caption).foregroundStyle(MoyeoTheme.muted).frame(width: 36, alignment: .leading)
+            // 값이 비면 자리만 비운다 — 구분자나 단위만 남는 문구를 그리지 않는다.
+            if !value.isEmpty {
+                Text(value).font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+            }
+            Spacer(minLength: 0)
+        }
+    }
 }
 
-private struct LabelledSearchField: View {
+/// 검색 입력 한 줄. 17-1a 장소 검색과 27-2 친구 검색이 같은 모양을 쓴다.
+struct LabelledSearchField: View {
     @Binding var text: String
     let prompt: String
-    var body: some View { HStack { Image(systemName: "magnifyingglass"); TextField(prompt, text: $text) }.font(.caption).foregroundStyle(MoyeoTheme.muted).padding(.horizontal, 14).frame(height: 44).background(MoyeoTheme.background).overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.line)).clipShape(RoundedRectangle(cornerRadius: 9)) }
+    // placeholder 는 SwiftUI 기본색(거의 안 보이는 회색)을 쓰지 않고 색을 직접 준다.
+    // 웹(13px `text400`) · 안드로이드(bodyLarge `onSurfaceVariant`) 와 같은 정도로 보이게 맞췄다.
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(MoyeoTheme.muted)
+            TextField("", text: $text, prompt: Text(prompt).foregroundColor(MoyeoTheme.muted))
+                .font(.subheadline)
+                .foregroundStyle(MoyeoTheme.ink)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(MoyeoTheme.background)
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.line))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
 }
 
 private struct DesignSegment<T: Hashable & RawRepresentable>: View where T.RawValue == String {

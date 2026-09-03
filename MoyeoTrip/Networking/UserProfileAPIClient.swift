@@ -30,7 +30,10 @@ struct ServerMyProfile: Decodable, Hashable {
     let socialActivityEnabled: Bool
     let marketingEnabled: Bool
 
-    var genderText: String {
+    var genderText: String { Self.genderText(for: gender) }
+
+    /// 28-1 이 시트에서 고른 값을 저장 전에 그대로 보여줄 수 있게 코드 → 표기를 따로 뗀다.
+    static func genderText(for gender: String) -> String {
         switch gender {
         case "F":
             return "여성"
@@ -67,9 +70,13 @@ struct ServerPublicProfile: Decodable, Hashable {
     let mannerRating: Double?
     let travelStyles: [ServerProfileOption]?
     let interestedRegions: [ServerRegionOption]?
+    /// 완료한 여행 수·공개 피드 수 (2026-08-26 추가).
+    /// 호스트 횟수는 기획에 없어 서버도 주지 않는다 — 칸을 만들지 않는다.
+    let completedTripCount: Int?
+    let feedCount: Int?
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 
     var travelStyleLabels: [String] {
@@ -92,6 +99,9 @@ struct ServerReceivedTravelReview: Decodable, Hashable, Identifiable {
     let reviewerNicknameColor: String?
     let reviewerProfileImageUrl: String?
     let content: String
+    /// 어느 여행에서 받은 평가인지, 언제 받았는지 (2026-08-26 추가). 목록은 최신순이다.
+    let tripTitle: String?
+    let createdAt: String?
 
     var id: Int64 { reviewerId }
 }
@@ -132,8 +142,10 @@ final class UserProfileAPIClient: @unchecked Sendable {
         try await api.get("/api/v1/users/\(userID)/travel-reviews")
     }
 
+    /// 취향 후보. **토큰 없이 200 이다** (2026-08-30 서버 회신·실측 확인) —
+    /// 가입 06-1 은 아직 서비스 토큰이 없으므로 공개 호출로 받는다. 28 프로필 수정도 같은 응답을 쓴다.
     func profileOptions() async throws -> ServerProfileOptions {
-        try await api.get("/api/v1/users/me/profile/options")
+        try await api.getPublic("/api/v1/users/me/profile/options")
     }
 
     func updateProfile(_ update: ServerProfileUpdate) async throws -> ServerMyProfile {

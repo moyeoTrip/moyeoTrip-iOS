@@ -1,19 +1,18 @@
 import SwiftUI
 
 enum TravelTasteSelection {
-    static let styleOptions = ["자연", "힐링", "사진", "맛집", "역사", "야경", "트레킹", "카페"]
-    static let interestRegionOptions = ["경주", "안동", "포항", "문경", "청송", "영주", "울진", "울릉"]
-    static let defaultStyles: Set<String> = ["자연", "사진"]
-    static let defaultInterestRegions: Set<String> = ["경주", "안동", "포항", "문경"]
-
-    static func isComplete(styles: Set<String>, interestRegions: Set<String>) -> Bool {
+    /// 후보 목록은 여기 두지 않는다. 가입 전에도 로그인 뒤에도
+    /// `GET users/me/profile/options` 응답만 쓴다 (정본 R4·R5, 2026-08-30 공개 확인).
+    static func isComplete(styles: Set<Int64>, interestRegions: Set<Int64>) -> Bool {
         !styles.isEmpty && !interestRegions.isEmpty
     }
 }
 
 struct AuthTravelTasteView: View {
-    @Binding var selectedTravelStyles: Set<String>
-    @Binding var selectedInterestRegions: Set<String>
+    @Binding var selectedTravelStyles: Set<Int64>
+    @Binding var selectedInterestRegions: Set<Int64>
+    /// 후보는 서버가 준다 — 클라가 스타일·지역 표를 갖지 않는다.
+    @ObservedObject var options: AuthTasteOptionsModel
     var isSubmitting = false
     var errorMessage: String?
     let backAction: () -> Void
@@ -34,7 +33,7 @@ struct AuthTravelTasteView: View {
             TravelTasteOptionSection(
                 title: "여행 스타일",
                 requirementHint: "1개 이상",
-                options: TravelTasteSelection.styleOptions,
+                options: options.travelStyles,
                 selectedItems: $selectedTravelStyles,
                 accessibilityPrefix: "auth.taste.style"
             )
@@ -42,10 +41,24 @@ struct AuthTravelTasteView: View {
             TravelTasteOptionSection(
                 title: "관심 지역",
                 requirementHint: "경북 안에서 1곳 이상",
-                options: TravelTasteSelection.interestRegionOptions,
+                options: options.interestedRegions,
                 selectedItems: $selectedInterestRegions,
                 accessibilityPrefix: "auth.taste.region"
             )
+
+            // 후보를 못 받으면 칩을 하나도 그리지 않고 다시 시도만 띄운다 — 표를 지어내지 않는다.
+            if options.isLoading {
+                MoyeoEmptyStateView(
+                    message: MoyeoEmptyText.loading,
+                    accessibilityIdentifier: "auth.taste.loading"
+                )
+            } else if options.loadFailed {
+                MoyeoEmptyStateView(
+                    message: MoyeoEmptyText.loadFailed,
+                    onRetry: { Task { await options.load() } },
+                    accessibilityIdentifier: "auth.taste.loadFailed"
+                )
+            }
 
             TravelTasteInfoCard()
             TravelTasteSelectionSummary(
@@ -83,6 +96,10 @@ struct AuthTravelTasteView: View {
                 .disabled(!isComplete || isSubmitting)
             }
         }
+        // 약관 단계와 같은 방식으로, 단계에 들어갈 때 서버 후보를 받아온다.
+        .task {
+            if options.isEmpty && !options.loadFailed { await options.load() }
+        }
     }
 }
 
@@ -90,8 +107,9 @@ struct TravelTasteOptionSection: View {
     let title: String
     /// 화면기획의 "* · 1개 이상" 처럼 필수 조건을 섹션 제목 옆에 붙인다.
     var requirementHint: String?
-    let options: [String]
-    @Binding var selectedItems: Set<String>
+    /// 후보는 항상 **서버 id 를 달고 온다** — 화면은 라벨을 그리고 전송은 id 로 한다.
+    let options: [TravelTasteOption]
+    @Binding var selectedItems: Set<Int64>
     let accessibilityPrefix: String
 
     var body: some View {
@@ -114,25 +132,26 @@ struct TravelTasteOptionSection: View {
             // 화면기획·웹·안드로이드의 취향 후보는 줄바꿈되며 흐르는 pill 배열이다.
             // 4열 그리드로 그리면 칩이 폭을 억지로 채워 큰 사각 버튼처럼 읽힌다.
             MoyeoChipFlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-                ForEach(options, id: \.self) { option in
+                ForEach(options) { option in
                     TravelTasteChip(
-                        title: option,
-                        isSelected: selectedItems.contains(option)
+                        title: option.label,
+                        isSelected: selectedItems.contains(option.id)
                     ) {
-                        toggle(option)
+                        toggle(option.id)
                     }
-                    .accessibilityIdentifier("\(accessibilityPrefix).\(option)")
+                    // 접근성 식별자는 계속 라벨로 만든다 — 캡처·UI 테스트가 이름으로 칩을 찾는다.
+                    .accessibilityIdentifier("\(accessibilityPrefix).\(option.label)")
                 }
             }
         }
         .accessibilityIdentifier("\(accessibilityPrefix).section")
     }
 
-    private func toggle(_ option: String) {
-        if selectedItems.contains(option) {
-            selectedItems.remove(option)
+    private func toggle(_ optionID: Int64) {
+        if selectedItems.contains(optionID) {
+            selectedItems.remove(optionID)
         } else {
-            selectedItems.insert(option)
+            selectedItems.insert(optionID)
         }
     }
 }

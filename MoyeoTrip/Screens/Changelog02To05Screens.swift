@@ -1,5 +1,4 @@
 // swiftlint:disable file_length
-import PhotosUI
 import SwiftUI
 
 struct ChangelogPerson: Identifiable {
@@ -26,6 +25,8 @@ private struct ChangelogComment: Identifiable {
   var replies: [ChangelogComment] = []
   /// 실서버 댓글은 같은 사람이 같은 문장을 두 번 남길 수 있어 commentId를 식별자로 쓴다.
   var serverCommentID: Int64?
+  /// 작성자 프로필 이미지. 서버가 주면 이걸 그리고, 없으면 `mascot` 으로 떨어진다.
+  var authorImageURL: URL?
 
   var id: String {
     serverCommentID.map { "server-comment-\($0)" } ?? "\(name).\(body)"
@@ -44,6 +45,8 @@ struct ChatSideMenuView: View {
   let thread: ChatThread
   @State private var route: SupportRoute?
   @State private var showsLeaveConfirmation: Bool
+  /// 「신고 · 문의」 안내 (정본 §3). 채팅방 신고는 접수 API 가 없다.
+  @State private var showsReportUnsupported = false
   /// changeLog14 — 멤버 ⋯ 가 여는 멤버 시트(20-1a 액션 → 20-1b 사유 입력)의 요청
   @State private var memberSheet: MemberSheetRequest?
   /// 참여 중인 서버 방의 읽기 응답 — 403이거나 미로그인이면 nil로 남고 목데이터가 유지된다 (20-1)
@@ -81,7 +84,8 @@ struct ChatSideMenuView: View {
       serverCompanions: serverCompanions,
       onOpenRoute: { route = $0 },
       onLeave: { showsLeaveConfirmation = true },
-      onMemberMore: { memberSheet = MemberSheetRequest(member: $0, initialStage: .actions) }
+      onMemberMore: { memberSheet = MemberSheetRequest(member: $0, initialStage: .actions) },
+      onReportUnsupported: { showsReportUnsupported = true }
     )
     .task {
       guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, serverContent == nil else { return }
@@ -97,6 +101,13 @@ struct ChatSideMenuView: View {
       // 서버 모임은 목데이터 스레드로 되돌아가지 않도록 이 스레드를 그대로 넘긴다
       if thread.isServerBacked, case .noticeHistory = route {
         NoticeHistoryView(thread: thread)
+      } else if case .roomNotification = route, let roomID = thread.serverRoomID {
+        // 20-1c — 머리말에 쓸 이름·일정은 이미 이 화면이 갖고 있다. 다시 부르지 않는다.
+        RoomNotificationView(
+          roomID: roomID,
+          roomTitle: displayThreadTitle,
+          roomSubtitle: displayThreadSchedule
+        )
       } else {
         SupportDestinationView(route: route)
       }
@@ -105,10 +116,19 @@ struct ChatSideMenuView: View {
     // 31 모임 종료 경고와 같은 팝업(LeaveConfirmationDialog)을 이전 화면 위에 얹는다.
     .overlay {
       if showsLeaveConfirmation {
+        // 31-1 — 호스트와 참가자는 결과가 전혀 다르다. 역할로 문구를 가른다 (정본 §6-5).
         LeaveConfirmationDialog(
+          role: leaveRole,
+          approvedCount: serverContent?.memberList.participantCount,
           onCancel: { showsLeaveConfirmation = false },
           onConfirm: leaveRoom
         )
+      }
+    }
+    // 접수 API 가 없는 신고는 화면을 옮기지 않고 여기서 안내한다 (정본 §3).
+    .overlay {
+      if showsReportUnsupported {
+        ReportUnsupportedDialog { showsReportUnsupported = false }
       }
     }
     .alert(
@@ -134,6 +154,14 @@ struct ChatSideMenuView: View {
             member: request.member,
             initialStage: request.initialStage,
             onClose: { memberSheet = nil },
+            onBlock: { member in
+              memberSheet = nil
+              block(member: member)
+            },
+            onSendFriendRequest: { member in
+              memberSheet = nil
+              sendFriendRequest(to: member)
+            },
             onRemove: { member, reason in
               memberSheet = nil
               kick(member: member, reason: reason)
@@ -147,6 +175,26 @@ struct ChatSideMenuView: View {
       }
     }
     .accessibilityIdentifier("screen.chatMenu")
+  }
+
+  /// 20-1c 머리말 — 서버 상세를 받았으면 그 값이 우선이다.
+  private var displayThreadTitle: String {
+    guard let serverContent else { return thread.tripTitle }
+    return ServerTripMapper.chatThread(thread, applying: serverContent).tripTitle
+  }
+
+  private var displayThreadSchedule: String {
+    guard let serverContent else { return thread.scheduleSummary }
+    return ServerTripMapper.chatThread(thread, applying: serverContent).scheduleSummary
+  }
+
+  /// 31-1 — 서버 멤버 목록의 `me && host` 로만 판정한다. 못 받았으면 역할을 모르므로
+  /// 기존과 같은 호스트 문구를 쓴다 (문구를 지어내지 않는다).
+  private var leaveRole: LeaveConfirmationRole {
+    guard let members = serverContent?.memberList.members, members.contains(where: \.me) else {
+      return .host
+    }
+    return members.contains { $0.me && $0.host } ? .host : .member
   }
 
   /// 20-1 채팅방 나가기 → `DELETE /chat-rooms/{id}/members/me`.
@@ -169,10 +217,46 @@ struct ChatSideMenuView: View {
   /// 20-1b 내보내기 → `DELETE /chat-rooms/{id}/members/{memberId}` (사유 필수).
   /// 서버 동행자가 아니면(목데이터·userId 없음) 시트만 닫는다.
   /// changeLog18 — 멤버 응답에는 닉네임 색이 없다. 색은 카드가 공개 프로필을 받은 뒤에 정해진다.
-  /// 목데이터 멤버는 유저 id 가 없어 화면기획 기준 카드를 그린다.
+  /// 유저 id 를 모르는 멤버는 카드에 그릴 근거가 없다.
   private func profileSubject(for member: ChangelogPerson) -> ProfileCardSubject {
-    guard let userID = member.serverUserID else { return .planningMock }
+    guard let userID = member.serverUserID else { return .unavailable }
     return .serverUser(ProfileCardUserReference(userID: userID, nickname: member.name))
+  }
+
+  /// 20-1a 차단 → `POST /users/me/blocks/{userId}`.
+  ///
+  /// 신고와 **분리한다** — 신고 접수 API 가 없는 대상(멤버·채팅방)이라도 차단은 실제로 된다
+  /// (정본 §3). 안드로이드 `MemberActionsSheet.onBlock` 과 같은 동작·같은 성공 문구를 쓴다:
+  /// 차단 뒤 멤버 목록을 다시 읽는다. 유저 id 를 모르는 멤버(목데이터)는 보낼 대상이 없다.
+  private func block(member: ChangelogPerson) {
+    guard MoyeoServerSync.isEnabled, let userID = member.serverUserID else { return }
+    Task {
+      do {
+        try await SocialAPIClient.shared.block(userID: userID)
+        actionMessage = "\(member.name)님을 차단했어요."
+        if let roomID = thread.serverRoomID {
+          serverContent = await ChatRoomContentAPIClient.shared.content(roomID: roomID)
+        }
+      } catch {
+        actionMessage = (error as? LocalizedError)?.errorDescription ?? "차단에 실패했어요."
+      }
+    }
+  }
+
+  /// 20-1a 친구 요청 → `POST /users/me/friend-requests/{userId}`.
+  ///
+  /// 행이 **빈 클로저**로 남아 눌러도 아무 일이 없었다. 감사가 `Button` 모양만 보다가 놓쳤고
+  /// iOS 담당이 손으로 찾아 보고했다. 성공 문구는 안드로이드 멤버 액션과 같은 것을 쓴다.
+  private func sendFriendRequest(to member: ChangelogPerson) {
+    guard MoyeoServerSync.isEnabled, let userID = member.serverUserID else { return }
+    Task {
+      do {
+        try await SocialAPIClient.shared.sendFriendRequest(userID: userID)
+        actionMessage = "\(member.name)님에게 친구 신청을 보냈어요."
+      } catch {
+        actionMessage = (error as? LocalizedError)?.errorDescription ?? "친구 요청을 보내지 못했어요."
+      }
+    }
   }
 
   private func kick(member: ChangelogPerson, reason: String) {
@@ -208,18 +292,15 @@ struct ChatMenuBody: View {
   var onOpenRoute: (SupportRoute) -> Void = { _ in }
   var onLeave: () -> Void = {}
   var onMemberMore: (ChangelogPerson) -> Void = { _ in }
+  /// 「신고 · 문의」 — 접수 API 가 없어 안내 다이얼로그를 20-1 위에 얹는다 (정본 §3).
+  var onReportUnsupported: () -> Void = {}
   @State private var notificationsEnabled = true
   /// 서버가 마지막으로 확인해 준 방별 알림 설정. nil 이면 아직 서버 값을 모르는 상태다
   /// (캡처·미로그인·목데이터 스레드는 계속 nil 이라 토글이 서버를 부르지 않는다).
   @State private var serverNotificationEnabled: Bool?
 
-  static let defaultMembers = [
-    ChangelogPerson(mascot: "🐻", name: "숲속여행자", detail: "매너 4.8 · 여행 8회", role: "호스트"),
-    ChangelogPerson(mascot: "🦌", name: "따스한 사슴 3492", detail: "매너 4.8 · 여행 8회", role: "나"),
-    ChangelogPerson(mascot: "🐰", name: "엉뚱한 토끼 1457", detail: "매너 4.8 · 여행 8회", role: ""),
-    ChangelogPerson(mascot: "🐢", name: "잔잔한 거북이 9032", detail: "매너 4.8 · 여행 8회", role: ""),
-    ChangelogPerson(mascot: "🦝", name: "호기심 많은 너구리 9027", detail: "매너 4.8 · 여행 8회", role: "")
-  ]
+  /// 서버 멤버 목록을 못 받았을 때의 자리. 목 멤버를 채우지 않는다 (NO-MOCK-CANON R1).
+  static let defaultMembers: [ChangelogPerson] = []
 
   /// 서버 동행자 목록. 멤버 목록에는 매너 점수가 없어 완료 여행의 `companions` 응답에서만 채운다 —
   /// 그 값도 null 이면 매너 표기를 빼고 그린다(값을 지어내지 않는다).
@@ -358,15 +439,27 @@ struct ChatMenuBody: View {
           onOpenRoute(.noticeHistory(thread.id))
         }
         menuButton("공유된 항목", subtitle: sharedItemsSubtitle, icon: "photo.on.rectangle") {
-          onOpenRoute(.specialMessages)
+          onOpenRoute(.specialMessages(thread.id))
         }
         HStack(spacing: 12) {
-          Image(systemName: "bell")
-          VStack(alignment: .leading, spacing: 2) {
-            Text("알림 설정").font(.subheadline.weight(.bold))
-            Text("이 모임의 알림만 끄기").font(.caption2).foregroundStyle(MoyeoTheme.muted)
+          // 20-1c — 행을 누르면 이 모임 전용 알림 화면으로 간다. 예전에는 갈 곳이 없어
+          // 토글 하나가 전부였다 (기획 20-1 `Row … onClick={nav.go('room-notif')}`).
+          Button {
+            onOpenRoute(.roomNotification(thread.id))
+          } label: {
+            HStack(spacing: 12) {
+              Image(systemName: "bell")
+              VStack(alignment: .leading, spacing: 2) {
+                Text("알림 설정").font(.subheadline.weight(.bold))
+                Text("이 모임의 알림만 끄기").font(.caption2).foregroundStyle(MoyeoTheme.muted)
+              }
+              Spacer(minLength: 0)
+            }
+            .foregroundStyle(MoyeoTheme.ink)
+            .contentShape(Rectangle())
           }
-          Spacer()
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("chatMenu.roomNotification")
           Toggle("", isOn: $notificationsEnabled)
             .labelsHidden()
             .tint(MoyeoTheme.forest)
@@ -377,8 +470,11 @@ struct ChatMenuBody: View {
         }
         .frame(minHeight: 56)
         .padding(.horizontal, 18)
-        menuButton("신고 · 차단", subtitle: "부적절한 대화나 멤버를 신고해요", icon: "flag") {
-          onOpenRoute(.report)
+        // 채팅방·멤버 신고는 접수 API 가 없다 — 화면을 옮기지 않고 그 자리에서 안내한다
+        // (정본 `REPORT-CANON.md` §3, 기획 `ChatMenuBody` 의 「신고 · 문의」 행과 같다).
+        // 차단은 20-1a 멤버 액션에서 한다(대상이 확실한 자리).
+        menuButton("신고 · 문의", subtitle: "부적절한 대화는 GitHub 이슈나 이메일로 알려주세요", icon: "flag") {
+          onReportUnsupported()
         }
         sectionDivider
         menuButton(
@@ -528,6 +624,11 @@ private struct MemberSheetRequest: Identifiable {
 private struct MemberSheetFlow: View {
   let member: ChangelogPerson
   let onClose: () -> Void
+  /// 차단 확정. 대상이 확실한 자리에서만 보낸다 (정본 §3) — 서버 배선은 ChatSideMenuView가 한다.
+  let onBlock: (ChangelogPerson) -> Void
+  /// 20-1a 친구 요청 → `POST /users/me/friend-requests/{userId}`.
+  /// 빈 클로저로 남아 있어 **눌러도 아무 일이 없었다** — 감사가 `Button` 모양만 보다가 놓쳤다.
+  let onSendFriendRequest: (ChangelogPerson) -> Void
   /// 사유를 채운 내보내기 확정. 서버 배선은 20-1을 소유한 ChatSideMenuView가 한다.
   let onRemove: (ChangelogPerson, String) -> Void
   /// changeLog18 — 25 프로필 카드로의 이동도 20-1을 소유한 화면이 한다.
@@ -538,11 +639,15 @@ private struct MemberSheetFlow: View {
     member: ChangelogPerson,
     initialStage: MemberSheetStage,
     onClose: @escaping () -> Void = {},
+    onBlock: @escaping (ChangelogPerson) -> Void = { _ in },
+    onSendFriendRequest: @escaping (ChangelogPerson) -> Void = { _ in },
     onRemove: @escaping (ChangelogPerson, String) -> Void = { _, _ in },
     onOpenProfile: @escaping (ChangelogPerson) -> Void = { _ in }
   ) {
     self.member = member
     self.onClose = onClose
+    self.onBlock = onBlock
+    self.onSendFriendRequest = onSendFriendRequest
     self.onRemove = onRemove
     self.onOpenProfile = onOpenProfile
     _stage = State(initialValue: initialStage)
@@ -558,6 +663,8 @@ private struct MemberSheetFlow: View {
       case .actions:
         MemberActionsSheet(
           member: member,
+          onBlock: { onBlock(member) },
+          onSendFriendRequest: { onSendFriendRequest(member) },
           onRemove: { stage = .reason },
           onClose: onClose,
           onOpenProfile: { onOpenProfile(member) }
@@ -571,14 +678,9 @@ private struct MemberSheetFlow: View {
         .frame(maxHeight: 560)
       }
     }
-    .frame(maxWidth: .infinity)
     // changeLog14 — 시트 표면은 카드 표면(`card`)이다. `background`는 다크에서
     // 화면 배경과 같은 값이라 시트 경계가 사라진다. 라이트에서는 두 값이 같다.
-    .background {
-      UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-        .fill(MoyeoTheme.card)
-        .ignoresSafeArea(edges: .bottom)
-    }
+    .moyeoBottomSheetSurface()
     .transition(.move(edge: .bottom))
   }
 }
@@ -586,6 +688,10 @@ private struct MemberSheetFlow: View {
 /// 20-1a 멤버 액션 시트 (changeLog14) — 멤버 요약 + 친구 요청 + 내보내기(호스트 전용).
 private struct MemberActionsSheet: View {
   let member: ChangelogPerson
+  /// 차단(`POST /users/me/blocks/{userId}`). 20-1 을 소유한 화면이 서버를 부르고 멤버 목록을 다시 읽는다.
+  let onBlock: () -> Void
+  /// 20-1a 친구 요청 → `POST /users/me/friend-requests/{userId}`.
+  let onSendFriendRequest: () -> Void
   let onRemove: () -> Void
   let onClose: () -> Void
   /// changeLog18 — 멤버를 25 프로필 카드로 보낸다
@@ -624,8 +730,22 @@ private struct MemberActionsSheet: View {
         title: "친구 요청하기",
         icon: "person.crop.circle",
         tint: MoyeoTheme.ink,
-        identifier: "member-actions-friend"
-      ) {}
+        identifier: "member-actions-friend",
+        action: onSendFriendRequest
+      )
+
+      Divider().overlay(MoyeoTheme.softLine)
+
+      // 차단은 신고와 분리한다 — **대상이 확실한 이 자리**에서 바로 보낸다
+      // (정본 §3, 안드로이드 `MemberActionsSheet` 의 `onBlock` 이 정본이다).
+      // iOS 에는 이 경로가 없어 신고 시트가 차단의 유일한 진입점이었다.
+      actionRow(
+        title: "차단하기",
+        icon: "hand.raised",
+        tint: MoyeoTheme.dangerRed,
+        identifier: "member-actions-block",
+        action: onBlock
+      )
 
       Divider().overlay(MoyeoTheme.softLine)
 
@@ -854,14 +974,20 @@ struct ChatAttachmentMenuView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.moyeoIsOffline) private var isOffline
   @State private var opensSpecialMessages = false
-  @State private var photoItem: PhotosPickerItem?
-  @State private var photoPickerRequested = false
-  @State private var isSharing = false
-  @State private var shareMessage: String?
+  /// 20-2 타일에서 연 작성 화면 (20-2a~20-2f)
+  @State private var composerKind: AttachmentKind?
 
   /// 화면기획 20-2 첨부 6종. 순서·문구는 기획 그대로다.
-  private enum AttachmentKind: CaseIterable {
+  enum AttachmentKind: String, CaseIterable, Identifiable, Hashable {
     case photo, place, map, poll, settlement, memo
+
+    var id: String { rawValue }
+
+    /// 캡처 라우트 이름 (`attach-photo` … `attach-notice`).
+    /// 공지만 화면기획 번호(20-2f)와 타일 이름(`메모`)이 갈린다 — 라우트는 기획을 따른다.
+    var captureRouteName: String {
+      self == .memo ? "notice" : rawValue
+    }
 
     var icon: String {
       switch self {
@@ -888,7 +1014,7 @@ struct ChatAttachmentMenuView: View {
     var detail: String {
       switch self {
       case .photo: "최대 20MB · 1장씩 전송"
-      case .place: "TourAPI 장소 카드"
+      case .place: "관광 정보에서 찾기"
       case .map: "만날 위치 핀 공유"
       case .poll: "2~5개 · 익명 기본"
       case .settlement: "메모용 · 송금 아님"
@@ -910,29 +1036,18 @@ struct ChatAttachmentMenuView: View {
     // 빈 딤을 쓰면 라이트 모드에서 흰 화면으로 비어 보인다.
     .background(ChatRoomOverlayBackdrop())
     .toolbar(.hidden, for: .navigationBar)
-    .navigationDestination(isPresented: $opensSpecialMessages) { SpecialMessageCardsView() }
-    // 사진은 시스템 사진 선택기로 고른다 — 기획에 없는 앱 화면을 새로 만들지 않는다.
-    .photosPicker(
-      isPresented: Binding<Bool>(
-        get: { photoPickerRequested },
-        set: { if !$0 { photoPickerRequested = false } }
-      ),
-      selection: $photoItem,
-      matching: .images
-    )
-    .onChange(of: photoItem) { _, item in
-      guard let item else { return }
-      shareSelectedPhoto(item)
+    .navigationDestination(isPresented: $opensSpecialMessages) {
+      SpecialMessageCardsView(roomID: serverRoomID)
     }
-    .alert(
-      "공유",
-      isPresented: Binding<Bool>(
-        get: { shareMessage != nil },
-        set: { if !$0 { shareMessage = nil } }
-      )
-    ) {
-      Button("확인", role: .cancel) { shareMessage = nil }
-    } message: { Text(shareMessage ?? "") }
+    // 20-2 타일 → 20-2a~20-2f 작성 화면. 정본 ATTACH-COMPOSER-CANON.md R1.
+    .navigationDestination(item: $composerKind) { kind in
+      if let serverRoomID {
+        AttachComposerDestination(kind: kind, roomID: serverRoomID) {
+          onShared()
+          dismiss()
+        }
+      }
+    }
     .accessibilityIdentifier("screen.chatAttach")
   }
 
@@ -977,7 +1092,7 @@ struct ChatAttachmentMenuView: View {
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
           }
           .buttonStyle(.plain)
-          .disabled(isOffline || isSharing)
+          .disabled(isOffline)
           .accessibilityIdentifier("chatAttach.item.\(index)")
         }
       }
@@ -1005,103 +1120,34 @@ struct ChatAttachmentMenuView: View {
     )
   }
 
-  /// 20-2 타일 선택. 서버 방에서는 입력이 필요 없는 두 종(사진·지도)이 그 자리에서 전송되고,
-  /// 나머지(장소·투표·정산·메모)는 기획에 작성 화면이 없어 기존처럼 24 특수 메시지 카드로 간다.
+  /// 20-2 타일 선택 → 20-2a~20-2f 작성 화면 (정본 ATTACH-COMPOSER-CANON.md).
+  /// 서버 방이 아니면(목데이터 스레드·캡처) 보낼 곳이 없어 기존처럼 21 특수 메시지 견본으로 간다.
   private func selectAttachment(_ kind: AttachmentKind) {
-    guard let serverRoomID, MoyeoServerSync.isEnabled else {
+    guard serverRoomID != nil, MoyeoServerSync.isEnabled else {
       opensSpecialMessages = true
       return
     }
-    switch kind {
-    case .photo:
-      photoPickerRequested = true
-    case .map:
-      shareMeetingLocation(roomID: serverRoomID)
-    case .place, .poll, .settlement, .memo:
-      // 장소(contentId)·투표(질문+선택지)·정산(메모)·메모(공지 본문)는 입력이 필요한데
-      // 기획 20-2에 작성 화면이 없다. 새 화면을 만들지 않고 기존 경로(24 카드)를 유지한다.
-      opensSpecialMessages = true
-    }
-  }
-
-  /// 만날 위치 공유 — 본문 없는 POST 다. 서버가 호스트 등록 집합 좌표로 카드를 만든다.
-  private func shareMeetingLocation(roomID: Int64) {
-    guard !isSharing else { return }
-    isSharing = true
-    Task {
-      do {
-        _ = try await ChatRoomWriteAPIClient.shared.shareMeetingLocation(roomID: roomID)
-        isSharing = false
-        onShared()
-        dismiss()
-      } catch {
-        isSharing = false
-        // 집합 좌표가 없으면 서버가 400 을 준다 — 좌표를 지어내지 않고 이유만 알린다
-        shareMessage = (error as? LocalizedError)?.errorDescription ?? "만날 위치를 공유하지 못했어요."
-      }
-    }
-  }
-
-  /// 사진 공유 — `image` 파일 파트 multipart. 기획 문구대로 20MB 를 넘으면 보내지 않는다.
-  private func shareSelectedPhoto(_ item: PhotosPickerItem) {
-    guard let serverRoomID, !isSharing else { return }
-    isSharing = true
-    Task {
-      defer {
-        isSharing = false
-        photoItem = nil
-      }
-      guard let data = try? await item.loadTransferable(type: Data.self) else {
-        shareMessage = "사진을 읽지 못했어요."
-        return
-      }
-      guard data.count <= ServerChatShareLimits.maximumPhotoBytes else {
-        shareMessage = "사진은 최대 20MB까지 보낼 수 있어요."
-        return
-      }
-      do {
-        _ = try await ChatRoomWriteAPIClient.shared.shareImage(roomID: serverRoomID, imageData: data)
-        onShared()
-        dismiss()
-      } catch {
-        shareMessage = (error as? LocalizedError)?.errorDescription ?? "사진을 공유하지 못했어요."
-      }
-    }
+    composerKind = kind
   }
 }
 
 struct FriendsManagementView: View {
+  /// 캡처 진입(27-2a)은 친구 정리 시트를 연 채로 시작한다.
+  var startsWithFriendManage = false
   @State private var segment: FriendManagementSegment = .mine
-  @State private var rejected = Set<String>()
-  @State private var accepted = Set<String>()
-  /// 실서버 친구 데이터 — 로그인 세션이 있고 친구 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  /// 실서버 친구 데이터 — 친구 API가 성공했을 때만 채워진다 (nil = 아직 못 받음)
   @State private var serverFriends: ServerFriendList?
   @State private var serverReceived: ServerFriendRequestList?
   @State private var serverSent: ServerFriendRequestList?
   @State private var resolvedRequestIDs = Set<Int64>()
   /// changeLog18 — 친구를 눌러 여는 25 프로필 카드
   @State private var profileRoute: SupportRoute?
-
-  private let mine = [
-    ChangelogPerson(mascot: "🐻", name: "우직한 곰 7821", detail: "함께 여행 3회 · 어제 접속", role: ""),
-    ChangelogPerson(mascot: "🐰", name: "엉뚱한 토끼 1457", detail: "함께 여행 1회 · 3일 전 접속", role: ""),
-    ChangelogPerson(mascot: "🐢", name: "잔잔한 거북이 9032", detail: "함께 여행 2회 · 오늘 접속", role: "")
-  ]
-  private let received = [
-    ChangelogPerson(mascot: "🦝", name: "호기심 많은 너구리 9027", detail: "포항·영덕 드라이브에서 만났어요", role: ""),
-    ChangelogPerson(mascot: "🕊️", name: "고요한 두루미 1130", detail: "경주 단풍·야경에서 만났어요", role: "")
-  ]
-  private let sent = [
-    ChangelogPerson(mascot: "🦌", name: "따스한 사슴 3492", detail: "어제 신청 · 수락 대기 중", role: "")
-  ]
-
-  private var items: [ChangelogPerson] {
-    switch segment {
-    case .mine: mine
-    case .received: received
-    case .sent: sent
-    }
-  }
+  /// 27-2a 친구 정리 시트. `내 친구` 행의 ⋯ 가 연다 — 지금까지 그 자리에 아무 동작이 없었다.
+  @State private var manageFriend: ServerFriend?
+  /// 우측 상단 돋보기 — 지금까지 눌러도 아무 일이 없었다. 이미 받아둔 목록을 닉네임·소개로 좁힌다
+  /// (친구 검색 API 는 없다 — 서버를 다시 부르지 않는다).
+  @State private var showsSearch = false
+  @State private var searchQuery = ""
 
   var body: some View {
     VStack(spacing: 0) {
@@ -1122,6 +1168,12 @@ struct FriendsManagementView: View {
           .accessibilityIdentifier("friends.segment.\(item.id)")
         }
       }
+      if showsSearch {
+        LabelledSearchField(text: $searchQuery, prompt: "닉네임으로 검색")
+          .padding(.horizontal, 18)
+          .padding(.bottom, 10)
+          .accessibilityIdentifier("friends.searchField")
+      }
       ScrollView {
         VStack(spacing: 0) {
           if segment == .received {
@@ -1131,15 +1183,8 @@ struct FriendsManagementView: View {
               .frame(maxWidth: .infinity, alignment: .leading)
               .padding(.vertical, 10)
           }
-          if serverFriends != nil {
-            serverRows
-          } else {
-            ForEach(items) { item in
-              if !rejected.contains(item.name) {
-                friendRow(item)
-              }
-            }
-          }
+          // 27-2 는 서버 친구 목록이 전부다 — 못 받으면 빈 상태만 남는다 (NO-MOCK-CANON R1)
+          serverRows
           HStack(alignment: .top, spacing: 9) {
             Image(systemName: "bookmark.fill")
               .font(.system(size: 14, weight: .semibold))
@@ -1172,48 +1217,38 @@ struct FriendsManagementView: View {
     .navigationDestination(item: $profileRoute) { route in
       SupportDestinationView(route: route)
     }
+    // 27-2a — 시스템 시트는 바닥에 붙지 않는다. 20-1a 와 같은 커스텀 바텀시트로 그린다.
+    .overlay {
+      if let friend = manageFriend {
+        FriendManageSheet(
+          friend: friend,
+          onOpenProfile: {
+            manageFriend = nil
+            profileRoute = .publicProfile(subject(for: friend.user))
+          },
+          onRemoved: {
+            manageFriend = nil
+            Task { await refreshServerFriends() }
+          },
+          onClose: { manageFriend = nil }
+        )
+      }
+    }
     .task {
       await loadServerFriends()
+      if startsWithFriendManage { manageFriend = serverFriends?.friends.first }
     }
     .toolbar {
       Button {
+        showsSearch.toggle()
+        if !showsSearch { searchQuery = "" }
       } label: {
-        Image(systemName: "magnifyingglass")
-      }.accessibilityLabel("친구 검색")
+        Image(systemName: showsSearch ? "xmark" : "magnifyingglass")
+      }
+      .accessibilityLabel("친구 검색")
+      .accessibilityIdentifier("friends.search")
     }
     .accessibilityIdentifier("screen.friends")
-  }
-
-  private func friendRow(_ item: ChangelogPerson) -> some View {
-    HStack(spacing: 12) {
-      // changeLog18 — 친구를 누르면 25 프로필 카드로 간다.
-      // 목데이터 친구는 유저 id 가 없어 화면기획 기준 카드를 그린다.
-      HStack(spacing: 12) {
-        MascotAvatar(mascot: item.mascot, size: 44, background: MoyeoTheme.leaf)
-        VStack(alignment: .leading, spacing: 3) {
-          Text(item.name).font(.subheadline.weight(.bold))
-          Text(item.detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
-        }
-      }
-      .contentShape(Rectangle())
-      .onTapGesture {
-        profileRoute = .publicProfile(.planningMock)
-      }
-      Spacer()
-      if segment == .received {
-        Button("거절") { rejected.insert(item.name) }.buttonStyle(.bordered).controlSize(.small)
-        Button(accepted.contains(item.name) ? "수락됨" : "수락") { accepted.insert(item.name) }
-          .buttonStyle(.borderedProminent).controlSize(.small).tint(MoyeoTheme.forest)
-          .disabled(accepted.contains(item.name))
-      } else if segment == .sent {
-        Text("요청 중").font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted)
-          .padding(.horizontal, 10).frame(height: 30).background(MoyeoTheme.subtleBackground)
-          .clipShape(Capsule())
-      } else {
-        Image(systemName: "ellipsis").frame(width: 44, height: 44).foregroundStyle(MoyeoTheme.muted)
-      }
-    }
-    .frame(minHeight: 68)
   }
 
   /// 친구 목록 응답에는 닉네임 색이 없다 — 색은 카드가 공개 프로필을 받은 뒤에 정해진다.
@@ -1228,18 +1263,12 @@ struct FriendsManagementView: View {
     )
   }
 
+  /// 탭의 개수는 서버 응답만 센다 — 못 받았으면 0 이다.
   private func count(for segment: FriendManagementSegment) -> Int {
-    if serverFriends != nil {
-      switch segment {
-      case .mine: return serverFriends?.totalCount ?? 0
-      case .received: return serverReceived?.requests.count ?? 0
-      case .sent: return serverSent?.requests.count ?? 0
-      }
-    }
     switch segment {
-    case .mine: return mine.count
-    case .received: return received.count
-    case .sent: return sent.count
+    case .mine: return serverFriends?.totalCount ?? 0
+    case .received: return serverReceived?.requests.count ?? 0
+    case .sent: return serverSent?.requests.count ?? 0
     }
   }
 
@@ -1253,26 +1282,50 @@ struct FriendsManagementView: View {
     serverFriends = friends
   }
 
+  /// 27-2a 친구를 끊은 뒤 목록을 서버에서 다시 읽는다 — 화면에서 지워 넣지 않는다.
+  private func refreshServerFriends() async {
+    guard MoyeoServerSync.isEnabled else { return }
+    guard let friends = try? await SocialAPIClient.shared.friends() else { return }
+    serverFriends = friends
+  }
+
   @ViewBuilder
   private var serverRows: some View {
     switch segment {
     case .mine:
-      if let friends = serverFriends?.friends, !friends.isEmpty {
+      let friends = matching(serverFriends?.friends ?? []) { $0.user }
+      if !friends.isEmpty {
         ForEach(friends) { friend in
           ServerFriendRow(
             user: friend.user,
             detail: friend.lastActive.map { "\($0) 접속" } ?? "",
             onOpenProfile: { profileRoute = .publicProfile(subject(for: friend.user)) },
-            trailing: { EmptyView() }
+            trailing: {
+              // 27-2a — ⋯ 가 친구 정리 시트를 연다 (예전에는 눌러도 아무 일이 없었다)
+              Button {
+                manageFriend = friend
+              } label: {
+                Image(systemName: "ellipsis")
+                  .font(.system(size: 15, weight: .bold))
+                  .foregroundStyle(MoyeoTheme.muted)
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("\(friend.user.nickname) 더보기")
+              .accessibilityIdentifier("friends.manage.\(friend.user.userId)")
+            }
           )
         }
       } else {
-        serverEmptyRow("아직 친구가 없어요")
+        serverEmptyRow(isSearching ? MoyeoEmptyText.noSearchResults : "아직 친구가 없어요")
       }
     case .received:
-      let requests = (serverReceived?.requests ?? []).filter { !resolvedRequestIDs.contains($0.requestId) }
+      let requests = matching(
+        (serverReceived?.requests ?? []).filter { !resolvedRequestIDs.contains($0.requestId) }
+      ) { $0.user }
       if requests.isEmpty {
-        serverEmptyRow("받은 친구 신청이 없어요")
+        serverEmptyRow(isSearching ? MoyeoEmptyText.noSearchResults : "받은 친구 신청이 없어요")
       } else {
         ForEach(requests) { request in
           ServerFriendRow(
@@ -1295,9 +1348,11 @@ struct FriendsManagementView: View {
         }
       }
     case .sent:
-      let requests = (serverSent?.requests ?? []).filter { !resolvedRequestIDs.contains($0.requestId) }
+      let requests = matching(
+        (serverSent?.requests ?? []).filter { !resolvedRequestIDs.contains($0.requestId) }
+      ) { $0.user }
       if requests.isEmpty {
-        serverEmptyRow("보낸 친구 신청이 없어요")
+        serverEmptyRow(isSearching ? MoyeoEmptyText.noSearchResults : "보낸 친구 신청이 없어요")
       } else {
         ForEach(requests) { request in
           ServerFriendRow(
@@ -1312,6 +1367,22 @@ struct FriendsManagementView: View {
           )
         }
       }
+    }
+  }
+
+  /// 검색창이 열려 있고 실제로 뭔가 적혀 있을 때만 검색 중이다 (빈 상태 문구가 달라진다).
+  private var isSearching: Bool {
+    showsSearch && !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
+  }
+
+  /// 이미 받아둔 목록을 닉네임·소개로 좁힌다. 검색 중이 아니면 원본을 그대로 돌려준다.
+  private func matching<T>(_ items: [T], user: (T) -> ServerFriendUser) -> [T] {
+    let keyword = searchQuery.trimmingCharacters(in: .whitespaces)
+    guard showsSearch, !keyword.isEmpty else { return items }
+    return items.filter { item in
+      let target = user(item)
+      return target.nickname.localizedCaseInsensitiveContains(keyword)
+        || (target.introduction ?? "").localizedCaseInsensitiveContains(keyword)
     }
   }
 
@@ -1388,25 +1459,61 @@ private struct ServerFriendRow<Trailing: View>: View {
   }
 }
 
+/// 27-1 저장 한 건. 서버로 보낼 값만 담는다.
+struct TripCompanionReviewDraft {
+  let userID: Int64
+  let score: Int
+  let review: String?
+}
+
+/// 27-1 동행자 목록의 상태. 목록이 없을 때 무엇을 그릴지 정한다 —
+/// 상태 없이 목록만 그리면 "동행자가 없는 것"과 "못 불러온 것"을 구분할 수 없다(웹과 같은 판단).
+enum TripCompanionsState {
+  case loading
+  case ready
+  case empty
+  case failed
+}
+
 struct TripMessageView: View {
   @Environment(\.dismiss) private var dismiss
-  @State private var messages = ["우직한 곰 7821": "핑크뮬리 사진 잘 찍어주셔서 고마워요!"]
-  @State private var draftByName: [String: String] = [:]
+  /// 동행자는 **서버 응답에서만** 온다 — 예시 동행자에게 한 줄을 남기게 하지 않는다 (NO-MOCK R1).
+  /// 근거는 `GET /api/v1/chat-rooms/{roomId}/companions` (완료된 여행 전용).
+  @State private var companions: [ServerTripCompanion] = []
+  @State private var companionsState: TripCompanionsState = .loading
+  @State private var draftByUserID: [Int64: String] = [:]
+  /// 27-1 매너 점수(별 1~5). `ReviewTravelCompanionRequest.mannerScore` 는 **필수**인데
+  /// 이 입력이 한 픽셀도 없어서 앱 곳곳의 `매너 4.7` 을 만드는 사람이 아무도 없었다 (정본 §6-2).
+  @State private var scoreByUserID: [Int64: Int] = [:]
   @State private var route: SupportRoute?
-  private let mates = [("🐻", "우직한 곰 7821"), ("🐰", "엉뚱한 토끼 1457"), ("🐢", "잔잔한 거북이 9032")]
+  /// 평가 대상 모임. 27-4 코스 평가도 같은 방을 쓴다.
+  @State private var endedRoomID: Int64?
+  @State private var showsCourseRating = false
+  @State private var isSaving = false
+  @State private var failureMessage: String?
   private let presets = ["덕분에 즐거웠어요", "사진 고마워요!", "다음에도 잘 부탁드려요"]
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        Text("함께 걸어준 친구들에게\n한 줄 남겨볼까요?")
+        Text("함께 걸어준 친구들,\n어떠셨어요?")
           .font(MoyeoTypography.screenTitle)
           .foregroundStyle(MoyeoTheme.ink)
-        Text("남긴 메시지는 상대방의 도감 카드 뒷면에 적혀요. 안 남겨도 카드는 그대로 모여요.")
+        Text("매너 점수는 다음 모임의 호스트가 보고, 한 줄 메시지는 상대방의 도감 카드 뒷면에 적혀요.")
           .font(.subheadline)
           .foregroundStyle(MoyeoTheme.muted)
-        ForEach(mates, id: \.1) { mate in messageCard(mate) }
+          .fixedSize(horizontal: false, vertical: true)
+        if companionsState == .ready {
+          ForEach(companions) { companion in messageCard(companion) }
+        } else {
+          companionsPlaceholder
+        }
         infoCard("메시지를 남기면 서로의 도감 카드가 완성돼요. 가끔 도감을 펼쳐 보면 그날의 여행이 다시 떠올라요.")
+        // 27-4 코스 평가 — 14 코스 상세가 보여주는 평점을 만드는 **유일한** 자리다.
+        // 여기서 권하지 않으면 아무도 평가하지 않아 평점이 영원히 비어 있다 (정본 §6-4).
+        actionCard("다녀온 코스는 어떠셨어요? 코스 평가하기", icon: "star.fill") {
+          showsCourseRating = true
+        }
         actionCard("피드에 오늘의 여행 기록 남기기", icon: "doc.text.image") {}
         actionCard("다녀온 코스를 다른 여행자에게 공개하기", icon: "map.fill") {
           route = .coursePublish
@@ -1426,12 +1533,7 @@ struct TripMessageView: View {
           .frame(width: 84, height: 50)
           .accessibilityIdentifier("tripMessage.later")
         Button {
-          // 입력해 둔 한 줄을 모두 저장하고 도감으로 넘어간다
-          for (name, draft) in draftByName {
-            let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty { messages[name] = value }
-          }
-          dismiss()
+          saveReviews()
         } label: {
           Text("메시지 남기고 도감 보기")
             .font(.subheadline.weight(.heavy))
@@ -1442,6 +1544,7 @@ struct TripMessageView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .disabled(isSaving)
         .accessibilityIdentifier("tripMessage.saveAndOpenDex")
       }
       .padding(.horizontal, 18)
@@ -1451,41 +1554,189 @@ struct TripMessageView: View {
       .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
     }
     .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
+    .navigationDestination(isPresented: $showsCourseRating) {
+      CourseRatingView(roomID: endedRoomID)
+    }
+    .alert(
+      "여행 마무리",
+      isPresented: Binding(
+        get: { failureMessage != nil },
+        set: { if !$0 { failureMessage = nil } }
+      )
+    ) {
+      Button("확인", role: .cancel) { failureMessage = nil }
+    } message: {
+      Text(failureMessage ?? "")
+    }
+    .task { await loadCompanions() }
     .accessibilityIdentifier("screen.tripMessage")
   }
 
-  private func messageCard(_ mate: (String, String)) -> some View {
-    let done = messages[mate.1] != nil
+  /// 27-1 저장 → `PUT /chat-rooms/{id}/companions/{userId}/review`.
+  /// `mannerScore` 는 서버 필수값이라 **별점을 매긴 동행자만** 보낸다 —
+  /// 안 매긴 사람에게 기본 점수를 지어내 보내지 않는다.
+  private func saveReviews() {
+    guard MoyeoServerSync.isEnabled, let roomID = endedRoomID else {
+      dismiss()
+      return
+    }
+    let reviews: [TripCompanionReviewDraft] = companions.compactMap { companion in
+      guard let score = scoreByUserID[companion.userId], score > 0 else { return nil }
+      let draft = (draftByUserID[companion.userId] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      return TripCompanionReviewDraft(
+        userID: companion.userId, score: score, review: draft.isEmpty ? nil : draft
+      )
+    }
+    guard !reviews.isEmpty else {
+      dismiss()
+      return
+    }
+    guard !isSaving else { return }
+    isSaving = true
+    Task {
+      var failed = false
+      for review in reviews {
+        do {
+          _ = try await ChatRoomWriteAPIClient.shared.reviewCompanion(
+            roomID: roomID,
+            companionUserID: review.userID,
+            mannerScore: review.score,
+            oneLineReview: review.review
+          )
+        } catch {
+          failed = true
+          failureMessage = (error as? LocalizedError)?.errorDescription ?? "평가를 남기지 못했어요."
+        }
+      }
+      isSaving = false
+      if !failed { dismiss() }
+    }
+  }
+
+  /// 완료된 여행이 없거나 동행자가 없으면 안드로이드와 **글자 그대로 같은** 문구를 남긴다.
+  /// 로딩·실패 문구는 §2 정본을 그대로 쓴다 — 새 문구를 만들지 않는다.
+  @ViewBuilder
+  private var companionsPlaceholder: some View {
+    switch companionsState {
+    case .loading:
+      MoyeoEmptyStateView(
+        message: MoyeoEmptyText.loading,
+        accessibilityIdentifier: "tripMessage.companionsState"
+      )
+    case .failed:
+      MoyeoEmptyStateView(
+        message: MoyeoEmptyText.loadFailed,
+        onRetry: { Task { await reloadCompanions() } },
+        accessibilityIdentifier: "tripMessage.companionsState"
+      )
+    default:
+      MoyeoEmptyStateView(
+        message: "아직 함께 여행한 친구가 없어요.",
+        accessibilityIdentifier: "tripMessage.companionsState"
+      )
+    }
+  }
+
+  /// 서버가 준 한 줄(`oneLineReview`)이 기준이다. 남긴 적이 없으면 빈 입력으로 시작한다.
+  private func loadCompanions() async {
+    guard companionsState == .loading else { return }
+    await reloadCompanions()
+  }
+
+  private func reloadCompanions() async {
+    companionsState = .loading
+    guard MoyeoServerSync.isEnabled else {
+      companionsState = .empty
+      return
+    }
+    // 27-1 은 다녀온 여행의 화면이다 — 안드로이드와 같이 가장 최근에 끝난 모임을 기준으로 삼는다.
+    guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else {
+      companionsState = .failed
+      return
+    }
+    // 끝난 여행이 없으면 동행자도 없다 — 실패가 아니라 빈 상태다.
+    //
+    // **불발(CANCELLED)된 방도 `ended` 다.** 그런 방에 `companions` 를 부르면 서버가
+    // `409 40915`("아직 완료되지 않은 여행입니다")를 주고, 화면은 실제로 다녀온 여행이
+    // 있는데도 빈 상태로 떨어진다 — 실서버에서 확인했다(방 41). 확정된 여행을 먼저 고른다.
+    guard let endedRoom = ServerTripMapper.latestCompletedRoom(in: rooms) else {
+      companionsState = .empty
+      return
+    }
+    endedRoomID = endedRoom.roomId
+    switch await ChatRoomWriteAPIClient.shared.companions(roomID: endedRoom.roomId) {
+    case .companions(let list):
+      companions = list
+      draftByUserID = Dictionary(
+        list.map { ($0.userId, $0.oneLineReview ?? "") },
+        uniquingKeysWith: { _, latest in latest }
+      )
+      // 내가 이미 남긴 점수(`mannerScore`)로 시작한다 — 남들이 준 평균(`mannerRating`)이 아니다.
+      // 미평가면 0(아직 안 매김)이고, 기본 점수를 채워 넣지 않는다.
+      scoreByUserID = Dictionary(
+        list.map { ($0.userId, $0.mannerScore ?? 0) },
+        uniquingKeysWith: { _, latest in latest }
+      )
+      companionsState = list.isEmpty ? .empty : .ready
+    // `409 40915` 는 오류가 아니라 "아직 여행 전"이다 — 동행자가 없는 것으로 그린다.
+    case .notCompleted:
+      companionsState = .empty
+    case .unavailable:
+      companionsState = .failed
+    }
+  }
+
+  private func messageCard(_ companion: ServerTripCompanion) -> some View {
+    let draft = draftByUserID[companion.userId] ?? ""
+    let score = scoreByUserID[companion.userId] ?? 0
+    let done = companion.reviewed && draft == (companion.oneLineReview ?? "")
     return VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 10) {
-        MascotAvatar(mascot: mate.0, size: 40, background: MoyeoTheme.leaf)
+        CompanionAvatar(companion: companion)
         VStack(alignment: .leading, spacing: 2) {
-          Text(mate.1).font(.subheadline.weight(.bold))
-          Text(done ? "메시지를 남겼어요" : "아직 안 남겼어요").font(.caption2).foregroundStyle(MoyeoTheme.muted)
+          Text(companion.nickname).font(.subheadline.weight(.bold))
+          Text(companion.reviewed ? "메시지를 남겼어요" : "아직 안 남겼어요")
+            .font(.caption2).foregroundStyle(MoyeoTheme.muted)
         }
         Spacer()
         if done { Image(systemName: "checkmark.circle.fill").foregroundStyle(MoyeoTheme.forest) }
       }
-      if done {
-        Text(messages[mate.1] ?? "").font(.subheadline).padding(12).frame(
-          maxWidth: .infinity, alignment: .leading
+      // 매너 점수 — `ReviewTravelCompanionRequest.mannerScore` (1~5, 필수).
+      // 서버가 정수만 받으므로 반 개짜리 별을 두지 않는다.
+      HStack(spacing: 8) {
+        Text("매너 점수")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.text700)
+        MoyeoStarRatingInput(
+          score: Binding(
+            get: { scoreByUserID[companion.userId] ?? 0 },
+            set: { scoreByUserID[companion.userId] = $0 }
+          ),
+          size: 19,
+          spacing: 2,
+          identifier: "tripMessage.manner.\(companion.userId)"
         )
-        .background(MoyeoTheme.background).clipShape(RoundedRectangle(cornerRadius: 10))
-      } else {
-        TextField(
-          "한 줄 메시지를 남겨주세요 (최대 40자)",
-          text: Binding(
-            get: { draftByName[mate.1] ?? "" },
-            set: { draftByName[mate.1] = String($0.prefix(40)) }
-          )
+        Spacer(minLength: 0)
+        Text(score > 0 ? "\(score)점" : "눌러서 매겨요")
+          .font(MoyeoTypography.tinyMeta)
+          .monospacedDigit()
+          .foregroundStyle(MoyeoTheme.text400)
+      }
+      TextField(
+        "한 줄 메시지를 남겨주세요 (최대 40자)",
+        text: Binding(
+          get: { draftByUserID[companion.userId] ?? "" },
+          set: { draftByUserID[companion.userId] = String($0.prefix(40)) }
         )
-        .padding(12).frame(minHeight: 46).background(MoyeoTheme.subtleBackground).clipShape(
-          RoundedRectangle(cornerRadius: 10))
+      )
+      .padding(12).frame(minHeight: 46).background(MoyeoTheme.subtleBackground).clipShape(
+        RoundedRectangle(cornerRadius: 10))
+      if draft.isEmpty {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack {
             ForEach(presets, id: \.self) { preset in
-              Button(preset) { draftByName[mate.1] = preset }.buttonStyle(.bordered).controlSize(
-                .small)
+              Button(preset) { draftByUserID[companion.userId] = preset }
+                .buttonStyle(.bordered).controlSize(.small)
             }
           }
         }
@@ -1500,83 +1751,33 @@ struct TripMessageView: View {
   }
 }
 
-struct ReportView: View {
-  @Environment(\.dismiss) private var dismiss
-  @State private var reason = "성희롱 · 불쾌한 언행"
-  @State private var blocksUser = true
-  private let reasons = ["스팸 · 도박", "성희롱 · 불쾌한 언행", "돈거래 유도", "허위 정보", "부적절한 내용", "기타"]
+/// 동행자 아바타. 서버 프로필 이미지가 있으면 그것을, 없으면 닉네임에서 계산한 동물 이모지를 쓴다.
+/// 표는 `MoyeoNicknameAnimal` 하나뿐이다 — 화면마다 고정 이모지를 두면 같은 사람이 다르게 보인다 (NO-MOCK R5).
+private struct CompanionAvatar: View {
+  let companion: ServerTripCompanion
 
   var body: some View {
-    VStack(spacing: 0) {
-      Spacer(minLength: 0)
-      VStack(alignment: .leading, spacing: 10) {
-        Capsule()
-          .fill(MoyeoTheme.softLine)
-          .frame(width: 36, height: 4)
-          .frame(maxWidth: .infinity)
-          .padding(.bottom, 4)
-        Text("신고 사유를 알려주세요")
-          .font(MoyeoTypography.sectionTitle)
-        Label("해당 메시지 · “계좌로 먼저 보내주시면…”", systemImage: "bubble.left")
-          .font(.caption)
-          .padding(.horizontal, 12)
-          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-          .background(MoyeoTheme.subtleBackground)
-          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        ForEach(reasons, id: \.self) { item in
-          ChangelogRadioOption(title: item, isSelected: reason == item) {
-            reason = item
-          }
-        }
-        MoyeoCheckRow(
-          title: "이 유저를 차단할게요",
-          isOn: $blocksUser,
-          accessibilityIdentifier: "report.blockUser"
-        )
-        if blocksUser {
-          Text("차단하면 이 유저가 만들었거나 참여한 모집이 홈·탐색에서 모두 숨겨져요.")
-            .font(.caption2)
-            .foregroundStyle(MoyeoTheme.muted)
-        }
-        // 취소는 좁은 중립 글자, 신고하기는 넓은 채움 — 둘을 같은 너비로 두면 위계가 사라진다 (화면기획)
-        HStack(spacing: 8) {
-          Button("취소") { dismiss() }
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(MoyeoTheme.ink)
-            .frame(width: 62, height: 48)
-            .accessibilityIdentifier("report.cancel")
-          Button { dismiss() } label: {
-            Text("신고하기")
-              .font(.subheadline.weight(.heavy))
-              .foregroundStyle(.white)
-              .frame(maxWidth: .infinity)
-              .frame(height: 48)
-              .background(MoyeoTheme.dangerRed)
-              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-          }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("report.submit")
-        }
-        Text("24시간 이내에 검토해 드릴게요.")
-          .font(.caption2)
-          .foregroundStyle(MoyeoTheme.text400)
-          .frame(maxWidth: .infinity)
-          .padding(.top, 1)
+    if let url = companion.profileImageURL {
+      CachedRemoteImage(url: url) { image in
+        image.resizable().scaledToFill()
+      } placeholder: {
+        MoyeoTheme.leaf
       }
-      .padding(.horizontal, 20)
-      .padding(.top, 12)
-      .padding(.bottom, 28)
-      .background(MoyeoTheme.card)
-      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .frame(width: 40, height: 40)
+      .clipShape(Circle())
+    } else {
+      MascotAvatar(
+        mascot: MoyeoNicknameAnimal.emoji(forNickname: companion.nickname) ?? MoyeoNicknameAnimal.unknown,
+        size: 40,
+        background: MoyeoTheme.leaf
+      )
     }
-    // changeLog14 — 빈 딤 대신 실제 채팅방 본문을 깔고 그 위에 스크림을 얹는다
-    .background(ChatRoomOverlayBackdrop())
-    .toolbar(.hidden, for: .navigationBar)
-    .accessibilityIdentifier("screen.report")
   }
 }
 
 struct BlockedUsersView: View {
+  /// 캡처 진입(29-1a)은 확인 시트를 연 채로 시작한다 — 20-1a 와 같은 방식이다.
+  var startsWithUnblockConfirmation = false
   @State private var blocked = [
     ChangelogPerson(
       mascot: "🦝", name: "말많은 너구리 7791", detail: "2026.07.28 차단 · 채팅방에서 신고와 함께 차단", role: ""),
@@ -1585,6 +1786,9 @@ struct BlockedUsersView: View {
   ]
   /// 실서버 차단 목록 — 로그인 세션이 있고 차단 API가 성공했을 때만 채워진다 (nil = 목데이터)
   @State private var serverBlocked: [ServerBlockedUser]?
+  /// 29-1a 차단 해제 확인. 확인을 지나기 전에는 서버를 부르지 않는다.
+  @State private var unblockCandidate: ServerBlockedUser?
+  @State private var isUnblocking = false
 
   var body: some View {
     ScrollView {
@@ -1635,11 +1839,44 @@ struct BlockedUsersView: View {
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle("차단한 사용자")
     .navigationBarTitleDisplayMode(.inline)
+    // 29-1a — 19-2 신청 취소와 같은 골격의 확인 시트다 (기획 `ConfirmSheet`).
+    .overlay {
+      if let user = unblockCandidate {
+        MoyeoConfirmSheet(
+          title: "차단을 풀까요?",
+          subject: user.nickname,
+          lines: [
+            "차단을 풀면 이 사람이 올린 모집과 피드가 다시 보여요.",
+            "이 사람도 회원님의 모집과 피드를 볼 수 있어요.",
+            "언제든 다시 차단할 수 있어요."
+          ],
+          cancelTitle: "그대로 둘게요",
+          confirmTitle: "차단 해제",
+          isBusy: isUnblocking,
+          identifier: "unblockConfirm",
+          onCancel: { unblockCandidate = nil },
+          onConfirm: { unblock(user) }
+        )
+      }
+    }
     .task {
       guard MoyeoServerSync.isEnabled, serverBlocked == nil else { return }
       serverBlocked = try? await SocialAPIClient.shared.blockedUsers()
+      if startsWithUnblockConfirmation { unblockCandidate = serverBlocked?.first }
     }
     .accessibilityIdentifier("screen.blockedUsers")
+  }
+
+  /// 차단 해제 — 확인 시트를 지나온 뒤에만 온다. 실패하면 목록을 그대로 둔다.
+  private func unblock(_ user: ServerBlockedUser) {
+    guard !isUnblocking else { return }
+    isUnblocking = true
+    Task {
+      try? await SocialAPIClient.shared.unblock(userID: user.userId)
+      serverBlocked = try? await SocialAPIClient.shared.blockedUsers()
+      isUnblocking = false
+      unblockCandidate = nil
+    }
   }
 
   private func serverBlockedRow(_ user: ServerBlockedUser) -> some View {
@@ -1658,11 +1895,9 @@ struct BlockedUsersView: View {
         Text(blockedAtText(user.blockedAt)).font(.caption2).foregroundStyle(MoyeoTheme.muted)
       }
       Spacer()
+      // 29-1a — 차단 해제는 상대에게 내 모집·피드가 다시 보이게 되는 일이다. 한 번 더 묻는다.
       Button {
-        Task {
-          try? await SocialAPIClient.shared.unblock(userID: user.userId)
-          serverBlocked?.removeAll { $0.userId == user.userId }
-        }
+        unblockCandidate = user
       } label: {
         Text("차단 해제")
           .font(.caption.weight(.heavy))
@@ -1684,11 +1919,23 @@ struct BlockedUsersView: View {
 }
 
 struct CoursePublishView: View {
+  /// 공개할 코스. 넘겨받지 않으면 화면이 직접 **가장 최근에 끝난 내 모임의 코스**를 받아온다
+  /// (`GET /chat-rooms/my` → `GET /travel-courses/chat-rooms/{roomId}`) — 안드로이드
+  /// `CoursePublishScreen` 과 같은 근거다. 다녀온 여행이 없으면 빈 상태이고 CTA 는 잠긴다.
+  var course: TravelCourse?
+  /// 위 경로로 받아온 코스. `course` 가 nil 일 때만 쓴다.
+  @State private var loadedCourse: TravelCourse?
   @Environment(\.dismiss) private var dismiss
   @State private var showsConfirmation = false
   @State private var showsFinalConfirmation = false
   @State private var showsNickname = true
   @State private var isPublished = false
+  /// 작성자 닉네임 — "OO 님이 다녀온 코스" 줄의 근거다.
+  @State private var myProfile: ServerMyProfile?
+  /// 공개할 서버 코스 id. 이게 없으면 서버에 보낼 대상이 없다.
+  @State private var publishableCourseID: Int64?
+  @State private var isPublishing = false
+  @State private var publishFailureMessage: String?
 
   var body: some View {
     ScrollView {
@@ -1711,20 +1958,34 @@ struct CoursePublishView: View {
           .padding(.top, 18)
           .padding(.bottom, 8)
           .accessibilityIdentifier("coursePublish.previewTitle")
-        publishPreview
+        if let publishableCourse {
+          publishPreview(publishableCourse)
+        } else {
+          // 다녀온 여행이 없으면 공개할 코스가 없다 — 지어낸 코스를 미리보기로 세우지 않는다.
+          // 문구는 안드로이드 `course-publish-empty` 와 글자 그대로 같다.
+          MoyeoEmptyStateView(
+            message: "아직 다녀온 여행 기록이 없어요.",
+            accessibilityIdentifier: "coursePublish.preview.empty"
+          )
+        }
 
-        if !isPublished {
+        if !isPublished, let course = publishableCourse {
           publishField(
-            "코스 이름", icon: "note.text", value: "주왕산 & 주산지 힐링 트레킹", required: true
+            "코스 이름", icon: "note.text", value: course.title, required: true
           )
           .padding(.top, 18)
-          publishField(
-            "한 줄 소개",
-            icon: "sparkles",
-            value: "기암절벽과 주산지 물안개를 천천히 걷는 코스",
-            caption: "다녀온 사람만 쓸 수 있는 한 줄이 코스의 값어치예요."
-          )
-          .padding(.top, 16)
+          if !course.subtitle.isEmpty {
+            publishField(
+              "한 줄 소개",
+              icon: "sparkles",
+              value: course.subtitle,
+              caption: "다녀온 사람만 쓸 수 있는 한 줄이 코스의 값어치예요."
+            )
+            .padding(.top, 16)
+          }
+        }
+
+        if !isPublished {
           MoyeoCheckRow(
             title: "내 닉네임을 함께 보여주기",
             subtitle: "끄면 익명 여행자 코스로 올라가요.",
@@ -1754,13 +2015,17 @@ struct CoursePublishView: View {
     }
     .safeAreaInset(edge: .bottom) {
       if !isPublished {
-        HStack(spacing: 8) {
-          Button("지금은 안 할래요") { dismiss() }.buttonStyle(.bordered).frame(
-            maxWidth: .infinity, minHeight: 50)
-          Button("코스 공개하기") { showsConfirmation = true }.buttonStyle(.borderedProminent).tint(
-            MoyeoTheme.forest
-          ).frame(maxWidth: .infinity, minHeight: 50)
-        }.padding(12).background(MoyeoTheme.card)
+        // 다른 화면(17-4 · 17-6 · 20-2f)과 **같은 하단 CTA 컴포넌트**를 쓴다 —
+        // 예전에는 이 화면만 작은 캡슐 두 개였다.
+        // 공개할 코스가 없으면 누를 수 없다 (안드로이드 `course-publish-start` 와 같은 조건)
+        CreationFooter(
+          backTitle: "지금은 안 할래요",
+          nextTitle: "코스 공개하기",
+          back: { dismiss() },
+          next: { showsConfirmation = true },
+          isNextEnabled: publishableCourse != nil,
+          nextIdentifier: "coursePublish.start"
+        )
       }
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
@@ -1775,18 +2040,103 @@ struct CoursePublishView: View {
     .confirmationDialog(
       "정말 이 코스를 공개할까요?", isPresented: $showsFinalConfirmation, titleVisibility: .visible
     ) {
-      Button("공개할게요") { isPublished = true }
+      Button("공개할게요") { publish() }
       Button("취소", role: .cancel) {}
     } message: {
       Text("공개한 코스는 비공개로 되돌릴 수 없습니다.")
     }
+    .alert(
+      "코스 공개",
+      isPresented: Binding(
+        get: { publishFailureMessage != nil },
+        set: { if !$0 { publishFailureMessage = nil } }
+      )
+    ) {
+      Button("확인", role: .cancel) { publishFailureMessage = nil }
+    } message: {
+      Text(publishFailureMessage ?? "")
+    }
+    .task {
+      guard MoyeoServerSync.isEnabled else { return }
+      if myProfile == nil {
+        myProfile = try? await UserProfileAPIClient.shared.myProfile()
+      }
+      await loadPublishableCourse()
+    }
     .accessibilityIdentifier("screen.coursePublish")
   }
 
-  private var publishPreview: some View {
+  /// 27-3 공개 → `POST /travel-courses/{courseId}/publication`. **되돌릴 수 없다** —
+  /// 두 단계 확인(안내 → 최종 확인)을 지나온 뒤에만 온다.
+  ///
+  /// 예전에는 이 자리에서 `isPublished = true` 만 했다. 서버는 아무것도 모르는데 화면만
+  /// "코스를 공개했어요" 라고 말하고 있었다 — 목데이터와 같은 부류의 거짓말이다.
+  private func publish() {
+    guard
+      let courseID = publishableCourseID,
+      let course = publishableCourse,
+      !isPublishing
+    else {
+      publishFailureMessage = "공개할 코스를 찾지 못했어요."
+      return
+    }
+    isPublishing = true
+    Task {
+      do {
+        _ = try await TravelCourseAPIClient.shared.publishCourse(
+          courseID: courseID,
+          title: course.title,
+          // 서버는 소개를 필수(1~500자)로 받는다 — 비어 있으면 코스 이름을 그대로 쓴다.
+          description: course.subtitle.isEmpty ? course.title : course.subtitle,
+          showsCreatorNickname: showsNickname
+        )
+        isPublished = true
+      } catch {
+        publishFailureMessage =
+          (error as? LocalizedError)?.errorDescription ?? "코스를 공개하지 못했어요."
+      }
+      isPublishing = false
+    }
+  }
+
+  /// 미리보기에 쓸 코스 — 넘겨받은 것이 우선이고, 없으면 서버에서 받아온 것을 쓴다.
+  private var publishableCourse: TravelCourse? {
+    course ?? loadedCourse
+  }
+
+  /// 다녀온 모임(`ended`)의 코스를 하나 가져온다. 목데이터로 대신 채우지 않는다 (NO-MOCK-CANON R1).
+  private func loadPublishableCourse() async {
+    guard course == nil, loadedCourse == nil else { return }
+    guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else { return }
+    // 불발(CANCELLED)된 방도 `ended` 다 — 공개할 코스는 확정돼 끝난 여행의 것이다.
+    guard let lastTrip = ServerTripMapper.latestCompletedRoom(in: rooms) else { return }
+    guard let roomCourse = try? await TravelCourseAPIClient.shared.roomCourse(roomID: lastTrip.roomId),
+      let serverCourse = roomCourse.course
+    else {
+      return
+    }
+    loadedCourse = ServerCourseMapper.course(from: serverCourse)
+    publishableCourseID = serverCourse.courseId
+  }
+
+  /// 공개 카드에 붙는 작성자. 끄면(익명) · 서버 닉네임을 모르면 nil 이다.
+  private var authorNickname: String? {
+    guard showsNickname, let nickname = myProfile?.nickname, !nickname.isEmpty else { return nil }
+    return nickname
+  }
+
+  private func publishPreview(_ course: TravelCourse) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       ZStack(alignment: .bottomLeading) {
-        MoyeoPhotoTile(mascot: "🌲", mood: .forest, height: 132, cornerRadius: 0)
+        CachedRemoteImage(url: course.thumbnailURL, fallbackShape: .landscape) { image in
+          image
+            .resizable()
+            .scaledToFill()
+        } placeholder: {
+          MoyeoTheme.leaf
+        }
+        .frame(height: 132)
+        .clipped()
         Label("여행자 코스", systemImage: "person.fill")
           .font(MoyeoTypography.font(size: 11, weight: .heavy, relativeTo: .caption2))
           .foregroundStyle(MoyeoTheme.forest)
@@ -1797,15 +2147,37 @@ struct CoursePublishView: View {
           .padding(12)
       }
       VStack(alignment: .leading, spacing: 0) {
-        Text("주왕산 & 주산지 힐링 트레킹")
+        Text(course.title)
           .font(MoyeoTypography.font(size: 14, weight: .heavy, relativeTo: .subheadline))
-        Text("청송 · 당일 6.2km · 방문지 4")
+        Text("\(course.duration) · \(course.distance) · 방문지 \(course.stops.count)")
           .font(MoyeoTypography.font(size: 11.5, relativeTo: .caption))
           .foregroundStyle(MoyeoTheme.muted)
           .padding(.top, 5)
         HStack(spacing: 7) {
-          MascotAvatar(mascot: "🐻", size: 22, background: MoyeoTheme.leaf)
-          Text(showsNickname ? "숲속여행자 님이 다녀온 코스" : "익명 여행자가 다녀온 코스")
+          // 14 코스 상세와 같은 자리다 — 내 프로필 이미지가 있으면 반드시 이미지를 그린다.
+          // 없을 때만 닉네임에서 계산한 마스코트로 떨어진다 (R5).
+          // 닉네임을 감췄거나 모르면 익명 문구만 남는다.
+          if let authorNickname {
+            if let avatarURL = MoyeoImageURL.resolve(myProfile?.profileImageUrl) {
+              CachedRemoteImage(url: avatarURL) { image in
+                image
+                  .resizable()
+                  .scaledToFill()
+              } placeholder: {
+                MoyeoTheme.leaf
+              }
+              .frame(width: 22, height: 22)
+              .clipShape(Circle())
+            } else {
+              MascotAvatar(
+                mascot: MoyeoNicknameAnimal.emoji(forNickname: authorNickname)
+                  ?? MoyeoNicknameAnimal.unknown,
+                size: 22,
+                background: MoyeoTheme.leaf
+              )
+            }
+          }
+          Text(authorNickname.map { "\($0) 님이 다녀온 코스" } ?? "익명 여행자가 다녀온 코스")
             .font(MoyeoTypography.font(size: 11.5, weight: .semibold, relativeTo: .caption))
             .foregroundStyle(MoyeoTheme.text700)
         }
@@ -1854,90 +2226,79 @@ struct CoursePublishView: View {
   }
 }
 
+/// 20-5 여행 당일 채팅방 — 여행 시작일에만 상단에 진행 위젯이 붙은 20 이다.
+///
+/// ⚠️ 예전 이 화면은 **전부 손으로 쓴 값**이었다: "여행 중 · 5명 · 오늘 08:00 출발",
+/// 방문지 4곳(청송터미널·주왕산·주산지·달기약수탕), 대화 두 줄("엉뚱한 토끼 1457"),
+/// 그리고 도착 예정 카드("주산지 주차장 · 14:00 도착 예정 · 차로 22분").
+/// 화면기획 20-5 의 견본 대화를 그대로 옮겨 그린 것인데, 저 값은 서버에 없다.
+/// 방을 못 찾아 빈 상태가 찍히는 동안 이 목데이터가 가려져 있었을 뿐이다.
+///
+/// 진행 위젯은 `GET /chat-rooms/{roomId}/roadmap/current` 만이 근거다 —
+/// `active` 가 false 거나 방문지가 없으면 서버가 진행 상황을 주지 않는 것이므로
+/// 빈 상태를 그린다 (웹 `ScreenTripDay` 와 같은 규칙 · NO-MOCK-CANON R1).
+/// 대화는 채팅방(20)과 **같은 말풍선·카드**로 그린다.
+///
+/// "차로 22분" 처럼 어떤 API 도 주지 않는 값은 아예 그리지 않는다 (R3).
 struct TripDayView: View {
   let thread: ChatThread
   @State private var draft = ""
-  @State private var messages: [ChatMessage]
+  @State private var content: ServerChatRoomContent?
+  @State private var didLoad = false
   @State private var route: SupportRoute?
+  /// 상단 돋보기 — 지금까지 눌러도 아무 일이 없었다. 이미 받아둔 이 방의 메시지를 좁힌다
+  /// (대화 검색 API 는 없다 — 서버를 다시 부르지 않는다).
+  @State private var showsSearch = false
+  @State private var searchQuery = ""
 
-  init(thread: ChatThread) {
-    self.thread = thread
-    _messages = State(initialValue: thread.messages)
+  private var roadmap: ServerCurrentRoadmap? {
+    guard let roadmap = content?.roadmap, roadmap.active, !roadmap.places.isEmpty else {
+      return nil
+    }
+    return roadmap
+  }
+
+  private var messages: [ChatMessage] {
+    guard let content else { return [] }
+    let currentUserID = content.currentUserID
+    return content.messages.map { ServerTripMapper.chatMessage(from: $0, currentUserID: currentUserID) }
+  }
+
+  /// 메시지 응답에는 프로필 이미지가 없다 — 동행자 목록의 닉네임으로 붙인다 (20 과 같다)
+  private var avatarURLsByNickname: [String: URL] {
+    guard let content else { return [:] }
+    var result: [String: URL] = [:]
+    for member in content.memberList.members {
+      if let url = member.profileImageURL {
+        result[member.nickname] = url
+      }
+    }
+    return result
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      Text("여행 중 · 5명 · 오늘 08:00 출발")
-        .font(MoyeoTypography.font(size: 12, weight: .semibold, relativeTo: .caption))
-        .foregroundStyle(MoyeoTheme.muted)
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 10)
-        .overlay(alignment: .bottom) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
-
-      tripProgress
-
-      ScrollView {
-        VStack(spacing: 14) {
-          Text("오늘 여행이 시작됐어요 🎒")
-            .font(MoyeoTypography.font(size: 12, weight: .heavy, relativeTo: .caption))
-            .foregroundStyle(MoyeoTheme.forest)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(MoyeoTheme.leaf)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-          MessageBubble(
-            message: ChatMessage(
-              id: "trip-day-arrival",
-              senderName: "엉뚱한 토끼 1457",
-              avatar: "🐰",
-              body: "주왕산 3폭포 도착! 생각보다 사람 적어요 👍",
-              time: "방금",
-              isMine: false
-            ),
-            isPending: false
-          )
-          TripDayLocationCard()
-            .padding(.leading, 40)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          MessageBubble(
-            message: ChatMessage(
-              id: "trip-day-mine",
-              senderName: "나",
-              avatar: "🦌",
-              body: "저는 주차장에서 기다릴게요~",
-              time: "방금",
-              isMine: true
-            ),
-            isPending: false
-          )
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
+    Group {
+      if let roadmap {
+        loadedBody(roadmap)
+      } else if didLoad {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noChatRooms)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.loading)
       }
-      HStack(spacing: 8) {
-        Button {
-          route = .chatAttach(thread.id)
-        } label: {
-          Image(systemName: "plus").frame(width: 44, height: 44)
-        }.buttonStyle(.plain)
-        TextField("메시지 입력", text: $draft).padding(.horizontal, 12).frame(minHeight: 44).background(
-          MoyeoTheme.subtleBackground
-        ).clipShape(Capsule())
-        Button {
-          send()
-        } label: {
-          Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 44, height: 44)
-            .background(MoyeoTheme.forest).clipShape(Circle())
-        }.buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-      }.padding(12).background(MoyeoTheme.card)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
-    .navigationTitle(thread.tripTitle)
+    .navigationTitle(content?.detail?.title ?? thread.tripTitle)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItemGroup(placement: .topBarTrailing) {
-        Button {} label: { Image(systemName: "magnifyingglass") }
-          .accessibilityLabel("대화 검색")
+        Button {
+          showsSearch.toggle()
+          if !showsSearch { searchQuery = "" }
+        } label: {
+          Image(systemName: showsSearch ? "xmark" : "magnifyingglass")
+        }
+        .accessibilityLabel("대화 검색")
+        .accessibilityIdentifier("tripDay.search")
         Button {
           route = .chatMenu(thread.id)
         } label: {
@@ -1947,25 +2308,119 @@ struct TripDayView: View {
     }
     .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
     .accessibilityIdentifier("screen.tripDay")
+    .task { await load() }
   }
 
-  private func send() {
-    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
-    messages.append(
-      ChatMessage(
-        id: UUID().uuidString, senderName: "나", avatar: "🦌", body: trimmed, time: "방금", isMine: true
-      ))
-    draft = ""
+  @ViewBuilder
+  private func loadedBody(_ roadmap: ServerCurrentRoadmap) -> some View {
+    VStack(spacing: 0) {
+      Text(statusLine(roadmap))
+        .font(MoyeoTypography.font(size: 12, weight: .semibold, relativeTo: .caption))
+        .foregroundStyle(MoyeoTheme.muted)
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
+
+      tripProgress(roadmap)
+
+      if showsSearch {
+        LabelledSearchField(text: $searchQuery, prompt: "대화 내용 검색")
+          .padding(.horizontal, 18)
+          .padding(.vertical, 10)
+          .accessibilityIdentifier("tripDay.searchField")
+      }
+
+      ScrollView {
+        VStack(spacing: 14) {
+          let visible = visibleMessages
+          if visible.isEmpty, isSearching {
+            MoyeoEmptyStateView(
+              message: MoyeoEmptyText.noSearchResults,
+              systemImage: "magnifyingglass",
+              accessibilityIdentifier: "tripDay.search.empty"
+            )
+          } else {
+            ForEach(visible) { message in
+              MessageBubble(
+                message: message,
+                avatarURL: avatarURLsByNickname[message.senderName]
+              )
+            }
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+      }
+
+      composer
+    }
   }
 
-  private var tripProgress: some View {
-    VStack(alignment: .leading, spacing: 10) {
+  /// 검색창이 열려 있고 실제로 뭔가 적혀 있을 때만 검색 중이다.
+  private var isSearching: Bool {
+    showsSearch && !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
+  }
+
+  /// 검색 중이면 본문·보낸 사람으로 좁힌 메시지, 아니면 받은 메시지 전부.
+  private var visibleMessages: [ChatMessage] {
+    let keyword = searchQuery.trimmingCharacters(in: .whitespaces)
+    guard isSearching else { return messages }
+    return messages.filter {
+      $0.body.localizedCaseInsensitiveContains(keyword)
+        || $0.senderName.localizedCaseInsensitiveContains(keyword)
+    }
+  }
+
+  private var composer: some View {
+    HStack(spacing: 8) {
+      Button {
+        route = .chatAttach(thread.id)
+      } label: {
+        Image(systemName: "plus").frame(width: 44, height: 44)
+      }.buttonStyle(.plain)
+      TextField("메시지 입력", text: $draft).padding(.horizontal, 12).frame(minHeight: 44).background(
+        MoyeoTheme.subtleBackground
+      ).clipShape(Capsule())
+      Button {
+        Task { await send() }
+      } label: {
+        Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 44, height: 44)
+          .background(MoyeoTheme.forest).clipShape(Circle())
+      }.buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+    }.padding(12).background(MoyeoTheme.card)
+  }
+
+  /// "여행 중 · 5명 · 1/2일차" — 인원은 방 상세, 일차는 로드맵이 준다.
+  /// 예전의 "오늘 08:00 출발" 은 어떤 응답에도 없는 값이었다.
+  private func statusLine(_ roadmap: ServerCurrentRoadmap) -> String {
+    var parts = ["여행 중"]
+    if let participantCount = content?.detail?.participantCount {
+      parts.append("\(participantCount)명")
+    }
+    if let dayNumber = roadmap.dayNumber {
+      parts.append("\(dayNumber)/\(roadmap.totalDays)일차")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  /// 서버는 방문지별 progress(COMPLETED / CURRENT / UPCOMING)를 준다 —
+  /// 완료 개수(+ 진행 중 1)가 곧 현재 단계다 (웹과 같은 셈).
+  private func currentStep(_ roadmap: ServerCurrentRoadmap) -> Int {
+    let completed = roadmap.places.filter(\.isCompleted).count
+    let inProgress = roadmap.places.contains(where: \.isCurrent) ? 1 : 0
+    return max(1, completed + inProgress)
+  }
+
+  private func tripProgress(_ roadmap: ServerCurrentRoadmap) -> some View {
+    let step = currentStep(roadmap)
+    let places = roadmap.places
+    let currentTitle = places.indices.contains(step - 1) ? places[step - 1].title : ""
+    return VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
         Image(systemName: "mappin.and.ellipse")
           .font(.caption)
           .foregroundStyle(MoyeoTheme.forest)
-        Text("현재 방문지 2/4 · 주왕산")
+        Text("현재 방문지 \(step)/\(places.count) · \(currentTitle)")
           .font(MoyeoTypography.font(size: 12.5, weight: .heavy, relativeTo: .caption))
           .foregroundStyle(MoyeoTheme.forest)
         Spacer()
@@ -1974,30 +2429,39 @@ struct TripDayView: View {
           .foregroundStyle(MoyeoTheme.forest)
       }
       HStack(spacing: 0) {
-        dayStep("청송터미널", 1, done: true)
-        dayLine(done: true)
-        dayStep("주왕산", 2, done: true)
-        dayLine(done: false)
-        dayStep("주산지", 3, done: false)
-        dayLine(done: false)
-        dayStep("달기약수탕", 4, done: false)
+        ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
+          if index > 0 {
+            dayLine(done: index < step)
+          }
+          dayStep(place.title, index + 1, done: index < step)
+        }
       }
-      HStack(spacing: 6) {
-        Image(systemName: "clock")
-          .font(.caption)
-          .foregroundStyle(MoyeoTheme.forest)
-        Text("다음 일정 · ")
-        Text("14:00 주산지").fontWeight(.heavy)
-        Text("왕버들 산책로")
+      if let next = roadmap.nextPlace {
+        HStack(spacing: 6) {
+          Image(systemName: "clock")
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.forest)
+          Text("다음 일정 · ")
+          Text(nextScheduleText(next)).fontWeight(.heavy)
+        }
+        .font(MoyeoTypography.font(size: 11.5, relativeTo: .caption))
+        .foregroundStyle(MoyeoTheme.forest)
       }
-      .font(MoyeoTypography.font(size: 11.5, relativeTo: .caption))
-      .foregroundStyle(MoyeoTheme.forest)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
     .background(MoyeoTheme.leaf)
     .overlay(alignment: .bottom) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
     .accessibilityIdentifier("tripDay.progress")
+  }
+
+  private func nextScheduleText(_ place: ServerRoadmapPlace) -> String {
+    guard let scheduledAt = place.scheduledAt,
+      let time = ServerTripMapper.shortTime(String(scheduledAt.split(separator: "T").last ?? ""))
+    else {
+      return place.title
+    }
+    return "\(time) \(place.title)"
   }
 
   private func dayStep(_ title: String, _ number: Int, done: Bool) -> some View {
@@ -2028,47 +2492,27 @@ struct TripDayView: View {
     Rectangle().fill(done ? MoyeoTheme.forest : MoyeoTheme.softLine).frame(maxWidth: .infinity)
       .frame(height: 2).offset(y: -9)
   }
-}
 
-private struct TripDayLocationCard: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      GeometryReader { proxy in
-        ZStack {
-          MoyeoTheme.leaf
-          Path { path in
-            path.move(to: CGPoint(x: 0, y: proxy.size.height * 0.72))
-            path.addCurve(
-              to: CGPoint(x: proxy.size.width, y: proxy.size.height * 0.28),
-              control1: CGPoint(x: proxy.size.width * 0.30, y: proxy.size.height * 0.54),
-              control2: CGPoint(x: proxy.size.width * 0.68, y: proxy.size.height * 0.46)
-            )
-          }
-          .stroke(MoyeoTheme.forest, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-          Image(systemName: "mappin.circle.fill")
-            .foregroundStyle(MoyeoTheme.coral)
-            .position(x: proxy.size.width * 0.68, y: proxy.size.height * 0.42)
-        }
-      }
-      .frame(height: 92)
-      VStack(alignment: .leading, spacing: 3) {
-        Text("주산지 주차장")
-          .font(MoyeoTypography.font(size: 12.5, weight: .heavy, relativeTo: .caption))
-        Text("14:00 도착 예정 · 차로 22분")
-          .font(MoyeoTypography.font(size: 11, relativeTo: .caption2))
-          .foregroundStyle(MoyeoTheme.muted)
-        Text("길 찾기 →")
-          .font(MoyeoTypography.font(size: 11, weight: .bold, relativeTo: .caption2))
-          .foregroundStyle(MoyeoTheme.forest)
-          .padding(.top, 5)
-      }
-      .padding(11)
+  private func load() async {
+    guard !didLoad else { return }
+    guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID else {
+      didLoad = true
+      return
     }
-    .frame(maxWidth: 268)
-    .background(MoyeoTheme.card)
-    .clipShape(RoundedRectangle(cornerRadius: 14))
-    .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
-    .accessibilityIdentifier("tripDay.locationCard")
+    content = await ChatRoomContentAPIClient.shared.content(roomID: roomID)
+    didLoad = true
+  }
+
+  /// 20 과 같은 엔드포인트로 실제로 보낸다 — 화면 안에서만 늘어나는 가짜 말풍선을 만들지 않는다.
+  private func send() async {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let roomID = thread.serverRoomID else { return }
+    draft = ""
+    guard
+      let sent = try? await ChatRoomWriteAPIClient.shared.sendMessage(
+        roomID: roomID, content: trimmed)
+    else { return }
+    content?.messages.append(sent)
   }
 }
 
@@ -2165,9 +2609,11 @@ struct AccountDeleteView: View {
   @State private var showsFinalConfirmation = false
   @State private var isDeleting = false
   @State private var errorMessage: String?
-  // 화면기획과 같은 사유·삭제범위·참여 목록
+  /// 참여 중인 여행 경고의 근거는 `GET /api/v1/chat-rooms/my` 다 — 웹·안드로이드와 같은 조회.
+  /// 서버에서 받은 방만 담는다. 못 받았거나 하나도 없으면 **카드를 그리지 않는다** (NO-MOCK R1).
+  @State private var joinedTrips: [AccountDeleteJoinedTrip] = []
+  // 화면기획과 같은 사유·삭제범위
   private let reasons = ["여행을 자주 가지 않게 됐어요", "마음에 드는 모집이 없어요", "불쾌한 경험이 있었어요", "알림이 너무 많아요", "기타"]
-  private let joinedTrips = ["주왕산 & 주산지 힐링 트레킹 · D-2", "포항·영덕 동해 드라이브 · D-9"]
   private let deletionScope = [
     "피드·도감·친구·여행 기록이 모두 삭제돼요",
     "내가 공개한 여행자 코스는 남지만 닉네임은 지워져요",
@@ -2179,38 +2625,7 @@ struct AccountDeleteView: View {
     ScrollViewReader { proxy in
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-        // 참여 중인 여행을 목록으로 보여준다 — 어떤 여행을 정리해야 하는지 이 화면에서 알아야 한다 (화면기획)
-        VStack(alignment: .leading, spacing: 10) {
-          Label("참여 중인 여행이 \(joinedTrips.count)개 있어요", systemImage: "person.2.fill")
-            .font(.subheadline.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.warningText)
-          Text("탈퇴하면 동행자들에게 갑자기 빈자리가 생겨요. 나가기 처리를 먼저 해주세요.")
-            .font(.caption)
-            .foregroundStyle(MoyeoTheme.warningText)
-            .fixedSize(horizontal: false, vertical: true)
-          ForEach(joinedTrips, id: \.self) { trip in
-            HStack(spacing: 8) {
-              Image(systemName: "calendar")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(MoyeoTheme.warningText)
-              Text(trip)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(MoyeoTheme.ink)
-              Spacer(minLength: 0)
-              Text("관리 →")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.warningText)
-            }
-            .padding(11)
-            .background(MoyeoTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-          }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MoyeoTheme.warningBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityIdentifier("accountDelete.joinedTrips")
+        joinedTripsCard
 
         VStack(alignment: .leading, spacing: 4) {
           Text("떠나는 이유를 알려주세요").font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
@@ -2253,6 +2668,7 @@ struct AccountDeleteView: View {
       .background(MoyeoTheme.background.ignoresSafeArea())
       .navigationTitle("계정 탈퇴")
       .navigationBarTitleDisplayMode(.inline)
+      .task { await loadJoinedTrips() }
       .onAppear {
         guard UITestScrollDriver.requestedPage > 1 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -2308,6 +2724,55 @@ struct AccountDeleteView: View {
     }
   }
 
+  /// 참여 중인 여행 경고 — 어떤 여행을 먼저 정리해야 하는지 이 화면에서 알아야 한다 (화면기획).
+  ///
+  /// 목록이 비면 카드를 통째로 숨긴다. 무조건 그리면 `참여 중인 여행이 0개 있어요` 가 나온다 —
+  /// 안드로이드에 남아 있다고 보고된 함정이라 iOS 는 조건을 실제로 건다.
+  @ViewBuilder
+  private var joinedTripsCard: some View {
+    if !joinedTrips.isEmpty {
+      VStack(alignment: .leading, spacing: 10) {
+        Label("참여 중인 여행이 \(joinedTrips.count)개 있어요", systemImage: "person.2.fill")
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.warningText)
+        Text("탈퇴하면 동행자들에게 갑자기 빈자리가 생겨요. 나가기 처리를 먼저 해주세요.")
+          .font(.caption)
+          .foregroundStyle(MoyeoTheme.warningText)
+          .fixedSize(horizontal: false, vertical: true)
+        ForEach(joinedTrips) { trip in
+          HStack(spacing: 8) {
+            Image(systemName: "calendar")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(MoyeoTheme.warningText)
+            Text(trip.label)
+              .font(.caption.weight(.bold))
+              .foregroundStyle(MoyeoTheme.ink)
+            Spacer(minLength: 0)
+            Text("관리 →")
+              .font(.caption.weight(.heavy))
+              .foregroundStyle(MoyeoTheme.warningText)
+          }
+          .padding(11)
+          .background(MoyeoTheme.card)
+          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+      }
+      .padding(14)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MoyeoTheme.warningBackground)
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .accessibilityIdentifier("accountDelete.joinedTrips")
+    }
+  }
+
+  /// 종료된 방은 정리할 대상이 아니라 목록에서 뺀다 (웹·안드로이드와 같은 필터).
+  /// 실패하면 가진 것(=없음)을 그대로 둔다 — 지어낸 여행으로 채우지 않는다.
+  private func loadJoinedTrips() async {
+    guard MoyeoServerSync.isEnabled, joinedTrips.isEmpty else { return }
+    guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else { return }
+    joinedTrips = rooms.filter { !$0.ended }.map(AccountDeleteJoinedTrip.init(room:))
+  }
+
   private func deleteAccount() {
     isDeleting = true
     Task {
@@ -2320,10 +2785,28 @@ struct AccountDeleteView: View {
   }
 }
 
+/// 29-3 경고 카드의 한 줄. `GET /api/v1/chat-rooms/my` 응답에서만 만든다.
+struct AccountDeleteJoinedTrip: Identifiable, Hashable {
+  let id: Int64
+  let label: String
+
+  /// D-day 는 서버가 줄 때만 붙인다 — 안드로이드 `recruitmentDDayText`·웹과 같은 규칙이고,
+  /// 값이 없거나 음수면 제목만 남긴다(지어내지 않는다).
+  nonisolated init(room: ServerMyChatRoom) {
+    id = room.roomId
+    if let dDay = room.recruitmentDDay, dDay >= 0 {
+      label = "\(room.title) · D-\(dDay)"
+    } else {
+      label = room.title
+    }
+  }
+}
+
 enum SystemNoticeMode { case maintenance, error }
 
 struct SystemNoticeView: View {
   let mode: SystemNoticeMode
+  @Environment(\.dismiss) private var dismiss
   @State private var retryCount = 0
 
   var body: some View {
@@ -2378,7 +2861,10 @@ struct SystemNoticeView: View {
         }
         .buttonStyle(.plain)
         if mode == .error {
-          Button {} label: {
+          // 34 오류 화면의 「돌아가기」 — 새로고침이 안 되면 앞 화면으로 물러나는 유일한 길이다.
+          Button {
+            dismiss()
+          } label: {
             Text("돌아가기")
               .font(.subheadline.weight(.heavy))
               .foregroundStyle(MoyeoTheme.ink)
@@ -2412,10 +2898,40 @@ struct FeedCommentsView: View {
   let post: FeedPost
   @State private var comment = ""
   @State private var submitted: [String] = []
-  /// 실서버 댓글 — 서버 피드이고 조회가 성공했을 때만 채워진다 (nil = 목데이터)
+  /// 실서버 댓글 — 서버 피드이고 조회가 성공했을 때만 채워진다 (nil = 아직 못 받음).
+  /// 무한 스크롤로 다음 묶음을 **뒤에 붙인다** (서버가 최신 id 부터 주므로 순서가 그대로 맞다).
   @State private var serverComments: [ServerFeedComment]?
+  /// 다음 묶음 커서. 값이 없으면 마지막 묶음이다 (`nextId: null`).
+  @State private var nextCommentID: Int64?
+  @State private var isLoadingComments = false
+  /// 첫 묶음을 한 번이라도 받아봤는지 — 받기 전에는 "댓글 없음" 을 띄우지 않는다.
+  @State private var hasLoadedFirstPage = false
+  /// 이 화면에서 등록해 서버에 반영된 댓글 수. 제목 개수를 서버 값 위에 더한다.
+  @State private var postedCount = 0
+  /// 진입 경로가 스텁 게시물(캡처·딥링크)일 때 제목·작성자·전체 개수를 채우려고 직접 받은 피드.
+  @State private var loadedFeed: ServerFeed?
 
-  /// 서버 피드면 서버 댓글만 그린다. 서버가 빈 배열을 주면 목데이터로 되돌리지 않는다.
+  /// 한 번에 받는 최상위 댓글 수. `GET /feeds` 와 같은 20 이다.
+  private static let commentPageSize = 20
+
+  /// 제목의 댓글 수.
+  ///
+  /// 커서 페이지네이션이라 받은 묶음만 세면 실제보다 작아진다 — `GET /feeds/{id}` 의
+  /// `commentCount` 가 **대댓글까지 포함한 전체 수**라 그게 근거다
+  /// (실서버 확인: 피드 1 = 최상위 3 + 답글 2 = 5).
+  private var displayCommentCount: Int {
+    let serverTotal = post.commentCount > 0 ? post.commentCount : Int(loadedFeed?.commentCount ?? 0)
+    if serverTotal > 0 { return serverTotal + postedCount + submitted.count }
+    guard let serverComments else { return submitted.count }
+    return serverComments.reduce(0) { $0 + 1 + ($1.replies?.count ?? 0) } + submitted.count
+  }
+
+  /// 다음 묶음이 남아 있는지 — 서버가 준 `nextId` 로만 판단한다 (클라가 추측하지 않는다).
+  private var hasMoreComments: Bool {
+    nextCommentID != nil
+  }
+
+  /// 서버 피드면 서버 댓글만 그린다. 서버가 빈 배열을 주면 §2 빈 상태를 그린다.
   private var displayComments: [ChangelogComment] {
     guard let serverComments else { return comments }
     // 함수 참조(`map(Self.comment(from:))`)로 넘기면 main-actor 격리가 벗겨져 Swift 6 경고가 난다.
@@ -2435,31 +2951,13 @@ struct FeedCommentsView: View {
       body: server.content ?? "",
       time: time,
       replies: server.replyList.map { changelogComment(from: $0) },
-      serverCommentID: server.commentId
+      serverCommentID: server.commentId,
+      authorImageURL: MoyeoImageURL.resolve(server.author?.profileImageUrl)
     )
   }
 
-  private let comments = [
-    ChangelogComment(
-      mascot: "🐰", name: "엉뚱한 토끼 1457", badge: "함께 간 친구",
-      body: "이날 진짜 좋았어요! 주산지 물안개 사진 저도 올릴게요 📷", time: "2시간 전", likes: 4,
-      replies: [
-        ChangelogComment(
-          mascot: "🐻", name: "숲속여행자", badge: "작성자",
-          body: "토끼님 사진이 훨씬 잘 나왔어요 ㅎㅎ", time: "1시간 전")
-      ]),
-    ChangelogComment(
-      mascot: "🐢", name: "잔잔한 거북이 9032", badge: "함께 간 친구",
-      body: "달기약수탕 백숙 진짜 맛있었죠", time: "3시간 전", likes: 2),
-    ChangelogComment(
-      mascot: "🕊", name: "고요한 두루미 1130", badge: "",
-      body: "이 코스 저도 가보고 싶네요. 당일치기로 충분할까요?", time: "5시간 전", likes: 1,
-      replies: [
-        ChangelogComment(
-          mascot: "🐻", name: "숲속여행자", badge: "작성자",
-          body: "네 08시 출발이면 여유로워요!", time: "4시간 전")
-      ])
-  ]
+  /// 서버 댓글을 못 받았을 때의 자리. 목 댓글을 채우지 않는다 (NO-MOCK-CANON R1).
+  private let comments: [ChangelogComment] = []
 
   var body: some View {
     VStack(spacing: 0) {
@@ -2467,8 +2965,30 @@ struct FeedCommentsView: View {
         LazyVStack(spacing: 0) {
           // 어떤 피드의 댓글인지 — 화면기획 23-1 상단 원글 요약
           originalPostSummary
+          if displayComments.isEmpty, submitted.isEmpty {
+            if isLoadingComments && !hasLoadedFirstPage {
+              // 첫 묶음을 받는 중이다 — 아직 없다고 단정하지 않는다.
+              MoyeoEmptyStateView(
+                message: MoyeoEmptyText.loading,
+                accessibilityIdentifier: "feedComments.loading"
+              )
+            } else {
+              MoyeoEmptyStateView(
+                message: MoyeoEmptyText.noComments,
+                accessibilityIdentifier: "feedComments.empty"
+              )
+            }
+          }
           ForEach(displayComments) { item in
             commentRow(item)
+              // 무한 스크롤 — **마지막 댓글**이 보이면 다음 묶음을 받는다.
+              // 별도 표지에 `onAppear` 를 달면 그 표지가 한 번만 나타나 두 번째 묶음에서 멈춘다
+              // (실제로 그렇게 멈추는 걸 시뮬레이터로 확인했다). 목록이 늘어나면
+              // 새 마지막 항목이 다시 이 자리를 맡으므로 묶음마다 다시 걸린다.
+              .onAppear {
+                guard item.id == displayComments.last?.id else { return }
+                Task { await loadMoreServerComments() }
+              }
             // 대댓글은 들여쓰기로 부모와의 관계를 보여준다
             ForEach(item.replies) { reply in
               commentRow(reply, compact: true)
@@ -2477,6 +2997,14 @@ struct FeedCommentsView: View {
           }
           ForEach(submitted, id: \.self) { item in
             commentRow(ChangelogComment(mascot: "🦌", name: "나", badge: "", body: item, time: "방금"))
+          }
+          if hasMoreComments {
+            // 다음 묶음이 남아 있다는 표시일 뿐이다 — 받아오는 건 마지막 댓글의 `onAppear` 가 한다.
+            MoyeoEmptyStateView(
+              message: MoyeoEmptyText.loading,
+              accessibilityIdentifier: "feedComments.loadingMore"
+            )
+            .padding(.vertical, 12)
           }
           Text("함께 간 친구의 댓글이 먼저 보여요")
             .font(.caption2)
@@ -2499,7 +3027,9 @@ struct FeedCommentsView: View {
       }.padding(12).background(MoyeoTheme.card)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
-    .navigationTitle("댓글 \(post.commentCount + submitted.count)")
+    // 서버 댓글을 받았으면 그 개수가 근거다 — 목록에 5건이 떠 있는데 제목만 0 이면 안 된다.
+    // 대댓글도 화면에 보이므로 함께 센다.
+    .navigationTitle("댓글 \(displayCommentCount)")
     .navigationBarTitleDisplayMode(.inline)
     .task {
       await loadServerComments()
@@ -2507,9 +3037,61 @@ struct FeedCommentsView: View {
     .accessibilityIdentifier("screen.feedComments")
   }
 
+  /// 첫 묶음. 댓글을 새로 달았을 때도 이걸 다시 부른다 —
+  /// 최신 댓글이 최상위 첫 자리로 오므로 목록을 처음부터 다시 세우는 게 맞다.
   private func loadServerComments() async {
     guard MoyeoServerSync.isEnabled, let feedID = post.serverFeedID else { return }
-    serverComments = try? await FeedAPIClient.shared.comments(feedID: feedID)
+    // 스텁 게시물(캡처·딥링크)로 들어오면 제목·작성자·전체 개수가 비어 있다 — 피드를 직접 받는다.
+    if post.authorName.isEmpty, loadedFeed == nil {
+      loadedFeed = try? await FeedAPIClient.shared.feed(id: feedID)
+    }
+    isLoadingComments = true
+    defer {
+      isLoadingComments = false
+      hasLoadedFirstPage = true
+    }
+    guard let page = try? await FeedAPIClient.shared.comments(
+      feedID: feedID,
+      limit: Self.commentPageSize
+    ) else { return }
+    serverComments = page.comments
+    nextCommentID = page.nextId
+  }
+
+  /// 다음 묶음. 서버가 준 `nextId` 를 `beforeCommentId` 로 그대로 넘긴다.
+  private func loadMoreServerComments() async {
+    guard MoyeoServerSync.isEnabled,
+          let feedID = post.serverFeedID,
+          let cursor = nextCommentID,
+          !isLoadingComments else { return }
+    isLoadingComments = true
+    defer { isLoadingComments = false }
+    guard let page = try? await FeedAPIClient.shared.comments(
+      feedID: feedID,
+      beforeCommentID: cursor,
+      limit: Self.commentPageSize
+    ) else {
+      // 실패하면 같은 커서로 무한히 다시 부르지 않도록 멈춘다.
+      nextCommentID = nil
+      return
+    }
+    // 같은 커서 응답이 두 번 붙지 않게 이미 가진 id 는 건너뛴다.
+    let known = Set((serverComments ?? []).map(\.commentId))
+    serverComments = (serverComments ?? []) + page.comments.filter { !known.contains($0.commentId) }
+    nextCommentID = page.nextId
+  }
+
+  /// 원글 요약 — 스텁 게시물로 들어왔으면 직접 받은 피드가 근거다 (없으면 빈 값 그대로 둔다).
+  private var summaryTitle: String {
+    post.feedTitle.isEmpty ? (loadedFeed?.trip.courseTitle ?? "") : post.feedTitle
+  }
+
+  private var summaryAuthorName: String {
+    post.authorName.isEmpty ? (loadedFeed?.author.nickname ?? "") : post.authorName
+  }
+
+  private var summaryLikeCount: Int {
+    post.authorName.isEmpty ? Int(loadedFeed?.likeCount ?? 0) : post.likeCount
   }
 
   private var originalPostSummary: some View {
@@ -2517,11 +3099,11 @@ struct FeedCommentsView: View {
       MoyeoPhotoTile(mascot: "", mood: post.mood, height: 40, cornerRadius: 10)
         .frame(width: 40)
       VStack(alignment: .leading, spacing: 2) {
-        Text(post.feedTitle)
+        Text(summaryTitle)
           .font(.caption.weight(.heavy))
           .foregroundStyle(MoyeoTheme.ink)
           .lineLimit(1)
-        Text("\(post.authorName) · 좋아요 \(post.likeCount)")
+        Text("\(summaryAuthorName) · 좋아요 \(summaryLikeCount)")
           .font(.caption2)
           .foregroundStyle(MoyeoTheme.muted)
           .lineLimit(1)
@@ -2538,7 +3120,20 @@ struct FeedCommentsView: View {
 
   private func commentRow(_ item: ChangelogComment, compact: Bool = false) -> some View {
     HStack(alignment: .top, spacing: 11) {
-      MascotAvatar(mascot: item.mascot, size: compact ? 30 : 38, background: MoyeoTheme.leaf)
+      // 서버가 프로필 이미지를 주면 반드시 이미지다 — 없을 때만 마스코트로 떨어진다.
+      if let authorImageURL = item.authorImageURL {
+        CachedRemoteImage(url: authorImageURL) { image in
+          image
+            .resizable()
+            .scaledToFill()
+        } placeholder: {
+          MoyeoTheme.leaf
+        }
+        .frame(width: compact ? 30 : 38, height: compact ? 30 : 38)
+        .clipShape(Circle())
+      } else {
+        MascotAvatar(mascot: item.mascot, size: compact ? 30 : 38, background: MoyeoTheme.leaf)
+      }
       VStack(alignment: .leading, spacing: 5) {
         HStack(spacing: 6) {
           Text(item.name).font(.subheadline.weight(.bold))
@@ -2575,9 +3170,17 @@ struct FeedCommentsView: View {
       submitted.append(value)
       return
     }
-    // 서버 피드는 등록 후 목록을 다시 읽는다 — 화면에서 만든 댓글을 서버 값처럼 섞지 않는다.
+    // 서버 피드는 등록 후 **첫 묶음부터** 다시 읽는다 — 새 댓글이 최신 id 라 첫 묶음 맨 앞에 온다.
+    // 화면에서 만든 댓글을 서버 값처럼 섞지 않는다.
     Task {
-      try? await FeedAPIClient.shared.postComment(feedID: feedID, content: value)
+      do {
+        try await FeedAPIClient.shared.postComment(feedID: feedID, content: value)
+        postedCount += 1
+      } catch {
+        return
+      }
+      nextCommentID = nil
+      serverComments = nil
       await loadServerComments()
     }
   }
@@ -2600,7 +3203,9 @@ private func changelogSecondaryButton(_ title: String, icon: String = "", action
 
 /// 선택 항목은 한 덩어리로 붙이지 않고, 눌릴 영역을 분명히 한 카드로 분리한다.
 /// 알림 범위·탈퇴 사유·신고 사유가 같은 상호작용 규칙을 공유한다.
-private struct ChangelogRadioOption: View {
+/// 라디오 한 줄. 30-2 신고 시트(`ReportScreens.swift`)도 같은 줄을 쓴다 —
+/// 사유 목록만 다른 모양으로 그리면 같은 선택 UI 가 화면마다 달라진다.
+struct ChangelogRadioOption: View {
   let title: String
   let detail: String?
   let isSelected: Bool

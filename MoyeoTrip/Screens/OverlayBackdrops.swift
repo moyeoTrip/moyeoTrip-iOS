@@ -63,20 +63,26 @@ private struct OverlayBackdropHeader: View {
   }
 }
 
-/// 20-2 첨부 메뉴 · 32 신고 시트 뒤에 깔리는 실제 채팅방(20) 본문.
+/// 20-2 첨부 메뉴 · 32 신고 시트 뒤에 깔리는 채팅방(20) 본문.
+///
+/// 배경으로 그릴 방을 못 받았으면 목 방을 만들어 깔지 않는다 — 딤만 남긴다.
 struct ChatRoomOverlayBackdrop: View {
-  var threadID: String = "chat-cheongsong-juwangsan"
-
-  private var thread: ChatThread {
-    MockData.chatThread(for: threadID) ?? MockData.chatThreads[0]
-  }
+  var thread: ChatThread?
 
   var body: some View {
-    OverlayBackdrop(
-      title: thread.tripTitle,
-      trailingIcons: ["magnifyingglass", "line.3.horizontal"]
-    ) {
-      ChatRoomBody(thread: thread)
+    if let thread {
+      OverlayBackdrop(
+        title: thread.tripTitle,
+        trailingIcons: ["magnifyingglass", "line.3.horizontal"]
+      ) {
+        ChatRoomBody(thread: thread)
+      }
+    } else {
+      MoyeoTheme.background
+        .ignoresSafeArea()
+        .overlay(MoyeoTheme.overlayScrim.ignoresSafeArea())
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
   }
 }

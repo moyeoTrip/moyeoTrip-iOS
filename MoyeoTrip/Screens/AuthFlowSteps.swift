@@ -192,22 +192,7 @@ struct AuthNicknameView: View {
         ) {
             VStack(spacing: 10) {
                 VStack(spacing: 9) {
-                    if viewModel.isLoading {
-                        ForEach(0..<3, id: \.self) { _ in
-                            AuthNicknameSkeletonCard()
-                        }
-                    } else {
-                        ForEach(viewModel.candidates) { candidate in
-                            AuthNicknameCandidateButton(
-                                candidate: candidate,
-                                isSelected: viewModel.selectedNickname == candidate.nickname
-                            ) {
-                                viewModel.selectNickname(candidate.nickname)
-                                nickname = candidate.nickname
-                            }
-                            .disabled(viewModel.isLoading)
-                        }
-                    }
+                    candidateList
                 }
 
                 Button {
@@ -248,6 +233,41 @@ struct AuthNicknameView: View {
                 continueAction(viewModel.selectedNickname, viewModel.selectionToken)
             }
             .disabled(!canContinue)
+        }
+        .task {
+            // 이름 후보는 서버가 준다 — 화면이 열릴 때 없으면 받아온다 (목 후보를 심지 않는다).
+            guard viewModel.candidates.isEmpty, !viewModel.isLoading else { return }
+            await refreshCandidates()
+        }
+    }
+
+    /// 후보가 오기 전에는 로딩, 못 받았으면 §2 실패 문구 + 다시 시도다.
+    @ViewBuilder
+    private var candidateList: some View {
+        if viewModel.isLoading {
+            ForEach(0..<3, id: \.self) { _ in
+                AuthNicknameSkeletonCard()
+            }
+            Text(MoyeoEmptyText.loading)
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.muted)
+                .accessibilityIdentifier("auth.nickname.loading")
+        } else if viewModel.candidates.isEmpty {
+            MoyeoEmptyStateView(
+                message: MoyeoEmptyText.loadFailed,
+                onRetry: { Task { await refreshCandidates() } },
+                accessibilityIdentifier: "auth.nickname.empty"
+            )
+        } else {
+            ForEach(viewModel.candidates) { candidate in
+                AuthNicknameCandidateButton(
+                    candidate: candidate,
+                    isSelected: viewModel.selectedNickname == candidate.nickname
+                ) {
+                    viewModel.selectNickname(candidate.nickname)
+                    nickname = candidate.nickname
+                }
+            }
         }
     }
 
@@ -377,82 +397,6 @@ struct AuthBasicsView: View {
                 }
                 .disabled(!canContinue)
             }
-        }
-    }
-}
-
-struct AuthTermsView: View {
-    @Binding var agreedTerms: Set<AuthTerm>
-    let isSubmitting: Bool
-    let errorMessage: String?
-    let finishAction: () -> Void
-    @State private var selectedDocument: LegalDocumentKind?
-
-    private var canFinish: Bool {
-        AuthTerm.requiredTerms.allSatisfy { agreedTerms.contains($0) }
-    }
-
-    private var didAgreeAll: Bool {
-        AuthTerm.allCases.allSatisfy { agreedTerms.contains($0) }
-    }
-
-    var body: some View {
-        AuthStepContainer(title: "약관 동의", subtitle: "모여트립 이용을 위해 동의가 필요해요") {
-            VStack(spacing: 0) {
-                AuthTermButton(
-                    title: "모두 동의",
-                    subtitle: "선택 항목까지 한 번에 동의",
-                    showsRequirement: false,
-                    accessibilityIdentifier: "auth.terms.allAgree",
-                    isSelected: didAgreeAll
-                ) {
-                    agreedTerms = didAgreeAll ? [] : Set(AuthTerm.allCases)
-                }
-
-                ForEach(AuthTerm.allCases) { term in
-                    AuthTermButton(
-                        title: term.title,
-                        subtitle: term.subtitle,
-                        isRequired: term.isRequired,
-                        accessibilityIdentifier: term.accessibilityIdentifier,
-                        detailAction: term.legalDocument.map { document in
-                            { selectedDocument = document }
-                        },
-                        isSelected: agreedTerms.contains(term)
-                    ) {
-                        toggle(term)
-                    }
-                }
-
-                if let errorMessage {
-                    AuthInlineError(message: errorMessage, accessibilityIdentifier: "auth.signup.error")
-                }
-            }
-        } footer: {
-            AuthPrimaryButton(
-                title: isSubmitting ? "계정을 만들고 있어요..." : "동의하고 시작",
-                accessibilityIdentifier: "auth.terms.finish"
-            ) {
-                finishAction()
-            }
-            .disabled(!canFinish || isSubmitting)
-        }
-        .fullScreenCover(item: $selectedDocument) { document in
-            NavigationStack {
-                LegalDocumentDetailView(kind: document, entry: .signup) {
-                    if let term = AuthTerm(document: document) {
-                        agreedTerms.insert(term)
-                    }
-                }
-            }
-        }
-    }
-
-    private func toggle(_ term: AuthTerm) {
-        if agreedTerms.contains(term) {
-            agreedTerms.remove(term)
-        } else {
-            agreedTerms.insert(term)
         }
     }
 }

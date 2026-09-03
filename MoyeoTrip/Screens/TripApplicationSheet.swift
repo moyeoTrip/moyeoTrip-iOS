@@ -5,6 +5,36 @@
 
 import SwiftUI
 
+/// 16 「내 소개 카드」의 아바타.
+///
+/// `GET /users/me/profile` 이 `profileImageUrl` 을 주면 **그 사진**을 그린다.
+/// 예전에는 URL 이 있어도 무조건 닉네임에서 동물 이모지를 뽑아서, 프로필 사진을 올린
+/// 계정도 이모지로 보였다. 닉네임 동물은 URL 이 **없을 때만** 쓰는 대체 표시다
+/// (NO-MOCK-CANON R5 — 15 동행자 아바타 · 20-1 멤버 목록이 이미 이 규칙이다).
+private struct ApplicationIntroAvatar: View {
+    let profile: ServerMyProfile
+
+    private var mascot: String {
+        MoyeoNicknameAnimal.emoji(forNickname: profile.nickname) ?? MoyeoNicknameAnimal.unknown
+    }
+
+    var body: some View {
+        if let url = MoyeoImageURL.resolve(profile.profileImageUrl) {
+            CachedRemoteImage(url: url) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                MascotAvatar(mascot: mascot, size: 52, background: MoyeoTheme.leaf)
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(Circle())
+        } else {
+            MascotAvatar(mascot: mascot, size: 52, background: MoyeoTheme.leaf)
+        }
+    }
+}
+
 struct ApplicationSheet: View {
     let trip: TripRecruitment
     let onDismiss: () -> Void
@@ -17,6 +47,8 @@ struct ApplicationSheet: View {
     @State private var isSubmitting = false
     @State private var submitErrorMessage: String?
     @State private var serverResult: ServerJoinResult?
+    /// 16 "내 소개 카드"에 그릴 내 프로필 — 서버가 준 값만 쓴다 (NO-MOCK-CANON R1)
+    @State private var myProfile: ServerMyProfile?
 
     private var validationMessage: String? {
         ApplicationNotePolicy.validationMessage(for: memo)
@@ -106,6 +138,10 @@ struct ApplicationSheet: View {
                     )
                 )
             }
+        }
+        .task {
+            guard MoyeoServerSync.isEnabled, myProfile == nil else { return }
+            myProfile = try? await UserProfileAPIClient.shared.myProfile()
         }
     }
 
@@ -200,22 +236,32 @@ struct ApplicationSheet: View {
         }
     }
 
+    @ViewBuilder
     private var introCard: some View {
+        if let myProfile {
+            introCardBody(myProfile)
+        }
+    }
+
+    private func introCardBody(_ profile: ServerMyProfile) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("내 소개 카드")
                 .font(.headline)
                 .foregroundStyle(MoyeoTheme.ink)
 
             HStack(spacing: 12) {
-                MascotAvatar(mascot: "🐻", size: 52, background: MoyeoTheme.leaf)
+                ApplicationIntroAvatar(profile: profile)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("모여트립이")
+                    Text(profile.nickname)
                         .font(.subheadline.weight(.heavy))
                         .foregroundStyle(MoyeoTheme.ink)
-                    Text("자연 속에서 힐링하는 걸 좋아해요!\n사진 찍는 것도 좋아합니다")
-                        .font(.caption)
-                        .foregroundStyle(MoyeoTheme.text700)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // 자기소개는 서버 값이다 — 없으면 그 줄을 만들지 않는다
+                    if let introduction = profile.introduction, !introduction.isEmpty {
+                        Text(introduction)
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.text700)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(14)
@@ -296,14 +342,5 @@ struct ApplicationSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("application.sheet.openChat")
-    }
-}
-
-struct ApplicationSheetDirectLaunchView: View {
-    private let trip = MockData.trip(for: "trip-cheongsong-juwangsan") ?? MockData.trips[0]
-
-    var body: some View {
-        ApplicationSheet(trip: trip, onDismiss: {}, onSubmit: {})
-            .accessibilityIdentifier("screen.applicationSheet")
     }
 }

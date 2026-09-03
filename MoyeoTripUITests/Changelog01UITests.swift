@@ -29,30 +29,26 @@ final class Changelog01UITests: XCTestCase {
     }
 
     @MainActor
-    func testRouteModesAndNoticeHistoryLaunchAccessibly() {
+    func testRouteAndNoticeRoutesNeedRealServerIdentifiers() {
+        // 목 모집·채팅방 id 는 사라졌다 — 근거 없는 id 로 열면 §2 빈 상태만 뜬다
+        // (NO-MOCK-CANON R1 · R6: 목데이터를 강제하던 단언을 반대로 뒤집었다).
         launch("course-edit:trip-cheongsong-juwangsan")
-        XCTAssertTrue(element("screen.courseEdit.editable").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.buttons["저장하고 멤버에게 알리기"].exists)
-
-        relaunch("course-edit-linked:trip-cheongsong-juwangsan")
-        XCTAssertTrue(element("screen.courseEdit.linkedLocked").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.staticTexts["등록 코스의 방문지·순서·시간은 고정돼요. 집합 정보와 모집 조건은 수정할 수 있어요."].exists)
-
-        relaunch("course-edit-locked:trip-cheongsong-juwangsan")
-        XCTAssertTrue(element("screen.courseEdit.tripConfirmed").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.buttons["공지로 알리기"].exists)
+        XCTAssertFalse(element("screen.courseEdit.editable").waitForExistence(timeout: 2))
 
         relaunch("notice-history:chat-cheongsong-juwangsan")
         XCTAssertTrue(element("screen.noticeHistory").waitForExistence(timeout: 4))
-        XCTAssertTrue(app.staticTexts["상단 고정 중"].exists)
+        XCTAssertFalse(app.staticTexts["상단 고정 중"].exists)
+        XCTAssertTrue(app.staticTexts["아직 등록된 공지가 없어요."].waitForExistence(timeout: 3))
     }
 
     @MainActor
-    func testMeetingsHasAppliedTabWithoutChatAccess() {
+    func testMeetingsAppliedTabShowsCanonicalEmptyState() {
         launch("", tab: "meetings")
         XCTAssertTrue(app.staticTexts["신청중"].waitForExistence(timeout: 4))
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "신청")).firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["호스트 승인을 기다리는 중"].waitForExistence(timeout: 3))
+        // 목 신청 목록이 사라져 §2 문구가 남는다
+        XCTAssertFalse(app.staticTexts["호스트 승인을 기다리는 중"].exists)
+        XCTAssertTrue(app.staticTexts["참여 중인 모임이 없어요."].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["채팅"].exists)
     }
 

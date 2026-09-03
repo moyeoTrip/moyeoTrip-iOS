@@ -194,15 +194,15 @@ struct ServerChatRoomContractTests {
         #expect(poll.body.contains("카페"))
     }
 
-    @Test func noticeMappingSplitsFirstLineAndKeepsAuthor() throws {
+    /// 공지는 본문만 있다 — 첫 줄을 제목으로 떼지 않는다 (정본 ATTACH-COMPOSER-CANON.md §2).
+    @Test func noticeMappingKeepsWholeContentAsBody() throws {
         let history = try JSONDecoder().decode(
             ServerChatRoomNoticeHistory.self, from: Data(Self.noticesJSON.utf8)
         )
         #expect(history.allNotices.count == 2)
         let notice = ServerTripMapper.notice(from: history.pinnedNotices[0])
         #expect(notice.id == "server-notice-21")
-        #expect(notice.title == "집합 시간 10분 전까지 안동역 1번 출구로 와주세요.")
-        #expect(notice.body.isEmpty)
+        #expect(notice.body == "집합 시간 10분 전까지 안동역 1번 출구로 와주세요.")
         #expect(notice.authorName == "따스한 기린 2334")
         #expect(notice.isPinned)
 
@@ -211,8 +211,7 @@ struct ServerChatRoomContractTests {
             authorNickname: "호스트", createdAt: "2026-08-24T01:12:20.560012"
         )
         let mapped = ServerTripMapper.notice(from: multiline)
-        #expect(mapped.title == "집합 안내")
-        #expect(mapped.body == "07:50 정문 앞")
+        #expect(mapped.body == "집합 안내\n07:50 정문 앞")
     }
 
     @Test func inactiveRoadmapDecodesWithoutPlaces() throws {
@@ -337,10 +336,20 @@ struct ServerChatRoomSearchContractTests {
         let markers = ServerTripMapper.mapMarkers(from: rooms)
         // 좌표가 둘 다 있는 40번만 남는다 (41번은 둘 다 null, 42번은 위도만 있다)
         #expect(markers.count == 1)
-        #expect(markers[0].id == "server-room-40")
+        // 마커는 0.1° 격자로 **군집**된다 — 방이 하나여도 `cluster-<ids>` 형식이고 `order` 는 방 수다.
+        // 예전 단일 방 형식(`server-room-40` · `order == nil`)을 기대하고 있었다.
+        #expect(markers[0].id == "server-room-cluster-40")
         #expect(markers[0].coordinate.latitude == 36.576)
         // 모임 집합 장소는 순번 원이 아니라 단일 핀이다
-        #expect(markers[0].order == nil)
+        #expect(markers[0].order == 1)
+
+        // **핀 탭이 이 id 로 방을 되찾는다**(화면기획 11). 만드는 쪽과 파싱하는 쪽이 따로라
+        // 형식이 어긋나면 탭이 조용히 아무 것도 못 찾는다 — 왕복을 검사해 둔다.
+        #expect(ServerTripMapper.clusterRoomIDs(from: markers[0].id) == [40])
+        // 묶음에 여럿이 있어도 순서대로 되꺼낸다. 카드에 올리는 건 **첫 방**이다.
+        #expect(ServerTripMapper.clusterRoomIDs(from: "server-room-cluster-40-41-42") == [40, 41, 42])
+        // 우리 형식이 아닌 id 는 빈 배열이다 — 다른 레이어의 핀을 방으로 착각하지 않는다.
+        #expect(ServerTripMapper.clusterRoomIDs(from: "moyeo.route.point-1").isEmpty)
 
         let content = try #require(ServerTripMapper.mapContent(from: rooms))
         #expect(content.markers.count == 1)
@@ -523,7 +532,9 @@ struct ServerChatRoomCreateRequestContractTests {
         #expect(request.joinApprovalMode == "MANUAL")
         #expect(request.genderRestriction == "FEMALE_ONLY")
         #expect(request.participationFee == 45_000)
-        #expect(request.meetingDateTime == "2026-09-12T07:50:00")
+        // 08:00 은 `RecruitmentDraft` 의 집합 시각 기본값이다 — 안드로이드 초안과 맞추려고
+        // 07:50 에서 바꿨다(`Changelog01Screens.swift` 주석에 근거가 있다). 기대값만 안 따라왔었다.
+        #expect(request.meetingDateTime == "2026-09-12T08:00:00")
         #expect(request.maxParticipants == draft.capacity)
 
         var automatic = draft
@@ -555,7 +566,9 @@ struct ServerTravelCourseDetailContractTests {
     @Test func courseDetailMapsCreatorIntoPublishingInfo() throws {
         let json = #"""
         {"courseId":77,"title":"주왕산 단풍길 코스","description":"완만한 숲길",
-         "creatorNickname":"따스한 사슴 3492","creatorTravelStartDate":"2026-05-25",
+         "creatorNickname":"따스한 사슴 3492",
+         "creatorProfileImageUrl":"https://moyeo-trip-cdn.jayden-bin.cc/user/profile/image/a.webp",
+         "creatorTravelStartDate":"2026-05-25",
          "creatorTravelEndDate":null,"chatRoomCount":3,"travelTime":"6시간 30분","distanceKm":12.4,
          "averageRating":4.5,"ratingCount":12,"tags":[{"tagId":4,"name":"자연"}],"thumbnail":null,
          "places":[
@@ -581,14 +594,18 @@ struct ServerTravelCourseDetailContractTests {
         #expect(publishing.travelerName == "따스한 사슴 3492")
         #expect(publishing.tripCount == 3)
         #expect(publishing.publishedAt == "2026.05.25 (월)")
-        // 서버가 마스코트를 주지 않는다 — 지어내지 않는다
-        #expect(publishing.travelerAvatar.isEmpty)
+        // 서버가 프로필 이미지를 주면 그게 근거다 (2026-09-02 추가) — 마스코트를 그리지 않는다
+        #expect(
+            publishing.travelerAvatarURL?.absoluteString
+                == "https://moyeo-trip-cdn.jayden-bin.cc/user/profile/image/a.webp")
+        // 이미지가 없을 때만 쓰는 대체 표시는 닉네임에서 유도한다 (표는 MoyeoNicknameAnimal 하나뿐)
+        #expect(publishing.travelerAvatar == MoyeoNicknameAnimal.emoji(forNickname: "따스한 사슴 3492"))
     }
 
     @Test func courseDetailWithoutCreatorHidesPublishingCard() throws {
         let json = #"""
         {"courseId":78,"title":"공개 코스","description":null,"creatorNickname":null,
-         "creatorTravelStartDate":null,"creatorTravelEndDate":null,"chatRoomCount":0,
+         "creatorProfileImageUrl":null,"creatorTravelStartDate":null,"creatorTravelEndDate":null,"chatRoomCount":0,
          "travelTime":"3시간","distanceKm":5.0,"averageRating":null,"ratingCount":0,
          "tags":[],"thumbnail":null,"places":[]}
         """#
@@ -604,31 +621,50 @@ struct ServerTravelCourseDetailContractTests {
 
 @Suite
 struct ServerFeedCommentContractTests {
-    /// 스펙(`/api-docs`)에는 단일 객체로 적혀 있지만 컨트롤러 반환형은 `List<FeedCommentResponse>` 다.
-    @Test func commentsDecodeAsArrayWithNestedReplies() throws {
+    /// 2026-09-02 서버 변경: 댓글 배열 단독 → `{comments, nextId}` 객체 (파괴적 변경).
+    /// 마지막 묶음이면 `nextId` 가 `null` 이다.
+    @Test func commentsDecodeAsPageWithNestedReplies() throws {
         let json = #"""
-        [{"commentId":1,"author":{"userId":61,"nickname":"즐거운 고양이 4760","profileImageUrl":null},
-          "content":"이 코스 저도 가보고 싶네요.","createdAt":"2026-09-15T20:00:00",
-          "replies":[{"commentId":2,"author":{"userId":62,"nickname":"따스한 기린 2334",
-            "profileImageUrl":null},"content":"당일치기로 충분해요!",
-            "createdAt":"2026-09-15T20:10:00","replies":[]}]},
-         {"commentId":3,"author":{"userId":62,"nickname":"따스한 기린 2334","profileImageUrl":null},
-          "content":"사진 더 올릴게요","createdAt":"2026-09-15T21:00:00","replies":[]}]
+        {"comments":
+         [{"commentId":1,"author":{"userId":61,"nickname":"즐거운 고양이 4760","profileImageUrl":null},
+           "content":"이 코스 저도 가보고 싶네요.","createdAt":"2026-09-15T20:00:00",
+           "replies":[{"commentId":2,"author":{"userId":62,"nickname":"따스한 기린 2334",
+             "profileImageUrl":null},"content":"당일치기로 충분해요!",
+             "createdAt":"2026-09-15T20:10:00","replies":[]}]},
+          {"commentId":3,"author":{"userId":62,"nickname":"따스한 기린 2334","profileImageUrl":null},
+           "content":"사진 더 올릴게요","createdAt":"2026-09-15T21:00:00","replies":[]}],
+         "nextId":null}
         """#
-        let comments = try JSONDecoder().decode([ServerFeedComment].self, from: Data(json.utf8))
-        #expect(comments.count == 2)
-        #expect(comments[0].replyList.count == 1)
-        #expect(comments[0].replyList[0].content == "당일치기로 충분해요!")
-        #expect(comments[1].replyList.isEmpty)
+        let page = try JSONDecoder().decode(ServerFeedCommentPage.self, from: Data(json.utf8))
+        #expect(page.comments.count == 2)
+        #expect(page.comments[0].replyList.count == 1)
+        #expect(page.comments[0].replyList[0].content == "당일치기로 충분해요!")
+        #expect(page.comments[1].replyList.isEmpty)
+        // 마지막 묶음 — 다음 커서가 없다
+        #expect(page.nextId == nil)
+    }
+
+    /// 다음 묶음이 있으면 마지막 최상위 댓글 id 가 `nextId` 로 온다 (실서버 확인: `?limit=1` → `nextId 3`).
+    @Test func commentPageCarriesNextCursor() throws {
+        let json = #"""
+        {"comments":
+         [{"commentId":3,"author":{"userId":61,"nickname":"즐거운 고양이 4760","profileImageUrl":null},
+           "content":"이 코스 저도 가보고 싶네요.","createdAt":"2026-08-29T13:08:56.246064",
+           "replies":[]}],
+         "nextId":3}
+        """#
+        let page = try JSONDecoder().decode(ServerFeedCommentPage.self, from: Data(json.utf8))
+        #expect(page.comments.count == 1)
+        #expect(page.nextId == 3)
     }
 
     @Test func commentWithoutRepliesKeyStillDecodes() throws {
-        let json = #"[{"commentId":9,"author":null,"content":null,"createdAt":null}]"#
-        let comments = try JSONDecoder().decode([ServerFeedComment].self, from: Data(json.utf8))
-        #expect(comments[0].replyList.isEmpty)
+        let json = #"{"comments":[{"commentId":9,"author":null,"content":null,"createdAt":null}],"nextId":null}"#
+        let page = try JSONDecoder().decode(ServerFeedCommentPage.self, from: Data(json.utf8))
+        #expect(page.comments[0].replyList.isEmpty)
         // 서버가 값을 주지 않으면 지어내지 않는다
-        #expect(comments[0].content == nil)
-        #expect(comments[0].author == nil)
+        #expect(page.comments[0].content == nil)
+        #expect(page.comments[0].author == nil)
     }
 }
 

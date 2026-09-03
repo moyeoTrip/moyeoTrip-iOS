@@ -24,7 +24,9 @@ struct ServerTermDetail: Decodable, Hashable {
 }
 
 final class TermsAPIClient: @unchecked Sendable {
-    static let shared = TermsAPIClient()
+    /// 상태가 없는 클라이언트다. 기본 인자(`= .shared`)로 쓰이는데 기본 인자 표현식은
+    /// nonisolated 문맥에서 평가되므로, MainActor 기본 격리에 걸리지 않도록 명시한다.
+    nonisolated static let shared = TermsAPIClient()
 
     private let api: MoyeoAPIClient
 
@@ -32,12 +34,14 @@ final class TermsAPIClient: @unchecked Sendable {
         self.api = api
     }
 
+    /// 약관은 서버가 공개로 열어둔 엔드포인트다(`SecurityConfig` 허용 목록, 토큰 없이 200).
+    /// 가입 중에는 아직 서비스 토큰이 없으므로 인증 없이 부른다.
     func terms() async throws -> [ServerTermSummary] {
-        try await api.get("/api/v1/terms")
+        try await api.getPublic("/api/v1/terms")
     }
 
     func term(id: Int64) async throws -> ServerTermDetail {
-        try await api.get("/api/v1/terms/\(id)")
+        try await api.getPublic("/api/v1/terms/\(id)")
     }
 }
 

@@ -26,6 +26,9 @@ struct ProfileCardCompanion: Hashable {
     let reviewerNickname: String
     let reviewerNicknameColor: String?
     let content: String
+    /// 어느 여행에서 받은 평가인지 · 받은 날짜. 서버가 주지 않으면 nil 이라 줄을 만들지 않는다.
+    var tripTitle: String?
+    var createdAt: String?
   }
 
   struct Stat: Hashable, Identifiable {
@@ -43,6 +46,9 @@ struct ProfileCardCompanion: Hashable {
   /// 나와 함께 간 횟수. 도감에서 들어왔을 때만 안다.
   var tripCount: Int?
   var mannerRating: Double?
+  /// 완료한 여행 수 · 공개 피드 수. 공개 프로필에서만 온다.
+  var completedTripCount: Int?
+  var feedCount: Int?
   var latestTripTitle: String?
   var latestTripDate: String?
   var introduction: String?
@@ -50,16 +56,33 @@ struct ProfileCardCompanion: Hashable {
   var memories: [Memory] = []
   var receivedReviews: [ReceivedReview] = []
 
-  /// 횟수 지표 스트립. `여행` · `호스트` · `피드` 는 어떤 응답에도 없어 지금은 항상 비어 있다 —
-  /// 숫자를 지어내지 않는다 (changeLog18 §4). 응답에 생기면 여기에 채운다.
+  /// 횟수 지표 스트립 — 서버가 준 값만 칸을 만든다. 지어낸 숫자를 채우지 않는다.
   ///
-  /// 평균 매너 점수는 이 스트립에 넣지 않는다. 단위가 다르고(점 vs 회), 매너만 내려오는
+  /// 호스트 횟수는 **기획에 없다** — 서버도 주지 않고 칸도 만들지 않는다(2026-08-26 확정).
+  /// 평균 매너 점수도 이 스트립에 넣지 않는다: 단위가 다르고(점 vs 회), 매너만 내려오는
   /// 진입점에서는 한 칸짜리 전체폭 스트립이 남아 어색했다 — 별도 메타 줄로 보여준다.
-  var stats: [Stat] { [] }
+  var stats: [Stat] {
+    var result: [Stat] = []
+    if let completedTripCount {
+      result.append(Stat(id: "여행", label: "여행", value: "\(completedTripCount)"))
+    }
+    if let feedCount {
+      result.append(Stat(id: "피드", label: "피드", value: "\(feedCount)"))
+    }
+    return result
+  }
 
-  /// "4.8" / "5"
+  /// 프로필 이미지가 없을 때 쓰는 아바타. **닉네임의 동물을 따른다** (NO-MOCK-CANON R5).
+  /// 표는 `MoyeoNicknameAnimal` 하나뿐이다 — 화면마다 따로 만들면 같은 사람이 다른 동물로 보인다.
+  static let unknownAnimalMascot = MoyeoNicknameAnimal.unknown
+
+  static func mascotEmoji(forNickname nickname: String) -> String? {
+    MoyeoNicknameAnimal.emoji(forNickname: nickname)
+  }
+
+  /// "4.8" / "5.0" — 평균값이라 **소수 한 자리**로 통일한다 (안드로이드가 정본).
   static func ratingText(_ rating: Double) -> String {
-    String(format: "%g", rating)
+    String(format: "%.1f", rating)
   }
 
   /// "경주 단풍·야경 모임 · 2026.08.23". 제목이 없으면 줄을 만들지 않는다.
@@ -73,6 +96,14 @@ struct ProfileCardCompanion: Hashable {
   static func dateText(_ serverDate: String) -> String {
     serverDate.replacingOccurrences(of: "-", with: ".")
   }
+
+  /// 서버가 주는 작성 시각은 `2026-08-24T21:24:52.128222` 형태다.
+  /// 카드 뒷면에는 날짜만 쓰므로 `T` 앞만 잘라 `2026.08.24` 로 만든다. 없으면 nil 이라 줄을 만들지 않는다.
+  static func dayText(_ serverDateTime: String?) -> String? {
+    guard let serverDateTime, !serverDateTime.isEmpty else { return nil }
+    let day = serverDateTime.split(separator: "T").first.map(String.init) ?? serverDateTime
+    return dateText(day)
+  }
 }
 
 extension ProfileCardCompanion {
@@ -83,17 +114,23 @@ extension ProfileCardCompanion {
     receivedReviews reviews: [ServerReceivedTravelReview]
   ) {
     switch subject {
-    case .planningMock:
-      self = .planningMock
-    case .mockFriend(let friendID):
-      self = Self.mock(friendID: friendID) ?? .planningMock
+    case .unavailable:
+      self.init(nickname: "")
+    case .me(let nickname, let profileImageURL, let introduction, let travelStyles):
+      self.init(
+        nickname: nickname,
+        mascot: profileImageURL == nil ? Self.mascotEmoji(forNickname: nickname) : nil,
+        profileImageURL: profileImageURL,
+        introduction: introduction,
+        travelStyles: travelStyles
+      )
     case .serverCompanion(let companion):
       self.init(companion: companion)
     case .serverUser(let reference):
       self.init(
         nickname: reference.nickname,
         userID: reference.userID,
-        profileImageURL: reference.profileImageUrl.flatMap(URL.init(string:)),
+        profileImageURL: MoyeoImageURL.resolve(reference.profileImageUrl),
         introduction: reference.introduction
       )
     }
@@ -133,9 +170,15 @@ extension ProfileCardCompanion {
       if let serverNickname = profile.nickname, !serverNickname.isEmpty {
         nickname = serverNickname
       }
+      // 프로필 이미지가 없으면 닉네임의 동물로 아바타를 정한다(웹·안드로이드와 같은 규칙).
+      if profile.profileImageURL == nil, mascot == nil {
+        mascot = Self.mascotEmoji(forNickname: nickname)
+      }
       profileImageURL = profile.profileImageURL ?? profileImageURL
       introduction = profile.introduction ?? introduction
       mannerRating = profile.mannerRating ?? mannerRating
+      completedTripCount = profile.completedTripCount ?? completedTripCount
+      feedCount = profile.feedCount ?? feedCount
       if !profile.travelStyleLabels.isEmpty {
         travelStyles = profile.travelStyleLabels
       }
@@ -146,69 +189,11 @@ extension ProfileCardCompanion {
           id: "\(review.reviewerId).\(index)",
           reviewerNickname: review.reviewerNickname,
           reviewerNicknameColor: review.reviewerNicknameColor,
-          content: review.content
+          content: review.content,
+          tripTitle: review.tripTitle,
+          createdAt: Self.dayText(review.createdAt)
         )
       }
     }
-  }
-
-  /// 화면기획 25 의 기준 목데이터 — 27 도감의 '우직한 곰 7821' 을 눌러 들어온 상태.
-  /// 캡처 라우트(`UITEST_SCREEN=profile` · `profile-back`)가 이 값을 그린다.
-  ///
-  /// 화면기획 목데이터에는 `여행 12 · 호스트 3 · 피드 21` 이 있지만 서버가 주지 않는 값이라
-  /// 앱은 그 칸을 만들지 않는다 — 기획 캡처와 그 칸에서 달라지는 것은 정상이다 (changeLog18 §4).
-  static let planningMock = ProfileCardCompanion(
-    nickname: "우직한 곰 7821",
-    nicknameColor: MoyeoUserColor.orange.rawValue,
-    mascot: "🐻",
-    tripCount: 2,
-    mannerRating: 4.8,
-    latestTripTitle: "경주 단풍·야경 모임",
-    latestTripDate: "2026.08.23",
-    introduction: "사진 찍는 걸 좋아해요. 천천히 걷는 여행을 좋아합니다.",
-    travelStyles: ["사진", "자연"],
-    memories: [
-      Memory(
-        id: "profile-card-mock.1",
-        tripTitle: "경주 단풍·야경 모임",
-        tripDate: "2026.08.23",
-        oneLineReview: "사진 정말 잘 찍어주셨어요!"
-      ),
-      Memory(
-        id: "profile-card-mock.2",
-        tripTitle: "주왕산 힐링 트레킹",
-        tripDate: "2026.06.14",
-        oneLineReview: nil
-      )
-    ],
-    receivedReviews: [
-      ReceivedReview(
-        id: "profile-card-mock-review.1",
-        reviewerNickname: "고요한 두루미 1130",
-        reviewerNicknameColor: MoyeoUserColor.skyBlue.rawValue,
-        content: "약속 시간을 정확히 지키고 사진도 많이 남겨주셨어요."
-      ),
-      ReceivedReview(
-        id: "profile-card-mock-review.2",
-        reviewerNickname: "잔잔한 거북이 9032",
-        reviewerNicknameColor: MoyeoUserColor.mint.rawValue,
-        content: "걷는 속도를 계속 맞춰줘서 편했습니다."
-      )
-    ]
-  )
-
-  /// 목데이터 도감(로그인 전 · 캡처)에서 그릴 카드.
-  static func mock(friendID: String) -> ProfileCardCompanion? {
-    guard let friend = MockData.dogamFriends.first(where: { $0.id == friendID }) else { return nil }
-    if friend.nickname == planningMock.nickname {
-      return planningMock
-    }
-    // 나머지 목데이터 친구는 27 도감이 들고 있는 값(닉네임 · 동물 · 동행 횟수)까지만 그린다.
-    // 최근 동행 제목 · 매너 점수 · 소개 · 여행 스타일 · 평가는 목데이터에 없어 칸을 만들지 않는다.
-    return ProfileCardCompanion(
-      nickname: friend.nickname,
-      mascot: friend.avatar,
-      tripCount: friend.metCount
-    )
   }
 }

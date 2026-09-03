@@ -288,9 +288,12 @@ struct ProfileCardCompanionTests {
         // 여행 · 호스트 · 피드 카운트는 어떤 응답에도 없다 — 칸 자체를 만들지 않는다 (changeLog18 §4).
         // 매너 점수도 이 스트립에 넣지 않는다. 단위가 다르고(점 vs 회), 매너만 내려오는
         // 진입점에서 한 칸짜리 전체폭 스트립이 남았다 (changeLog18 §2-6).
-        let card = ProfileCardCompanion.planningMock
+        let card = ProfileCardCompanion(
+            subject: .serverUser(ProfileCardUserReference(userID: 62, nickname: "우직한 곰 7821")),
+            profile: nil,
+            receivedReviews: []
+        )
         #expect(card.stats.isEmpty)
-        #expect(card.mannerRating != nil)
     }
 
     @Test func emptyLatestTripTitleMakesNoRow() throws {
@@ -361,44 +364,23 @@ struct ProfileCardCompanionTests {
         #expect(card.memories.isEmpty)
     }
 
-    @Test func planningMockMatchesTheScreenPlanCard() {
-        let mock = ProfileCardCompanion.planningMock
-        #expect(mock.nickname == "우직한 곰 7821")
-        #expect(mock.nicknameColor == "ORANGE")
-        #expect(mock.tripCount == 2)
-        #expect(mock.latestTripText == "경주 단풍·야경 모임 · 2026.08.23")
-        #expect(mock.travelStyles == ["사진", "자연"])
-        #expect(mock.memories.count == 2)
-        #expect(mock.memories[1].oneLineReview == nil)
-        #expect(mock.receivedReviews.count == 2)
-        #expect(mock.receivedReviews[0].reviewerNicknameColor == "SKY_BLUE")
-    }
-
-    @Test func mockDexTapResolvesThePlanningCard() {
-        let bear = MockData.dogamFriends.first { $0.nickname == "우직한 곰 7821" }
-        #expect(ProfileCardCompanion.mock(friendID: bear?.id ?? "") == ProfileCardCompanion.planningMock)
-    }
-
-    @Test func otherMockFriendsOnlyShowWhatTheDexKnows() {
-        let card = ProfileCardCompanion.mock(friendID: "dogam-04")
-        #expect(card?.nickname == "고요한 두루미 1130")
-        #expect(card?.tripCount == 1)
-        // 목데이터에 없는 값은 칸을 만들지 않는다
-        #expect(card?.latestTripText == nil)
-        #expect(card?.stats.isEmpty == true)
-        #expect(card?.introduction == nil)
-        #expect(card?.travelStyles.isEmpty == true)
-        #expect(card?.memories.isEmpty == true)
-        #expect(card?.receivedReviews.isEmpty == true)
-    }
-
-    @Test func unknownMockFriendHasNoCard() {
-        #expect(ProfileCardCompanion.mock(friendID: "dogam-99") == nil)
+    @Test func unknownSubjectDrawsNothing() {
+        // 목데이터 카드는 없어졌다 — 유저 id 를 모르면 그릴 근거가 없다 (NO-MOCK-CANON R1)
+        let card = ProfileCardCompanion(subject: .unavailable, profile: nil, receivedReviews: [])
+        #expect(card.nickname.isEmpty)
+        #expect(card.stats.isEmpty)
+        #expect(card.memories.isEmpty)
+        #expect(card.receivedReviews.isEmpty)
+        #expect(ProfileCardSubject.unavailable.isUnavailable)
     }
 
     @Test func onlyServerBackedSubjectsAreQueried() {
-        #expect(ProfileCardSubject.planningMock.userID == nil)
-        #expect(ProfileCardSubject.mockFriend("dogam-02").userID == nil)
+        #expect(ProfileCardSubject.unavailable.userID == nil)
+        #expect(
+            ProfileCardSubject.me(
+                nickname: "우직한 곰 7821", profileImageURL: nil, introduction: nil, travelStyles: []
+            ).userID == nil
+        )
         #expect(
             ProfileCardSubject.serverUser(
                 ProfileCardUserReference(userID: 62, nickname: "따스한 기린 2334")
@@ -408,8 +390,12 @@ struct ProfileCardCompanionTests {
 
     @Test func routeKeysAreStableAcrossRuns() {
         // `hashValue` 는 실행마다 달라 라우트 식별에 쓸 수 없다
-        #expect(ProfileCardSubject.planningMock.routeKey == "planningMock")
-        #expect(ProfileCardSubject.mockFriend("dogam-02").routeKey == "mock.dogam-02")
+        #expect(ProfileCardSubject.unavailable.routeKey == "unavailable")
+        #expect(
+            ProfileCardSubject.me(
+                nickname: "곰", profileImageURL: nil, introduction: nil, travelStyles: []
+            ).routeKey == "me.곰"
+        )
         #expect(
             ProfileCardSubject.serverUser(
                 ProfileCardUserReference(userID: 62, nickname: "곰")
@@ -419,8 +405,12 @@ struct ProfileCardCompanionTests {
 
     @Test func serverFeedCarriesTheAuthorIDToTheCard() {
         // 서버 피드의 작성자를 눌러야 그 사람의 카드가 열린다
-        var post = MockData.feedPosts[0]
-        #expect(post.authorProfileSubject == .planningMock)
+        var post = FeedPost(
+            id: "feed-1", authorName: "우직한 곰 7821", authorAvatar: "", region: "",
+            createdAt: "", photoMascot: "", caption: "", tags: [], route: [],
+            visibility: .publicAll, likeCount: 0, commentCount: 0, mood: .forest
+        )
+        #expect(post.authorProfileSubject == .unavailable)
         post.serverAuthorID = 62
         #expect(post.authorProfileSubject.userID == 62)
     }
@@ -457,8 +447,8 @@ struct ProfileCardCaptureRouteTests {
     @Test func frontAndBackRoutesAreDifferentDestinations() {
         // 25 와 25-1 이 같은 값이면 두 아트보드에 같은 면이 찍힌다
         #expect(
-            MyRoute.profile(.planningMock, startsFlipped: false)
-                != MyRoute.profile(.planningMock, startsFlipped: true)
+            MyRoute.profile(.unavailable, startsFlipped: false)
+                != MyRoute.profile(.unavailable, startsFlipped: true)
         )
     }
 

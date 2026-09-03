@@ -20,6 +20,8 @@ struct UITestInitialState {
   var feedStartsWriting = false
   /// 24-1~24-5 단계별 캡처용 시작 단계 (1...5)
   var feedWriteInitialStep = 1
+  /// 24-1~24-5 가 기록 대상으로 삼을 방 (`feedwrite1:101`). 지정이 없으면 가장 최근 여행이다.
+  var feedWriteRoomID: Int64?
   var exploreStartsInMap = false
   var meetingsInitialSegment: MeetingSegment = .ongoing
 
@@ -43,13 +45,13 @@ struct UITestInitialState {
     // changeLog18 — 25 프로필 카드. 화면기획의 기준 목데이터는 27 도감의 '우직한 곰 7821'이다.
     if screen.matches("profile", "public-profile", "publicprofile") {
       selectedTab = .my
-      myPath.append(MyRoute.profile(.planningMock, startsFlipped: false))
+      myPath.append(MyRoute.profile(Self.profileSubject(screen.identifier), startsFlipped: false))
       return true
     }
     // changeLog18 — 25-1 카드 뒷면. 뒤집힌 상태로 여는 캡처 전용 라우트다(실사용 기본값은 앞면).
     if screen.matches("profile-back", "profileback", "public-profile-back", "publicprofileback") {
       selectedTab = .my
-      myPath.append(MyRoute.profile(.planningMock, startsFlipped: true))
+      myPath.append(MyRoute.profile(Self.profileSubject(screen.identifier), startsFlipped: true))
       return true
     }
     if screen.matches("profile-edit", "profileedit", "edit-profile", "editprofile") {
@@ -96,9 +98,11 @@ struct UITestInitialState {
       meetingsInitialSegment = .applied
       return true
     }
+    // 21 은 실제 방의 실제 메시지로 카드를 그린다 — 캡처는 특수 메시지가 있는 방을 넘긴다.
     if screen.matches("special-messages", "specialmessages") {
       selectedTab = .meetings
-      meetingsPath.append(MeetingsRoute.specialMessages)
+      meetingsPath.append(
+        MeetingsRoute.specialMessages(screen.identifier.flatMap(MoyeoRoomIDText.roomID(from:))))
       return true
     }
     if screen.matches("chat", "chat-room", "chatroom") {
@@ -126,19 +130,21 @@ struct UITestInitialState {
   private mutating func applyFeedRoute(_ screen: UITestScreenRequest) -> Bool {
     if screen.matches("feed-detail", "feeddetail", "feed-post", "feedpost") {
       selectedTab = .feed
-      let postID = screen.identifier ?? "feed-01"
-      feedPostID = MockData.feedPost(for: postID)?.id ?? postID
+      feedPostID = screen.identifier
       return true
     }
     if screen.matches("feed-write", "feedwrite", "write-feed", "writefeed") {
       selectedTab = .feed
       feedStartsWriting = true
+      feedWriteRoomID = screen.identifier.flatMap(Int64.init)
       return true
     }
     for step in 1...5 where screen.matches("feed-write-\(step)", "feedwrite\(step)") {
       selectedTab = .feed
       feedStartsWriting = true
       feedWriteInitialStep = step
+      // `feedwrite1:101` — 웹·안드로이드 캡처와 같은 방을 기록 대상으로 쓴다.
+      feedWriteRoomID = screen.identifier.flatMap(Int64.init)
       return true
     }
     return false
@@ -194,7 +200,8 @@ struct UITestInitialState {
     }
     if screen.matches("terms") {
       selectedTab = .home
-      homePath.append(SupportRoute.authTerms)
+      // 캡처 전용 화면을 두지 않는다 — 실제 가입 플로우의 약관 단계를 그대로 연다.
+      homePath.append(SupportRoute.authPreview(.profileTerms))
       return true
     }
     if screen.matches("auth", "signup") {
@@ -207,25 +214,22 @@ struct UITestInitialState {
       homePath.append(SupportRoute.notifications)
       return true
     }
+    // 16 은 **신청할 수 있는 모집**을 봐야 한다. 캡처가 그 방 id 를 넘기고,
+    // 화면이 `GET /chat-rooms/{roomId}` 로 직접 조회한다 — 세션의 모집 목록에서 찾지 않는다.
     if screen.matches("apply") {
       selectedTab = .home
-      homePath.append(SupportRoute.applicationSheet)
+      homePath.append(SupportRoute.applicationSheet(screen.identifier ?? ""))
       return true
     }
     if screen.matches("create", "create-recruitment", "createrecruitment") {
       selectedTab = .home
-      let requestedCourseID =
-        screen.identifier ?? MockData.courses.first?.id ?? "course-cheongsong-juwangsan"
-      let courseID = MockData.course(for: requestedCourseID)?.id ?? requestedCourseID
-      homePath.append(SupportRoute.createRecruitment(courseID))
+      // 코스는 플로우 1단계에서 서버 코스 중에 고른다 — 지정이 없으면 빈 값으로 연다
+      homePath.append(SupportRoute.createRecruitment(screen.identifier ?? ""))
       return true
     }
     if screen.matches("host", "host-manage", "hostmanage") {
       selectedTab = .home
-      // 화면기획 18 모집 관리의 기준 목데이터는 경주 단풍·야경(4/8명 · D-3)이다
-      let requestedTripID = screen.identifier ?? "trip-gyeongju-night"
-      let tripID = MockData.trip(for: requestedTripID)?.id ?? requestedTripID
-      homePath.append(SupportRoute.hostManage(tripID))
+      homePath.append(SupportRoute.hostManage(screen.identifier ?? ""))
       return true
     }
     if screen.matches("custom-course", "customcourse") {
@@ -248,9 +252,12 @@ struct UITestInitialState {
       homePath.append(SupportRoute.createDetail)
       return true
     }
+    // 17-4 는 폼 기본값(최대 5), 17-4a/17-4b 는 최대 인원을 타깃으로 받아 멘트 구간을 바꾼다.
+    // `create-people:4` → "말 트기 좋은 작은 그룹이에요", `create-people:10` → 친목 경고.
+    // 멘트 판정은 화면(RecruitmentPeopleView)이 하고, 여기서는 시작 인원만 넘긴다.
     if screen.matches("create-people", "createpeople") {
       selectedTab = .home
-      homePath.append(SupportRoute.createPeople)
+      homePath.append(SupportRoute.createPeople(screen.identifier.flatMap(Int.init)))
       return true
     }
     // 17-6 은 직접 만든 코스, 17-7 은 등록 코스 차용이다.
@@ -302,24 +309,25 @@ struct UITestInitialState {
     }
     if screen.matches("course-edit", "courseedit", "course-edit-custom") {
       selectedTab = .home
-      homePath.append(SupportRoute.courseEdit(screen.identifier ?? MockData.trips[0].id, .editable))
+      homePath.append(SupportRoute.courseEdit(screen.identifier ?? "", .editable))
       return true
     }
     if screen.matches("course-edit-linked", "courseeditlinked") {
       selectedTab = .home
       homePath.append(
-        SupportRoute.courseEdit(screen.identifier ?? MockData.trips[0].id, .linkedLocked))
+        SupportRoute.courseEdit(screen.identifier ?? "", .linkedLocked))
       return true
     }
     if screen.matches("course-edit-locked", "courseeditlocked") {
       selectedTab = .home
       homePath.append(
-        SupportRoute.courseEdit(screen.identifier ?? MockData.trips[0].id, .tripConfirmed))
+        SupportRoute.courseEdit(screen.identifier ?? "", .tripConfirmed))
       return true
     }
     if screen.matches("notice-history", "noticehistory") {
       selectedTab = .home
-      // 화면기획 20-3의 기준 목데이터는 주왕산 & 주산지 힐링 트레킹 채팅방이다
+      // 캡처는 실제 서버 방 id(`server-chat-101`)를 identifier 로 넘긴다.
+      // 아래 기본값은 identifier 없이 직접 열었을 때만 쓰는 진입 경로다 — 데이터를 바꾸지 않는다.
       homePath.append(
         SupportRoute.noticeHistory(screen.identifier ?? "chat-cheongsong-juwangsan"))
       return true
@@ -359,6 +367,16 @@ struct UITestInitialState {
       homePath.append(SupportRoute.chatAttach(screen.identifier ?? "chat-cheongsong-juwangsan"))
       return true
     }
+    // 20-2a~20-2f 첨부 작성 6종 (`attach-photo` … `attach-notice`).
+    // 라우트가 없어 여섯 자리 모두 **홈 화면**이 찍히고 있었다 — 픽셀·로딩 감사는 둘 다 통과했다.
+    // 캡처는 대상 방을 `server-chat-22` 형식으로 준다 (`LIVE_ROUTE_TARGETS`).
+    for kind in ChatAttachmentMenuView.AttachmentKind.allCases
+    where screen.matches("attach-\(kind.captureRouteName)", "attach\(kind.captureRouteName)") {
+      selectedTab = .home
+      homePath.append(
+        SupportRoute.attachComposer(screen.identifier ?? "chat-cheongsong-juwangsan", kind))
+      return true
+    }
     if screen.matches("friends") {
       selectedTab = .home
       homePath.append(SupportRoute.friends)
@@ -369,9 +387,17 @@ struct UITestInitialState {
       homePath.append(SupportRoute.tripMessage)
       return true
     }
+    // 아트보드 `report` 는 **피드 신고 시트**로 남는다 (정본 `REPORT-CANON.md` §1) —
+    // 서버가 받는 신고는 피드뿐이다. 그래서 캡처도 **피드 컨텍스트**로 열어야 한다.
+    // 대상 id 는 23 상세·23-1 댓글과 같은 `server-feed-{feedId}` 형식이다.
+    // 방 id(`22` 같은 옛 타깃)를 받으면 피드로 못 읽으므로 대표 피드로 떨어진다 —
+    // 그때도 채팅방 신고 시트를 열지 않는다(그런 화면은 이제 없다).
     if screen.matches("report") {
       selectedTab = .home
-      homePath.append(SupportRoute.report)
+      let postID = screen.identifier.flatMap { identifier in
+        ServerFeedMapper.feedID(fromPostID: identifier) == nil ? nil : identifier
+      }
+      homePath.append(SupportRoute.report(postID ?? "\(ServerFeedMapper.serverFeedIDPrefix)1"))
       return true
     }
     if screen.matches("states") {
@@ -440,6 +466,85 @@ struct UITestInitialState {
           screen.identifier ?? OSSLicenseCatalog.items.first?.name ?? ""))
       return true
     }
+    // ── 2026-08-30 네 번째 묶음 (정본 `ATTACH-COMPOSER-CANON.md` §6) ──
+    // 08-H 비밀번호 재설정은 실제 가입 플로우의 단계를 그대로 연다 — 캡처 전용 화면을 두지 않는다.
+    if screen.matches("password-reset", "passwordreset") {
+      selectedTab = .home
+      homePath.append(SupportRoute.authPreview(.passwordReset))
+      return true
+    }
+    // 29-5 계정 연결 — 설정의 `로그인 방식 › 관리` 가 여는 화면과 같은 것이다.
+    if screen.matches("account-providers", "accountproviders") {
+      selectedTab = .home
+      homePath.append(SupportRoute.accountProviders)
+      return true
+    }
+    if screen.matches("room-notif", "roomnotif", "room-notification") {
+      selectedTab = .home
+      homePath.append(
+        SupportRoute.roomNotification(screen.identifier ?? "chat-cheongsong-juwangsan"))
+      return true
+    }
+    if screen.matches("notice-edit", "noticeedit") {
+      selectedTab = .home
+      homePath.append(SupportRoute.noticeEdit(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("favorite-rooms", "favoriterooms") {
+      selectedTab = .home
+      homePath.append(SupportRoute.favoriteRooms)
+      return true
+    }
+    if screen.matches("kick-history", "kickhistory") {
+      selectedTab = .home
+      homePath.append(SupportRoute.kickHistory)
+      return true
+    }
+    if screen.matches("course-rating", "courserating") {
+      selectedTab = .home
+      homePath.append(SupportRoute.courseRating(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("trip-status", "tripstatus") {
+      selectedTab = .home
+      homePath.append(SupportRoute.tripStatus(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("meeting-edit", "meetingedit") {
+      selectedTab = .home
+      homePath.append(SupportRoute.meetingEdit(screen.identifier ?? ""))
+      return true
+    }
+    // 19-2 신청 취소 확인 · 29-1a 차단 해제 확인 · 27-2a 친구 정리는 이전 화면 위에 뜬 시트다.
+    // 캡처도 그 화면을 깔고 시트를 연 상태로 시작한다 (20-1a·20-1b 와 같은 방식).
+    // 19-2 는 세그먼트만 바꾸면 **신청이 0건일 때 아무 화면도 아닌 빈 목록**이 찍힌다 —
+    // 취소할 신청이 있으면 시트를, 없으면 제목이 있는 빈 상태를 그리는 화면으로 들어간다.
+    if screen.matches("apply-cancel", "applycancel") {
+      selectedTab = .meetings
+      meetingsInitialSegment = .applied
+      meetingsPath.append(
+        MeetingsRoute.applyCancel(
+          screen.identifier.flatMap { ServerTripMapper.roomID(fromThreadID: $0) ?? Int64($0) }))
+      return true
+    }
+    if screen.matches("unblock-confirm", "unblockconfirm") {
+      selectedTab = .home
+      homePath.append(SupportRoute.unblockConfirm)
+      return true
+    }
+    if screen.matches("friend-manage", "friendmanage") {
+      selectedTab = .home
+      homePath.append(SupportRoute.friendManage)
+      return true
+    }
+    // 31-1 참가자 나가기 — 새 화면이 아니라 31 을 역할로 가른 것이다.
+    // 역할은 서버 멤버 목록의 `me && host` 가 정한다 — 캡처 인자로 바꾸지 않는다.
+    if screen.matches("leave-member", "leavemember") {
+      selectedTab = .home
+      homePath.append(
+        SupportRoute.leaveConfirmation(screen.identifier ?? "chat-cheongsong-juwangsan"))
+      return true
+    }
     if screen.matches("feed-comments", "feedcomments") {
       selectedTab = .home
       // 기본 게시물은 다른 플랫폼과 같은 대표 피드(댓글 18)다
@@ -450,6 +555,14 @@ struct UITestInitialState {
   }
 
   private mutating func applyExploreRoute(_ screen: UITestScreenRequest) -> Bool {
+    // 12-1 검색 결과는 별도 화면이 아니라 SearchView 안의 결과 탭이다.
+    // 라우트가 없어서 캡처가 **홈 화면을 찍고 있었다** — 이동조차 안 했다.
+    // `search` 보다 먼저 봐야 한다 (`search-results` 도 `search` 로 매칭된다).
+    if screen.matches("search-results", "searchresults") {
+      selectedTab = .explore
+      explorePath.append(SupportRoute.search)
+      return true
+    }
     if screen.matches("search") {
       selectedTab = .explore
       explorePath.append(SupportRoute.search)
@@ -463,25 +576,30 @@ struct UITestInitialState {
     return false
   }
 
+  /// 코스 상세를 서버 코스 id 로 연다. 화면은 상세 API 로 스스로 채운다 —
+  /// id 를 안 주면 열 코스가 없으므로 아무 데도 가지 않는다 (NO-MOCK-CANON R2).
   private mutating func appendCourse(_ id: String?) {
-    let courseID = id ?? "course-cheongsong-juwangsan"
-    if let course = MockData.course(for: courseID) ?? MockData.courses.first {
-      homePath.append(course)
-    }
+    guard let courseID = id.flatMap(Int64.init) else { return }
+    homePath.append(ServerCourseMapper.stubCourse(serverCourseID: courseID))
   }
 
+  /// 모집 상세를 서버 roomId 로 연다. 나머지 값은 상세 API 가 채운다.
   private mutating func appendTrip(_ id: String?) {
-    let tripID = id ?? "trip-cheongsong-juwangsan"
-    if let trip = MockData.trip(for: tripID) ?? MockData.trips.first {
-      homePath.append(trip)
-    }
+    guard let roomID = id.flatMap(Int64.init) else { return }
+    homePath.append(ServerTripMapper.placeholderTrip(roomID: roomID))
+  }
+
+  /// 캡처 라우트가 `profile:62` 처럼 대상 유저를 지정하면 그 유저로 연다.
+  /// 지정이 없으면 그릴 근거가 없다 — 카드 대신 빈 상태를 그린다 (NO-MOCK-CANON R2).
+  private static func profileSubject(_ identifier: String?) -> ProfileCardSubject {
+    guard let userID = identifier.flatMap(Int64.init) else { return .unavailable }
+    // 닉네임 등 나머지는 공개 프로필 API 로 채워진다 — 여기서는 id 만 넘긴다.
+    return .serverUser(ProfileCardUserReference(userID: userID, nickname: ""))
   }
 
   private mutating func appendChat(_ id: String?) {
-    let chatID = id ?? "chat-cheongsong-juwangsan"
-    if let thread = MockData.chatThread(for: chatID) ?? MockData.chatThreads.first {
-      meetingsPath.append(thread)
-    }
+    guard let roomID = id.flatMap(Int64.init) else { return }
+    meetingsPath.append(ServerTripMapper.stubThread(serverRoomID: roomID))
   }
 }
 // swiftlint:enable type_body_length

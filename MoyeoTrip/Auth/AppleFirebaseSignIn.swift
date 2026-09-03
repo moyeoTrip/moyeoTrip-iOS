@@ -100,6 +100,12 @@ private final class AppleAuthorizationCoordinator: NSObject,
         controller: ASAuthorizationController,
         didCompleteWithError error: Error
     ) {
+        // 사용자가 애플 로그인 시트를 닫은 것은 실패가 아니다 (AUTH-SILENT-CASES-CANON R1).
+        // SDK 오류를 그대로 흘리면 화면이 "user canceled" 를 오류로 그린다.
+        if (error as? ASAuthorizationError)?.code == .canceled {
+            finish(.failure(AuthIdentityError.canceledByUser))
+            return
+        }
         finish(.failure(error))
     }
 

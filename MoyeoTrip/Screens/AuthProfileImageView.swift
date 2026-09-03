@@ -109,34 +109,32 @@ struct AuthProfileImageView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else {
-                GeometryReader { proxy in
-                    let spacing: CGFloat = 10
-                    let thirdWidth = (proxy.size.width - spacing * 2) / 3
-                    let tileWidth = candidates.count == 1
-                        ? thirdWidth
-                        : (proxy.size.width - spacing * CGFloat(candidates.count - 1)) / CGFloat(candidates.count)
-
-                    HStack(spacing: spacing) {
+                // 타일은 **정사각**이다 — 후보 이미지가 정사각이라 겉 테두리도 정사각이라야
+                // 이미지와 맞는다. 예전에는 `GeometryReader` 로 폭을 재고 높이를 132/200 으로
+                // 하드코딩했는데, 그러면 ① 겉 카드가 1:1.16 이라 이미지 위아래로 여백이 남아
+                // 테두리가 세로로 길쭉해 보이고(사용자가 발견) ② 컨테이너 폭이 바뀌면
+                // 하드코딩 높이와 실제 타일 높이가 어긋났다.
+                // `aspectRatio` 로 폭에서 높이를 파생시켜 둘 다 없앴다.
+                HStack(spacing: 10) {
+                    if candidates.count == 1 {
+                        // 1개는 가운데(폭 1/3) — 좌우에 같은 비율의 빈 칸을 둬 3등분을 만든다.
+                        Color.clear.aspectRatio(1, contentMode: .fit)
+                        profileCandidate(candidates[0], index: 0)
+                        Color.clear.aspectRatio(1, contentMode: .fit)
+                    } else {
+                        // 2개는 좌우 절반, 3개는 3등분 — HStack 이 폭을 균등 분배한다.
                         ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
-                            profileCandidate(candidate, index: index, width: tileWidth)
+                            profileCandidate(candidate, index: index)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .frame(height: candidateTileHeight)
             }
         }
     }
 
-    private var candidateTileHeight: CGFloat {
-        // 3등분 타일 폭(대략)에 1:1.16 비율을 적용한 높이
-        candidates.count == 1 ? 132 : (candidates.count == 2 ? 200 : 132)
-    }
-
     private func profileCandidate(
         _ candidate: AuthProfileImageCandidate,
-        index: Int,
-        width: CGFloat
+        index: Int
     ) -> some View {
         let isSelected = selectedCandidateID == candidate.id
         return Button {
@@ -160,7 +158,8 @@ struct AuthProfileImageView: View {
                 }
             }
             .padding(10)
-            .frame(width: width, height: width * 1.16)
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
             .background(isSelected ? MoyeoTheme.leaf : MoyeoTheme.card)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {

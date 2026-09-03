@@ -105,61 +105,6 @@ extension AuthServiceProvider {
         "auth.login.\(pathComponent)"
     }
 }
-enum AuthNicknameOption: String, CaseIterable, Identifiable {
-    case deer
-    case turtle
-    case raccoon
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .deer:
-            return "따스한 사슴 3492"
-        case .turtle:
-            return "잔잔한 거북이 1108"
-        case .raccoon:
-            return "호기심 많은 너구리 9027"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .deer:
-            return "처음 만난 사람에게도 다정하게 말을 건네요"
-        case .turtle:
-            return "무리하지 않는 속도로 여행을 즐겨요"
-        case .raccoon:
-            return "새로운 골목과 맛집을 먼저 찾아봐요"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .deer:
-            return "leaf.fill"
-        case .turtle:
-            return "tortoise.fill"
-        case .raccoon:
-            return "pawprint.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .deer:
-            return MoyeoTheme.forest
-        case .turtle:
-            return MoyeoTheme.river
-        case .raccoon:
-            return MoyeoTheme.coral
-        }
-    }
-
-    var accessibilityIdentifier: String {
-        "auth.nickname.option.\(rawValue)"
-    }
-}
 
 struct AuthBirthdate: Equatable {
     let date: Date
@@ -225,7 +170,7 @@ enum AuthTerm: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .age:
-            return "만 14세 이상"
+            return "만 18세 이상"
         case .service:
             return "이용약관 동의"
         case .privacy:

@@ -8,7 +8,6 @@ extension ProfileSummary {
         ProfileSummary(
             name: authenticatedProfile.nickname,
             handle: handle,
-            avatar: avatar,
             profileImageURL: authenticatedProfile.profileImageURL,
             region: region,
             badges: badges,
@@ -36,7 +35,6 @@ extension ProfileSummary {
         ProfileSummary(
             name: name,
             handle: handle,
-            avatar: avatar,
             profileImageURL: profileImageURL,
             region: region,
             badges: badges,
@@ -115,7 +113,7 @@ extension TripRecruitment {
             routeSummary: itinerary,
             courseSource: courseSource,
             isCurrentUserHost: true,
-            courseName: MockData.course(for: courseID)?.title ?? courseID,
+            courseName: serverCourseTitle ?? "",
             price: price,
             recruitmentDeadline: recruitmentDeadline,
             ageRange: ageRangeText,

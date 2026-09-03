@@ -27,8 +27,16 @@ struct KoreanBirthdateField: View {
     @Binding var selection: AuthBirthdate?
     @State private var showsPicker = false
 
-    private var selectedDate: Date {
+    /// 피커를 열 때의 시작 위치. 값이 아직 없으면 화면기획의 기준 날짜에서 시작한다 —
+    /// 오늘 날짜에서 시작하면 사용자가 수십 년을 스크롤해야 한다.
+    private var pickerStartDate: Date {
         selection?.date ?? AuthBirthdate.april1998.date
+    }
+
+    /// 아직 고르지 않았음을 그대로 보여준다.
+    private var displayText: String {
+        guard let selection else { return "생년월일을 선택해주세요" }
+        return Self.displayFormatter.string(from: selection.date)
     }
 
     var body: some View {
@@ -44,9 +52,9 @@ struct KoreanBirthdateField: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(Self.displayFormatter.string(from: selectedDate))
+                    Text(displayText)
                         .font(MoyeoTypography.cardTitle)
-                        .foregroundStyle(MoyeoTheme.ink)
+                        .foregroundStyle(selection == nil ? MoyeoTheme.muted : MoyeoTheme.ink)
                 }
 
                 Spacer(minLength: 8)
@@ -66,20 +74,21 @@ struct KoreanBirthdateField: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("생년월일")
-        .accessibilityValue(Self.displayFormatter.string(from: selectedDate))
+        .accessibilityValue(displayText)
         .accessibilityIdentifier("auth.basic.birthdate")
-        .onAppear {
-            if selection == nil {
-                selection = .april1998
-            }
-        }
+        // 화면에 뜨는 것만으로 기본값을 확정하지 않는다.
+        // 이전에는 여기서 1998-04-12(화면기획 샘플 값)를 넣어, 사용자가 생년월일을 한 번도
+        // 고르지 않아도 그 날짜가 그대로 가입 요청에 실려 나갔다. 나이 확인이 무의미해진다.
         .sheet(isPresented: $showsPicker) {
-            KoreanBirthdatePickerSheet(initialDate: selectedDate) { date in
+            KoreanBirthdatePickerSheet(initialDate: pickerStartDate) { date in
                 selection = AuthBirthdate(date: date)
                 showsPicker = false
             }
             .presentationDetents([.height(430)])
             .presentationDragIndicator(.visible)
+            // 시트는 기본적으로 시스템 배경을 깔아, 손잡이가 있는 상단 띠와 아래 여백이
+            // 본문과 다른 색으로 보인다. 시트 배경 자체를 앱 배경색으로 맞춘다.
+            .presentationBackground(MoyeoTheme.background)
         }
     }
 
@@ -131,7 +140,9 @@ private struct KoreanBirthdatePickerSheet: View {
             .padding(.horizontal, 20)
             .frame(height: 56)
 
-            Text("\(year)년 \(month)월 \(day)일")
+            // Text 의 기본 보간은 LocalizedStringKey 라서 Int 에 천단위 구분자가 붙는다("1,997년").
+            // 연도·월·일은 수치가 아니라 표기이므로 verbatim 으로 그린다.
+            Text(verbatim: "\(year)년 \(month)월 \(day)일")
                 .font(MoyeoTypography.sectionTitle)
                 .foregroundStyle(MoyeoTheme.ink)
                 .padding(.top, 8)
@@ -159,7 +170,8 @@ private struct KoreanBirthdatePickerSheet: View {
     private func componentPicker(title: String, selection: Binding<Int>, values: [Int]) -> some View {
         Picker(title, selection: selection) {
             ForEach(values, id: \.self) { value in
-                Text("\(value)\(title)")
+                // 여기도 verbatim — 그러지 않으면 연도가 "1,997년" 으로 나온다.
+                Text(verbatim: "\(value)\(title)")
                     .font(MoyeoTypography.body)
                     .tag(value)
             }

@@ -66,13 +66,24 @@ struct ServerCreateChatRoomResponse: Decodable, Equatable {
 
 extension ChatRoomAPIClient {
     /// 17 모집 만들기 — multipart(`request` 파트가 application/json). 응답의 `roomId` 로 15 모집 상세로 이동한다.
-    /// 썸네일은 선택 파트이고, 화면에 이미지 선택 단계가 없어 보내지 않는다.
-    func create(request: ServerCreateChatRoomRequest) async throws -> ServerCreateChatRoomResponse {
+    ///
+    /// 2026-08-26 서버 변경으로 `thumbnail` 파트가 **필수**다(없으면 400 `40041`
+    /// "채팅방 썸네일 이미지는 필수입니다"). 화면에 사진 선택 단계가 없어서,
+    /// 사진이 없을 때 쓰는 공용 플레이스홀더(16:9)를 올린다.
+    /// `thumbnail` 을 주지 않으면 공용 플레이스홀더를 만들어 올린다.
+    ///
+    /// 기본 인자 표현식으로 두지 않는다 — 기본 인자는 nonisolated 문맥에서 평가되는데
+    /// `roomThumbnail()` 은 `UIImage` 를 쓰는 MainActor 격리 함수라 경고가 난다.
+    func create(
+        request: ServerCreateChatRoomRequest,
+        thumbnail: MoyeoMultipartFile? = nil
+    ) async throws -> ServerCreateChatRoomResponse {
         try await api.sendMultipart(
             "/api/v1/chat-rooms",
             method: "POST",
             jsonPartName: "request",
-            jsonPart: request
+            jsonPart: request,
+            file: thumbnail ?? MoyeoPlaceholderImage.roomThumbnail()
         )
     }
 }

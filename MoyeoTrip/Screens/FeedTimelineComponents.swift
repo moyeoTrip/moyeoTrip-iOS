@@ -31,24 +31,47 @@ struct FeedPhotoPreview: View {
     let post: FeedPost
     var height: CGFloat = 166
 
-    var body: some View {
-        if let photoURL = post.photoURL {
-            // 실서버 피드 — 서버가 준 첫 번째 사진을 그린다
-            CachedRemoteImage(url: photoURL) { image in
-                image
-                    .resizable()
-                    .scaledToFill()
-            } placeholder: {
-                MoyeoTheme.leaf
-            }
+    /// 사진 한 칸.
+    ///
+    /// **이미지에 직접 `frame` 을 걸면 안 된다.** `scaledToFill()` 한 이미지는 고유 크기가
+    /// 원본 크기라서, `frame(maxWidth: .infinity)` 를 붙여도 부모가 그 고유 폭을 이상적 크기로
+    /// 삼아 **카드 전체가 화면보다 넓어진다.** 실제로 iOS 발견 탭에서 사진 2장짜리 피드의
+    /// 닉네임·제목까지 좌우가 잘렸다(사용자가 발견).
+    ///
+    /// `Color.clear` 는 폭·높이를 스스로 주장하지 않으므로 칸 크기를 이것으로 정하고,
+    /// 이미지는 `overlay` 로 얹어 레이아웃에 영향을 주지 못하게 한 뒤 `clipped()` 로 자른다.
+    @ViewBuilder
+    private func photoCell(url: URL?, shape: MoyeoPlaceholderImage.Shape) -> some View {
+        Color.clear
             .frame(maxWidth: .infinity)
             .frame(height: height)
+            .overlay {
+                CachedRemoteImage(url: url, fallbackShape: shape) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    MoyeoTheme.leaf
+                }
+            }
             .clipped()
+    }
+
+    var body: some View {
+        if post.photoURLs.count > 1 {
+            // 웹 · 안드로이드와 같이 앞의 2장을 2px 간격으로 나란히 그린다.
+            HStack(spacing: 2) {
+                ForEach(post.photoURLs.prefix(2), id: \.self) { url in
+                    photoCell(url: url, shape: .square)
+                }
+            }
+        } else if let photoURL = post.photoURL {
+            // 실서버 피드 — 서버가 준 첫 번째 사진을 그린다
+            photoCell(url: photoURL, shape: .landscape)
         } else if post.isServerBacked {
-            // 사진이 없는 서버 피드 — 빈 배경만 둔다
-            MoyeoTheme.leaf
-                .frame(maxWidth: .infinity)
-                .frame(height: height)
+            // 사진이 없는 서버 피드는 **사진 자리를 아예 두지 않는다** — 웹 · 안드로이드가 그렇다.
+            // 예전에는 공용 플레이스홀더(16:9)로 채워 없는 사진이 있는 것처럼 보였다 (R1).
+            EmptyView()
         } else {
             MoyeoPhotoTile(
                 mascot: post.photoMascot,
@@ -88,9 +111,9 @@ extension FeedPost {
     }
 
     /// changeLog18 — 작성자 아바타·닉네임을 누르면 열리는 25 프로필 카드 대상.
-    /// 목데이터 피드는 유저 id 가 없어 화면기획 기준 카드를 그린다(웹 프로토타입과 같다).
+    /// 유저 id 를 모르는 피드는 카드에 그릴 근거가 없다.
     var authorProfileSubject: ProfileCardSubject {
-        guard let serverAuthorID else { return .planningMock }
+        guard let serverAuthorID else { return .unavailable }
         return .serverUser(
             ProfileCardUserReference(
                 userID: serverAuthorID,
@@ -98,6 +121,11 @@ extension FeedPost {
                 profileImageUrl: authorAvatarURL?.absoluteString
             )
         )
+    }
+
+    /// 사진 자리를 그릴지 — 서버 피드는 실제 사진이 있을 때만이다.
+    var hasFeedPhoto: Bool {
+        !isServerBacked || photoURL != nil || !photoURLs.isEmpty
     }
 
     var feedTitle: String {
@@ -129,90 +157,6 @@ extension FeedPost {
     }
 }
 
-struct FeedRouteMap: View {
-    let route: [String]
-    let mood: CourseMood
-
-    var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            let points = routePoints(in: size)
-            let dotSize = max(10, size.height * 0.08)
-
-            ZStack {
-                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                    .fill(routeMapBackground)
-
-                ForEach(0..<4, id: \.self) { index in
-                    Rectangle()
-                        .fill(routeMapLine)
-                        .frame(height: 1)
-                        .frame(width: size.width * 0.72)
-                        .position(x: size.width * 0.58, y: size.height * (0.22 + CGFloat(index) * 0.17))
-                }
-
-                Path { path in
-                    guard let first = points.first else { return }
-                    path.move(to: first)
-                    if points.count > 1 {
-                        path.addCurve(
-                            to: points[1],
-                            control1: CGPoint(x: size.width * 0.30, y: size.height * 0.38),
-                            control2: CGPoint(x: size.width * 0.36, y: size.height * 0.62)
-                        )
-                    }
-                    if points.count > 2 {
-                        path.addCurve(
-                            to: points[2],
-                            control1: CGPoint(x: size.width * 0.56, y: size.height * 0.60),
-                            control2: CGPoint(x: size.width * 0.62, y: size.height * 0.35)
-                        )
-                    }
-                }
-                .stroke(
-                    MoyeoTheme.forest,
-                    style: StrokeStyle(lineWidth: max(3, size.height * 0.045), lineCap: .round)
-                )
-
-                ForEach(Array(points.enumerated()), id: \.offset) { index, point in
-                    Text("\(index + 1)")
-                        .font(.system(size: max(7, dotSize * 0.45), weight: .heavy))
-                        .foregroundStyle(.white)
-                        .frame(width: dotSize, height: dotSize)
-                        .background(Circle().fill(index == 0 ? MoyeoTheme.forest : routeMapDot))
-                        .overlay(Circle().stroke(routeMapBackground, lineWidth: max(2, dotSize * 0.24)))
-                        .position(point)
-                }
-            }
-        }
-    }
-
-    private var routeMapBackground: Color {
-        adaptiveColor(light: "#EAF3E6", dark: "#14231A")
-    }
-
-    private var routeMapLine: Color {
-        adaptiveColor(light: "#D7E1D8", dark: "#2C3C34")
-    }
-
-    private var routeMapDot: Color {
-        MoyeoTheme.forest
-    }
-
-    private func routePoints(in size: CGSize) -> [CGPoint] {
-        Array(route.prefix(3).enumerated()).map { index, _ in
-            switch index {
-            case 0:
-                return CGPoint(x: size.width * 0.25, y: size.height * 0.62)
-            case 1:
-                return CGPoint(x: size.width * 0.50, y: size.height * 0.52)
-            default:
-                return CGPoint(x: size.width * 0.74, y: size.height * 0.36)
-            }
-        }
-    }
-}
-
 /// 오프라인 홈의 "저장해둔 코스" 구간.
 ///
 /// 실시간 추천과 인기 순위는 네트워크 없이 만들 수 없으므로, 오프라인에서는
@@ -234,33 +178,12 @@ struct OfflineSavedCourseSection: View {
                 Spacer(minLength: 0)
             }
 
-            ForEach(MockData.courses.prefix(3)) { course in
-                NavigationLink(value: course) {
-                    HStack(spacing: 12) {
-                        MoyeoPhotoTile(mascot: course.mascot, mood: course.mood, height: 62, cornerRadius: 10)
-                            .frame(width: 62)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(course.title)
-                                .font(.subheadline.weight(.heavy))
-                                .foregroundStyle(MoyeoTheme.ink)
-                                .lineLimit(1)
-                            Text("\(course.region) · \(course.duration) \(course.distance)")
-                                .font(.caption)
-                                .foregroundStyle(MoyeoTheme.muted)
-                            Text("어제 저장됨")
-                                .font(.caption2)
-                                .foregroundStyle(MoyeoTheme.text400)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(10)
-                    .background(MoyeoTheme.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("home.offline.saved.\(course.id)")
-            }
+            // 오프라인에 저장해둔 코스를 읽는 캐시가 아직 없다 — 목록을 지어내지 않고 빈 상태를 그린다
+            MoyeoEmptyStateView(
+                message: "저장해둔 코스가 없어요.",
+                systemImage: "square.and.arrow.down",
+                accessibilityIdentifier: "home.offline.saved.empty"
+            )
 
             VStack(alignment: .leading, spacing: 10) {
                 Label("모집 신청 · 새 모집 만들기", systemImage: "person.2.fill")

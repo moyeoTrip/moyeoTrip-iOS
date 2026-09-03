@@ -100,12 +100,26 @@ enum MyRoute: Hashable {
 }
 
 enum MeetingsRoute: Hashable {
-    case specialMessages
+    /// 21 특수 메시지 카드 6종. 값은 카드를 뽑아 올 방 — 없으면 그릴 실제 메시지가 없다.
+    case specialMessages(Int64?)
+    /// 19-2 참가 신청 취소 확인. 값은 대상 방 — 없으면 내 신청 목록의 첫 건을 쓴다.
+    case applyCancel(Int64?)
 }
 
 // swiftlint:disable:next type_body_length
 struct ContentView: View {
     @StateObject private var connectivity: MoyeoConnectivity
+    /// 탭 데이터는 탭 본문보다 오래 살아야 한다 — 여기 두면 탭을 오가도 다시 부르지 않는다
+    /// (TAB-STATE-CANON R1). 로그아웃·계정 전환 때 비운다 (R4).
+    @StateObject private var tabData: MoyeoTabDataStore
+
+    /// 하단 `모임` 탭의 알림 점 — 참여 중인 방에 **읽지 않은 메시지가 있을 때만** 켠다.
+    /// 근거는 `GET /chat-rooms/my` 의 `unreadMessageCount` 하나뿐이다.
+    /// 목록을 아직 못 받았으면(nil) 켜지 않는다 — 모르는 상태를 "알림 있음" 으로 보이면 안 된다.
+    private var hasMeetingAlert: Bool {
+        guard let rooms = tabData.meetingRooms else { return false }
+        return rooms.contains { ($0.unreadMessageCount ?? 0) > 0 }
+    }
     /// 29 설정 › 화면 › 테마의 사용자 설정. 캡처의 강제 테마가 항상 이긴다.
     @ObservedObject private var themeStore = MoyeoThemeStore.shared
     @State private var selectedTab: MoyeoTab
@@ -116,18 +130,19 @@ struct ContentView: View {
     @State private var feedPath = NavigationPath()
     @State private var myPath = NavigationPath()
     @State private var isBottomNavigationSuppressed = false
-    @State private var feedPosts = MockData.feedPosts
-    @State private var chatThreads = MockData.chatThreads
-    @State private var trips = MockData.trips
-    @State private var profile = MockData.profile
+    /// 세션 안에서 만들어진 값만 담는다. 서버에서 오는 목록은 각 화면이 직접 받는다.
+    @State private var feedPosts: [FeedPost] = []
+    @State private var chatThreads: [ChatThread] = []
+    @State private var trips: [TripRecruitment] = []
+    @State private var profile = ProfileSummary.empty
     @State private var appliedTripIDs: Set<String> = []
     @State private var isAuthenticated: Bool
     private let currentUserService: AuthCurrentUserService
     private let initialFeedPostID: String?
     private let initialFeedStartsWriting: Bool
     private let initialFeedWriteStep: Int
-    private let exploreStartsInMap: Bool
-    private let meetingsInitialSegment: MeetingSegment
+    /// 24-1~24-5 캡처가 지정한 기록 대상 방
+    private let initialFeedWriteRoomID: Int64?
     private let forcedColorScheme: ColorScheme?
     private let keepsSplashVisibleForCapture: Bool
     private let splashHoldNanoseconds: UInt64 = 1_150_000_000
@@ -137,17 +152,23 @@ struct ContentView: View {
         let launchState = UITestInitialState(arguments: arguments)
         let keepsSplashVisibleForCapture = arguments.contains("UITEST_MODE")
             && arguments.contains("UITEST_SCREEN=splash")
-        UITestCaptureSeed.prepare(arguments: arguments)
+        // 라이브 캡처(UITEST_LIVE_DATA)에서만 세션을 심는다. 목 캡처는 건드리지 않는다.
+        UITestRuntime.prepareLiveSessionIfNeeded()
         let currentUserService = AuthCurrentUserService()
         self.currentUserService = currentUserService
         _connectivity = StateObject(wrappedValue: MoyeoConnectivity(arguments: arguments))
+        // 캡처 진입(지도 탐색·모임 세그먼트)은 보관소 초기값으로 넣는다 —
+        // 화면이 만들어질 때마다 다시 적용되면 사용자가 고른 값을 덮어쓴다.
+        let tabData = MoyeoTabDataStore(exploreShowsMap: launchState.exploreStartsInMap)
+        tabData.meetingSegment = launchState.meetingsInitialSegment
+        _tabData = StateObject(wrappedValue: tabData)
 
         _selectedTab = State(initialValue: launchState.selectedTab)
         _isShowingSplash = State(
             initialValue: !arguments.contains("UITEST_MODE") || keepsSplashVisibleForCapture
         )
         _profile = State(
-            initialValue: currentUserService.cachedProfile().map(MockData.profile.applying) ?? MockData.profile
+            initialValue: currentUserService.cachedProfile().map(ProfileSummary.empty.applying) ?? .empty
         )
         _isAuthenticated = State(
             initialValue: arguments.contains("UITEST_MODE") && !arguments.contains("UITEST_REQUIRE_AUTH")
@@ -159,8 +180,7 @@ struct ContentView: View {
         initialFeedPostID = launchState.feedPostID
         initialFeedStartsWriting = launchState.feedStartsWriting
         initialFeedWriteStep = launchState.feedWriteInitialStep
-        exploreStartsInMap = launchState.exploreStartsInMap
-        meetingsInitialSegment = launchState.meetingsInitialSegment
+        initialFeedWriteRoomID = launchState.feedWriteRoomID
         // 번호별 비교 캡처는 다크/라이트 두 테마를 모두 찍는다 — 양쪽 모두 명시 인자를 받는다
         if arguments.contains("UITEST_FORCE_DARK") {
             forcedColorScheme = .dark
@@ -172,13 +192,10 @@ struct ContentView: View {
         self.keepsSplashVisibleForCapture = keepsSplashVisibleForCapture
     }
 
-    /// 캡처 모드는 사용자 설정을 무시하고 강제 테마만 쓴다. 그 밖에는 설정 › 화면 › 테마를 따른다
+    /// 강제 테마 인자가 있으면 그것을, 없으면 설정 › 화면 › 테마를 따른다
     /// (`system` = nil → OS 설정을 그대로 따라가고 런타임 변경에도 즉시 반응한다).
     private var effectiveColorScheme: ColorScheme? {
-        if UITestPlanningMockData.isActive {
-            return forcedColorScheme
-        }
-        return forcedColorScheme ?? themeStore.mode.colorScheme
+        forcedColorScheme ?? themeStore.mode.colorScheme
     }
 
     var body: some View {
@@ -243,6 +260,37 @@ struct ContentView: View {
             guard isAuthenticated, let destination = notification.object as? MoyeoPushDestination else { return }
             openPushDestination(destination)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .moyeoSignupGateRequired)) { _ in
+            returnToSignupFlow()
+        }
+    }
+
+    /// 서버가 409 `40902`·`40918` 로 "가입이 아직 안 끝났다"고 알려온 경우 (정본 R1).
+    ///
+    /// 어느 단계로 갈지는 여기서 정하지 않는다 — 가입 흐름이 다시 뜨면서
+    /// `restoreSession()` 이 서버 `signupState` 를 받아 그대로 따라간다(R3).
+    /// 오류 코드보다 `signupState` 가 먼저다.
+    private func returnToSignupFlow() {
+        guard isAuthenticated else { return }
+        // 가입 화면 뒤에 이전 세션의 화면 스택이 남아 있으면, 가입을 마친 뒤 남의 화면으로 돌아간다.
+        clearSessionScopedState()
+        isAuthenticated = false
+    }
+
+    /// 로그아웃·계정 전환·가입 게이트 복귀에서 이전 사용자의 흔적을 모두 지운다 (TAB-STATE-CANON R4).
+    /// 보관소가 살아 있으면 다음 로그인 화면에 남의 목록·프로필이 그대로 남는다.
+    private func clearSessionScopedState() {
+        homePath = NavigationPath()
+        explorePath = NavigationPath()
+        meetingsPath = NavigationPath()
+        feedPath = NavigationPath()
+        myPath = NavigationPath()
+        tabData.reset()
+        feedPosts = []
+        chatThreads = []
+        trips = []
+        appliedTripIDs = []
+        profile = .empty
     }
 
     @ViewBuilder
@@ -280,7 +328,7 @@ struct ContentView: View {
         selectedRoot
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if shouldShowBottomNav {
-                    MoyeoBottomNav(selectedTab: $selectedTab)
+                    MoyeoBottomNav(selectedTab: $selectedTab, hasMeetingAlert: hasMeetingAlert)
                 }
             }
             .background(MoyeoTheme.background.ignoresSafeArea())
@@ -293,7 +341,8 @@ struct ContentView: View {
         case .explore:
             return explorePath.isEmpty && !isBottomNavigationSuppressed
         case .meetings:
-            return meetingsPath.isEmpty
+            // 19-2 신청 취소 확인 시트가 열려 있으면 탭바가 시트 버튼을 가린다.
+            return meetingsPath.isEmpty && !isBottomNavigationSuppressed
         case .feed:
             return !initialFeedStartsWriting && feedPath.isEmpty && !isBottomNavigationSuppressed
         case .my:
@@ -307,6 +356,7 @@ struct ContentView: View {
         case .home:
             NavigationStack(path: $homePath) {
                 HomeView(
+                    tabData: tabData,
                     isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
                     feedPosts: $feedPosts,
                     tripContext: tripContext,
@@ -318,40 +368,47 @@ struct ContentView: View {
         case .explore:
             NavigationStack(path: $explorePath) {
                 ExploreView(
+                    tabData: tabData,
                     isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
-                    tripContext: tripContext,
-                    startsInMap: exploreStartsInMap
+                    tripContext: tripContext
                 )
             }
         case .meetings:
             NavigationStack(path: $meetingsPath) {
                 MeetingsView(
+                    tabData: tabData,
                     chatThreads: $chatThreads,
-                    tripContext: tripContext,
-                    initialSegment: meetingsInitialSegment
+                    isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
+                    tripContext: tripContext
                 )
             }
         case .feed:
             if initialFeedStartsWriting {
                 NavigationStack {
-                    FeedWriteView(initialStep: initialFeedWriteStep) { post in
+                    FeedWriteView(
+                        initialStep: initialFeedWriteStep,
+                        requestedRoomID: initialFeedWriteRoomID
+                    ) { post in
                         registerFeedPost(post)
                     }
                 }
             } else {
                 NavigationStack(path: $feedPath) {
                     FeedView(
+                        tabData: tabData,
                         feedPosts: $feedPosts,
                         isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
                         onPublish: registerFeedPost,
                         initialPostID: initialFeedPostID,
-                        feedWriteInitialStep: initialFeedWriteStep
+                        feedWriteInitialStep: initialFeedWriteStep,
+                        feedWriteRoomID: initialFeedWriteRoomID
                     )
                 }
             }
         case .my:
             NavigationStack(path: $myPath) {
                 MyView(
+                    tabData: tabData,
                     path: $myPath,
                     tripContext: tripContext,
                     profile: profile,
@@ -364,11 +421,7 @@ struct ContentView: View {
 
     private func requireAuthentication() {
         selectedTab = .home
-        homePath = NavigationPath()
-        explorePath = NavigationPath()
-        meetingsPath = NavigationPath()
-        feedPath = NavigationPath()
-        myPath = NavigationPath()
+        clearSessionScopedState()
         isBottomNavigationSuppressed = false
         withAnimation(UITestRuntime.reducesVisualAnimations ? nil : .easeInOut(duration: 0.28)) {
             isAuthenticated = false
@@ -508,7 +561,7 @@ struct ContentView: View {
         var updated = thread
         updated.pinnedNotices.insert(notice, at: 0)
         updated.pinnedNotices = Array(updated.pinnedNotices.prefix(3))
-        upsertChatThread(updated.withSystemNotice("공지: \(notice.title) · \(notice.body)"), prioritize: true)
+        upsertChatThread(updated.withSystemNotice("공지: \(notice.body)"), prioritize: true)
     }
 
     private func cancelTripApplication(_ trip: TripRecruitment) {
@@ -526,7 +579,6 @@ struct ContentView: View {
     private func chatThread(for trip: TripRecruitment) -> ChatThread? {
         chatThreads.first { $0.id == trip.sessionChatID }
             ?? chatThreads.first { $0.tripTitle == trip.title && !$0.isReadOnly }
-            ?? MockData.chatThread(forTripID: trip.id)
     }
 
     private func upsertTrip(_ trip: TripRecruitment, prioritize: Bool) {
@@ -556,6 +608,8 @@ struct ContentView: View {
 
 private struct MoyeoBottomNav: View {
     @Binding var selectedTab: MoyeoTab
+    /// 모임 탭 알림 점. **읽지 않은 메시지가 있을 때만** 켠다.
+    let hasMeetingAlert: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -563,7 +617,11 @@ private struct MoyeoBottomNav: View {
                 Button {
                     selectedTab = tab
                 } label: {
-                    MoyeoBottomNavItem(tab: tab, isSelected: selectedTab == tab)
+                    MoyeoBottomNavItem(
+                        tab: tab,
+                        isSelected: selectedTab == tab,
+                        showsAlert: tab == .meetings && hasMeetingAlert
+                    )
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
@@ -587,6 +645,7 @@ private struct MoyeoBottomNav: View {
 private struct MoyeoBottomNavItem: View {
     let tab: MoyeoTab
     let isSelected: Bool
+    let showsAlert: Bool
 
     var body: some View {
         VStack(spacing: 4) {
@@ -596,7 +655,9 @@ private struct MoyeoBottomNavItem: View {
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 28, height: 23)
 
-                if tab == .meetings {
+                // 예전에는 `tab == .meetings` 만 보고 **조건 없이 항상** 점을 그렸다.
+                // 알림이 하나도 없어도 초록 점이 계속 떠 있어 사용자가 지적했다.
+                if showsAlert {
                     Circle()
                         .fill(MoyeoTheme.forest)
                         .frame(width: 6, height: 6)

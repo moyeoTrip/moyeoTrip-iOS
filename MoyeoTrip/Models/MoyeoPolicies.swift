@@ -70,11 +70,14 @@ enum WeatherHeroPolicy {
         WeatherCondition.allCases.map { content(for: $0).imageAsset }
     }
 
+    // 생성 이미지는 HEIC 로 들어 있다(2026-08-26 용량 절감으로 PNG → HEIC 교체).
+    // 이 파일명은 런타임 로딩에 쓰이지 않는다 — 카탈로그는 이미지셋 이름으로 해석된다.
+    // 카탈로그와 선언이 어긋나는 것을 테스트가 잡도록 실제 확장자를 적어 둔다.
     private static func generatedAsset(named fileBaseName: String) -> GeneratedImageAsset {
         GeneratedImageAsset(
             catalogName: fileBaseName.replacingOccurrences(of: "-", with: "_"),
-            lightFileName: "\(fileBaseName).png",
-            darkFileName: "\(fileBaseName)-night.png"
+            lightFileName: "\(fileBaseName).heic",
+            darkFileName: "\(fileBaseName)-night.heic"
         )
     }
 
@@ -205,8 +208,8 @@ enum WeatherCoursePolicy {
 enum SplashPolicy {
     static let imageAsset = GeneratedImageAsset(
         catalogName: "splash_generated",
-        lightFileName: "splash-generated.png",
-        darkFileName: "splash-generated-night.png"
+        lightFileName: "splash-generated.heic",
+        darkFileName: "splash-generated-night.heic"
     )
 }
 
@@ -232,7 +235,9 @@ enum ApplicationNotePolicy {
 enum RoutePolicy {
     static let minimumStopCount = 2
     static let maximumStopCount = 20
-    static let maximumPinnedNoticeCount = 3
+    /// 상단 고정 공지는 **하나**다 (정본 `ATTACH-COMPOSER-CANON.md` R5-1, 기획 결정 2026-08-30).
+    /// 서버는 개수를 막지 않으므로 클라가 지킨다.
+    static let maximumPinnedNoticeCount = 1
 
     static func editState(source: CourseSource, isTripConfirmed: Bool) -> RouteEditState {
         if isTripConfirmed {

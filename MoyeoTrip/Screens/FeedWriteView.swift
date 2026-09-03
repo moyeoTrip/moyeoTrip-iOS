@@ -5,34 +5,63 @@
 
 // swiftlint:disable file_length
 
+import PhotosUI
 import SwiftUI
+
+/// 24-1 후보 한 건 — **내가 다녀온 여행**(방)과 그 방에 붙은 코스다.
+///
+/// 근거는 세 API 뿐이다 (2026-09-02 실서버 확인 · 웹 `useFeedWriteTrip()` · 안드로이드와 같은 규칙):
+///   `GET /chat-rooms/my`                      → 내 모임 (ended·status 포함)
+///   `GET /travel-courses/chat-rooms/{roomId}` → 그 방의 코스 (제목·소요시간·거리·방문지 좌표)
+///   `GET /chat-rooms/{roomId}/companions`     → 함께 간 멤버 (완료 여행만 200)
+struct FeedWriteTripCandidate: Identifiable {
+    let room: ServerMyChatRoom
+    /// 방의 일정 정보(tripType·startDate). 코스를 못 읽으면 nil 이고 부제에서 그만큼 빠진다.
+    let roomCourse: ServerRoomCourse?
+    let course: TravelCourse?
+
+    var id: Int64 { room.roomId }
+}
 
 struct FeedWriteView: View {
     @Environment(\.dismiss) private var dismiss
     /// 24-1~24-5 단계별 캡처를 위해 시작 단계를 지정할 수 있다.
     var initialStep: Int = 1
+    /// 캡처가 특정 방을 기록 대상으로 지정한다(`feedwrite1:101`). 지정이 없으면 가장 최근 여행을 고른다.
+    var requestedRoomID: Int64?
     var onPublish: (FeedPost) -> Void = { _ in }
 
-    @State private var title = "첫 반패키지 단풍 여행"
-    // 본문은 기획·웹·안드로이드와 같은 한 문단이다 (카운터는 본문 글자수만 센다)
-    @State private var memo = "처음 반패키지 여행이었는데 동행분들이 너무 좋으셨어요. 첨성대 야경이 진짜 인생샷..."
+    // 제목·본문은 사용자가 쓰는 값이다. 미리 채워 두면 남의 여행기가 내 글처럼 보인다.
+    @State private var title = ""
+    @State private var memo = ""
     @State private var selectedCoverIndex = 0
     @State private var currentStep = 1
     @State private var isPublished = false
     @State private var selectedVisibility: FeedVisibility = .friendsOnly
-    // 화면기획 24-1은 경주 감성 힐링 코스가 선택된 상태에서 시작한다 (두 번째 후보가 주왕산)
-    @State private var selectedCourseID = FeedWriteCourseCandidate.planning[0].id
+    /// 기록할 코스 후보 — **내가 다녀온 여행**(`ended && status == "CONFIRMED"`)만이다.
+    /// 예전에는 `GET /travel-courses/public` 을 후보로 써서 내가 가지도 않은 남의 코스
+    /// (`27-3 검증 코스`)가 「어떤 여행을 기록할까요?」의 후보로 떴다.
+    /// 취소된 방(`CANCELLED`)은 끝난 것이지 다녀온 것이 아니다 — 후보가 아니다.
+    @State private var trips: [FeedWriteTripCandidate] = []
+    @State private var selectedRoomID: Int64?
+    /// 고른 방의 동행자. **아직 못 받았으면 nil** 이고 멤버 카드를 그리지 않는다 —
+    /// 빈 배열(`(0)`)은 "혼자 다녀왔다"는 사실이지 "못 받았다"가 아니다 (NO-MOCK R1).
+    @State private var companions: [ServerTripCompanion]?
 
-    private let photos: [CourseMood] = [.sunrise, .forest, .coral]
+    /// 24-2 사진 — **사용자가 고른 것만** 그린다.
+    /// 예전에는 `[.sunrise, .forest, .coral]` 색 타일 3장을 미리 채워 두었다 (목데이터 · NO-MOCK R1).
+    @State private var pickedPhotoItems: [PhotosPickerItem] = []
+    @State private var pickedPhotos: [UIImage] = []
     private let stepCount = 5
 
-    private var candidate: FeedWriteCourseCandidate {
-        FeedWriteCourseCandidate.planning.first { $0.id == selectedCourseID }
-            ?? FeedWriteCourseCandidate.planning[0]
+    /// 고른 여행. 후보가 없으면 nil 이고 관련 섹션은 그리지 않는다.
+    private var selectedTrip: FeedWriteTripCandidate? {
+        trips.first { $0.id == selectedRoomID } ?? trips.first
     }
 
-    private var course: TravelCourse {
-        MockData.course(for: selectedCourseID) ?? MockData.courses[0]
+    /// 고른 여행의 코스. 서버 코스를 못 받았으면 nil 이고 관련 섹션은 그리지 않는다.
+    private var course: TravelCourse? {
+        selectedTrip?.course
     }
 
     var body: some View {
@@ -56,10 +85,85 @@ struct FeedWriteView: View {
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .onAppear { currentStep = min(max(initialStep, 1), stepCount) }
+        .task {
+            await loadTrips()
+        }
+        .task(id: selectedRoomID) {
+            await loadCompanions()
+        }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .accessibilityIdentifier("screen.feedWrite.step\(currentStep)")
+    }
+}
+
+// MARK: - 서버 로딩 (24-1~24-5 가 같은 데이터 한 벌을 쓴다)
+
+private extension FeedWriteView {
+    /// 후보 = `GET /chat-rooms/my` 중 `ended && status == "CONFIRMED"` 인 것만.
+    /// 정렬 = 종료일(없으면 시작일) 내림차순 — 가장 최근에 다녀온 여행이 먼저다.
+    func loadTrips() async {
+        guard MoyeoServerSync.isEnabled, trips.isEmpty else { return }
+        guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else { return }
+
+        let completed = rooms.filter {
+            $0.ended && $0.status == ServerMyChatRoomFilter.confirmed.rawValue
+        }
+        // 같은 날짜끼리는 서버가 준 순서를 지킨다 — 정렬이 흔들리면 첫 후보가 캡처마다 달라진다.
+        let ordered = completed.enumerated().sorted { lhs, rhs in
+            let left = lhs.element.endDate ?? lhs.element.startDate
+            let right = rhs.element.endDate ?? rhs.element.startDate
+            if left != right { return left > right }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+
+        // 방마다 코스를 **동시에** 받는다. 순차로 돌렸을 때는 완료된 여행 수에 비례해
+        // 첫 화면이 늦어졌고, 그 사이 화면은 "아직 다녀온 여행 기록이 없어요" 를 보여줬다
+        // (캡처가 그 빈 화면을 찍어서 드러났다). 순서는 `ordered` 를 그대로 지킨다.
+        let courses = await withTaskGroup(of: (Int, ServerRoomCourse?).self) { group in
+            for (index, room) in ordered.enumerated() {
+                group.addTask {
+                    (index, try? await TravelCourseAPIClient.shared.roomCourse(roomID: room.roomId))
+                }
+            }
+            var result: [Int: ServerRoomCourse?] = [:]
+            for await (index, roomCourse) in group { result[index] = roomCourse }
+            return result
+        }
+        let loaded: [FeedWriteTripCandidate] = ordered.enumerated().map { index, room in
+            let roomCourse = courses[index] ?? nil
+            return FeedWriteTripCandidate(
+                room: room,
+                roomCourse: roomCourse,
+                course: roomCourse?.course.map(ServerCourseMapper.course(from:))
+            )
+        }
+
+        // 지정된 방(캡처)이 다녀온 여행이면 그것을, 아니면 가장 최근 것을 연다.
+        // 고른 방을 맨 앞에 둔다 — 뒤에 묻히면 가로 목록 밖으로 밀려 "아무것도 안 골랐다"로 보인다(웹과 같다).
+        let picked = requestedRoomID.flatMap { id in loaded.first { $0.id == id } } ?? loaded.first
+        if let picked {
+            trips = [picked] + loaded.filter { $0.id != picked.id }
+        } else {
+            trips = loaded
+        }
+        selectedRoomID = picked?.id
+    }
+
+    /// 고른 방의 동행자. 완료 여행 전용 API 라 미완료 방은 `409 40915` 다 —
+    /// 그때는 nil 로 두고 멤버 카드를 그리지 않는다. 사람을 지어내지 않는다.
+    func loadCompanions() async {
+        guard MoyeoServerSync.isEnabled, let roomID = selectedRoomID else {
+            companions = nil
+            return
+        }
+        switch await ChatRoomWriteAPIClient.shared.companions(roomID: roomID) {
+        case .companions(let list):
+            companions = list
+        case .notCompleted, .unavailable:
+            companions = nil
+        }
     }
 }
 
@@ -140,6 +244,8 @@ private extension FeedWriteView {
         case 1:
             // 화면기획 24-1은 코스 후보 · 경로 · 함께 간 멤버 세 블록이다.
             // 코스/지역/공개 요약 행(24-4·24-5의 메타 카드)은 여기서 되풀이하지 않는다.
+            // 함께 간 멤버는 `GET /chat-rooms/{roomId}/companions` 가 근거다 — 200 을 준다
+            // (2026-09-02 실서버 확인). 0명이면 `(0)` 이 사실이다(방 101 은 혼자 다녀왔다).
             courseSelector
             routeCard
             membersCard
@@ -185,9 +291,9 @@ private extension FeedWriteView {
 
     var photoGrid: some View {
         LazyVGrid(columns: photoColumns, spacing: 8) {
-            ForEach(Array(photos.enumerated()), id: \.offset) { index, mood in
+            ForEach(Array(pickedPhotos.enumerated()), id: \.offset) { index, image in
                 FeedWritePhotoTile(
-                    mood: mood,
+                    image: image,
                     isSelectedCover: selectedCoverIndex == index,
                     accessibilityIndex: index + 1
                 )
@@ -196,8 +302,33 @@ private extension FeedWriteView {
                 }
             }
 
-            FeedWriteAddPhotoTile()
+            // 고른 사진이 없으면 이 타일만 남는다 — 색 타일로 자리를 채우지 않는다.
+            PhotosPicker(
+                selection: $pickedPhotoItems,
+                maxSelectionCount: 10,
+                matching: .images
+            ) {
+                FeedWriteAddPhotoTile()
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("feed.write.addPhoto")
         }
+        .onChange(of: pickedPhotoItems) { _, items in
+            Task { await loadPickedPhotos(items) }
+        }
+    }
+
+    /// 고른 사진을 읽어 온다. 읽지 못한 항목은 자리만 비운다 — 대체 타일을 만들지 않는다.
+    func loadPickedPhotos(_ items: [PhotosPickerItem]) async {
+        var images: [UIImage] = []
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                images.append(image)
+            }
+        }
+        pickedPhotos = images
+        selectedCoverIndex = min(selectedCoverIndex, max(images.count - 1, 0))
     }
 
     var courseSelector: some View {
@@ -206,39 +337,53 @@ private extension FeedWriteView {
                 .font(.caption.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.ink)
 
-            ScrollView(.horizontal) {
-                HStack(spacing: 10) {
-                    ForEach(FeedWriteCourseCandidate.planning) { option in
-                        courseOption(option)
+            if trips.isEmpty {
+                // 문구는 웹·안드로이드와 글자 그대로 같아야 한다 — 후보는 "공개 코스"가 아니라
+                // "내가 다녀온 여행"이다.
+                MoyeoEmptyStateView(
+                    message: "아직 다녀온 여행 기록이 없어요.",
+                    accessibilityIdentifier: "feed.write.course.empty"
+                )
+            } else {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 10) {
+                        ForEach(trips) { candidate in
+                            tripOption(candidate)
+                        }
                     }
+                    .padding(.trailing, 4)
                 }
-                .padding(.trailing, 4)
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
         }
     }
 
-    func courseOption(_ candidate: FeedWriteCourseCandidate) -> some View {
-        let isSelected = candidate.id == selectedCourseID
+    func tripOption(_ candidate: FeedWriteTripCandidate) -> some View {
+        let isSelected = candidate.id == selectedTrip?.id
+        // 코스 썸네일이 없으면 방 썸네일이다 — 둘 다 없으면 자리표시자를 그린다.
+        let thumbnailURL = candidate.course?.thumbnailURL ?? candidate.room.thumbnailURL
 
         return Button {
-            selectedCourseID = candidate.id
+            selectedRoomID = candidate.id
         } label: {
             VStack(alignment: .leading, spacing: 8) {
-                MoyeoPhotoTile(
-                    mascot: candidate.mascot,
-                    mood: candidate.mood,
-                    height: 66,
-                    cornerRadius: 10
-                )
+                CachedRemoteImage(url: thumbnailURL, fallbackShape: .landscape) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    MoyeoTheme.leaf
+                }
+                .frame(height: 66)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                Text(candidate.title)
+                Text(candidate.course?.title ?? candidate.room.title)
                     .font(.caption.weight(.heavy))
                     .foregroundStyle(MoyeoTheme.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.86)
 
-                Text("\(candidate.region) · \(candidate.scheduleText)")
+                Text(tripSubtitle(candidate))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(MoyeoTheme.muted)
                     .lineLimit(1)
@@ -261,48 +406,112 @@ private extension FeedWriteView {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("feed.write.course.\(candidate.id)")
+        .accessibilityIdentifier("feed.write.trip.\(candidate.id)")
     }
 
-    var routeCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("경로 (자동)")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-
-            FeedWriteRoutePreview(stops: course.stops)
-                .frame(height: 118)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-            HStack(spacing: 4) {
-                Image(systemName: "mappin")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(MoyeoTheme.brandText)
-                Text(candidate.routeMetaText)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.muted)
-            }
+    /// `2026.08.28 · 당일치기` — 같은 코스로 떠난 여행 둘을 구분하는 줄이다(웹과 같은 조합).
+    /// 서버가 안 준 값은 자리를 비운다.
+    func tripSubtitle(_ candidate: FeedWriteTripCandidate) -> String {
+        let startDate = candidate.roomCourse?.room.startDate ?? candidate.room.startDate
+        let dateText = startDate.isEmpty
+            ? nil
+            : startDate.replacingOccurrences(of: "-", with: ".")
+        let typeText = candidate.roomCourse.map {
+            $0.room.tripType == "DAY_TRIP" ? TripScheduleKind.dayTrip.rawValue : "숙박"
         }
-        .padding(12)
-        .background(MoyeoTheme.subtleBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        return [dateText, typeText].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 24-1 함께 간 멤버 — `GET /chat-rooms/{roomId}/companions` 가 유일한 근거다.
+    /// 0명이면 제목의 `(0)` 이 곧 사실이다(방 101 은 61 이 혼자 다녀왔다) — 예시 멤버를 채우지 않는다.
+    /// 서버 응답에 "나"는 없어서 기획의 `(나)` 칩은 그리지 않는다.
+    @ViewBuilder
+    var membersCard: some View {
+        if let companions {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("함께 간 멤버 (\(companions.count))")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+
+                if !companions.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(companions) { companion in
+                                FeedWriteCompanionChip(companion: companion)
+                            }
+                        }
+                        .padding(.trailing, 4)
+                    }
+                    .scrollIndicators(.hidden)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MoyeoTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
+            }
+            .accessibilityIdentifier("feed.write.members")
+        }
+    }
+
+    /// 좌표가 있는 방문지만 지도에 올린다. **2곳 미만이면 카드를 그리지 않는다**(정본 R4) —
+    /// 좌표 문자열은 화면에 적지 않는다(기획에 없고 사용자에게 의미가 없다).
+    var routeStops: [ItineraryStop] {
+        (course?.itinerary ?? []).filter {
+            MoyeoMapCoordinate(latitude: $0.latitude, longitude: $0.longitude) != nil
+        }
+    }
+
+    @ViewBuilder
+    var routeCard: some View {
+        let stops = routeStops
+        if let course, stops.count >= 2 {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("경로 (자동)")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+
+                FeedWriteRoutePreview(stops: stops)
+                    .frame(height: 118)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                HStack(spacing: 4) {
+                    Image(systemName: "mappin")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(MoyeoTheme.brandText)
+                    Text("방문지 \(stops.count)곳 · \(course.distance)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
+            }
+            .padding(12)
+            .background(MoyeoTheme.subtleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
     }
 
     var metaCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            FeedWriteMetaRow(icon: "map.fill", title: "코스", value: candidate.title)
-            FeedWriteMetaRow(
-                icon: "location.fill",
-                title: "지역",
-                value: "\(candidate.region) · \(candidate.scheduleText) · \(candidate.distanceText)")
+            if let course {
+                FeedWriteMetaRow(icon: "map.fill", title: "코스", value: course.title)
+                FeedWriteMetaRow(
+                    icon: "location.fill",
+                    title: "일정",
+                    value: "\(course.duration) · \(course.distance)")
+            }
             FeedWriteMetaRow(icon: "eye.fill", title: "공개", value: "\(selectedVisibility.rawValue) · 경로지도 포함")
 
-            HStack(spacing: 12) {
-                ParticipantStack(participants: Array(MockData.participants.prefix(3)), size: 28)
-                Text("함께한 멤버 3명")
-                    .font(.caption.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                Spacer()
+            // 함께한 멤버 수는 `GET /chat-rooms/{roomId}/companions` 응답이 근거다 —
+            // 못 받았으면 줄을 두지 않는다. 사람을 지어내지 않는다.
+            if let companions {
+                FeedWriteMetaRow(
+                    icon: "person.2.fill",
+                    title: "멤버",
+                    value: "함께한 멤버 \(companions.count)명"
+                )
             }
 
             HStack(spacing: 8) {
@@ -324,37 +533,6 @@ private extension FeedWriteView {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
         }
-    }
-
-    /// 화면기획 24-1 — 함께 간 멤버 (4). 첫 칩이 나(따스한 사슴 3492)다.
-    var membersCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("함께 간 멤버 (\(FeedWriteView.companions.count))")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.text700)
-
-            FlexibleChipRows(items: FeedWriteView.companions) { companion in
-                HStack(spacing: 6) {
-                    MascotAvatar(mascot: companion.avatar, size: 24, background: MoyeoTheme.card)
-                    Text(companion.isMe ? "\(companion.name) (나)" : companion.name)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(companion.isMe ? MoyeoTheme.onLeaf : MoyeoTheme.text700)
-                }
-                .padding(.leading, 6)
-                .padding(.trailing, 10)
-                .frame(height: 36)
-                .background(companion.isMe ? MoyeoTheme.primary100 : MoyeoTheme.subtleBackground)
-                .clipShape(Capsule())
-            }
-        }
-        .padding(14)
-        .background(MoyeoTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(MoyeoTheme.softLine, lineWidth: 1)
-        }
-        .accessibilityIdentifier("feed.write.members")
     }
 
     var visibilityCard: some View {
@@ -488,7 +666,7 @@ private extension FeedWriteView {
     }
 
     var metaTags: [String] {
-        [selectedVisibility.rawValue, "경로지도", candidate.region] + candidate.tags
+        [selectedVisibility.rawValue, "경로지도"] + (course?.tags ?? [])
     }
 
     var photoColumns: [GridItem] {
@@ -504,30 +682,33 @@ private extension FeedWriteView {
             return
         }
 
+        // 코스를 못 고른 상태에서 게시하면 코스 값을 지어내야 한다 — 그 전에는 게시하지 않는다.
+        guard let course else { return }
+
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedMemo = memo.trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = trimmedMemo.isEmpty ? "경북 여행의 좋은 순간을 기록했어요." : trimmedMemo
+        let body = memo.trimmingCharacters(in: .whitespacesAndNewlines)
         let post = FeedPost(
             id: "feed-local-\(UUID().uuidString)",
-            authorName: MockData.profile.name,
-            authorAvatar: MockData.profile.avatar,
+            authorName: "",
+            authorAvatar: "",
             region: course.region,
             createdAt: "방금",
             photoMascot: course.mascot,
             caption: body,
-            tags: Array((["여행기록", course.region] + course.tags).prefix(4)),
+            tags: Array((["여행기록"] + course.tags).prefix(4)),
             route: course.stops,
             visibility: selectedVisibility,
             likeCount: 0,
             commentCount: 0,
             mood: course.mood,
             title: trimmedTitle.isEmpty ? course.title : trimmedTitle,
-            subtitle: "#여행기록 #\(course.region) #\(selectedVisibility.rawValue)",
+            subtitle: "#여행기록 #\(selectedVisibility.rawValue)",
             detailBody: body,
             distanceText: course.distance,
             durationText: course.duration,
             visitCountText: "\(course.stops.count)곳",
-            photoCountText: "1/\(photos.count)"
+            // 사진이 없으면 `1/0` 같은 배지를 만들지 않는다.
+            photoCountText: pickedPhotos.isEmpty ? "" : "1/\(pickedPhotos.count)"
         )
 
         isPublished = true
@@ -560,114 +741,21 @@ private extension FeedVisibility {
     }
 }
 
-/// 화면기획 24-1 코스 후보. 기획 목데이터는 코스 이름 · 지역 · 일정 유형 ·
-/// 경로 거리와 태그를 직접 갖고 있어서, 탐색용 코스 목록과 값이 다르다.
-struct FeedWriteCourseCandidate: Identifiable, Hashable {
-    let id: String
-    let title: String
-    let region: String
-    let scheduleText: String
-    let distanceText: String
-    let stopCount: Int
-    let dateRangeText: String
-    let tags: [String]
-    let mascot: String
-    let mood: CourseMood
-
-    var routeMetaText: String {
-        "\(region) · \(stopCount) stops · \(dateRangeText)"
-    }
-
-    static let planning: [FeedWriteCourseCandidate] = [
-        FeedWriteCourseCandidate(
-            id: "course-gyeongju-history",
-            title: "경주 감성 힐링 코스",
-            region: "경주",
-            scheduleText: "1박 2일",
-            distanceText: "42.6km",
-            stopCount: 4,
-            dateRangeText: "11/8 ~ 11/9",
-            tags: ["힐링", "야경"],
-            mascot: "🌙",
-            mood: .coral
-        ),
-        FeedWriteCourseCandidate(
-            id: "course-cheongsong-juwangsan",
-            title: "주왕산 & 주산지 힐링 트레킹",
-            region: "청송",
-            scheduleText: "당일치기",
-            distanceText: "6.2km",
-            stopCount: 3,
-            dateRangeText: "5/25",
-            tags: ["자연", "히든명소"],
-            mascot: "🌲",
-            mood: .forest
-        ),
-        FeedWriteCourseCandidate(
-            id: "course-andong-hahoe",
-            title: "안동 하회마을 하루 코스",
-            region: "안동",
-            scheduleText: "당일치기",
-            distanceText: "8.1km",
-            stopCount: 4,
-            dateRangeText: "6/9",
-            tags: ["역사", "문화"],
-            mascot: "🏡",
-            mood: .sunrise
-        )
-    ]
-}
-
-struct FeedWriteCompanion: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let avatar: String
-    var isMe = false
-}
-
-extension FeedWriteView {
-    /// 화면기획 24-1 함께 간 멤버 4명
-    static let companions: [FeedWriteCompanion] = [
-        FeedWriteCompanion(id: "me", name: "따스한 사슴 3492", avatar: "🦌", isMe: true),
-        FeedWriteCompanion(id: "bear", name: "우직한 곰 7821", avatar: "🐻"),
-        FeedWriteCompanion(id: "turtle", name: "잔잔한 거북이 9032", avatar: "🐢"),
-        FeedWriteCompanion(id: "crane", name: "고요한 두루미 1130", avatar: "🪽")
-    ]
-}
-
-/// 칩이 한 줄을 넘으면 다음 줄로 흐르게 감싼다 (화면기획의 flex-wrap)
-private struct FlexibleChipRows<Item: Identifiable, Content: View>: View {
-    let items: [Item]
-    @ViewBuilder let content: (Item) -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 8) {
-                    ForEach(row) { item in
-                        content(item)
-                    }
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-    }
-
-    private var rows: [[Item]] {
-        stride(from: 0, to: items.count, by: 2).map { start in
-            Array(items[start..<min(start + 2, items.count)])
-        }
-    }
-}
-
 private struct FeedWritePhotoTile: View {
-    let mood: CourseMood
+    /// 사용자가 고른 실제 사진.
+    let image: UIImage
     let isSelectedCover: Bool
     let accessibilityIndex: Int
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            MoyeoPhotoTile(mascot: "", mood: mood, height: 110, cornerRadius: 10)
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .frame(height: 110)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             if isSelectedCover {
                 Text("대표")
@@ -705,64 +793,77 @@ private struct FeedWriteAddPhotoTile: View {
     }
 }
 
-private struct FeedWriteRoutePreview: View {
-    let stops: [String]
+/// 24-1 함께 간 멤버 칩. 프로필 이미지가 없으면 닉네임에서 계산한 동물 이모지를 쓴다 —
+/// 표는 `MoyeoNicknameAnimal` 하나뿐이다 (NO-MOCK R5).
+private struct FeedWriteCompanionChip: View {
+    let companion: ServerTripCompanion
 
     var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            let points = routePoints(in: size)
-
-            ZStack {
-                LinearGradient(
-                    colors: [MoyeoTheme.mapGreen, MoyeoTheme.mapWater],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                ForEach(0..<5, id: \.self) { index in
-                    Path { path in
-                        let y = size.height * (0.24 + CGFloat(index) * 0.13)
-                        path.move(to: CGPoint(x: 0, y: y))
-                        path.addCurve(
-                            to: CGPoint(x: size.width, y: y + 18),
-                            control1: CGPoint(x: size.width * 0.28, y: y - 20),
-                            control2: CGPoint(x: size.width * 0.64, y: y + 28)
-                        )
-                    }
-                    .stroke(MoyeoTheme.softLine, lineWidth: 1)
-                }
-
-                Path { path in
-                    guard let first = points.first else { return }
-                    path.move(to: first)
-                    for point in points.dropFirst() {
-                        path.addLine(to: point)
-                    }
-                }
-                .stroke(MoyeoTheme.forest, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-
-                ForEach(Array(points.enumerated()), id: \.offset) { index, point in
-                    Text("\(index + 1)")
-                        .font(.caption2.weight(.heavy))
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(MoyeoTheme.forest))
-                        .overlay(Circle().stroke(MoyeoTheme.card, lineWidth: 3))
-                        .position(point)
-                }
-            }
+        HStack(spacing: 6) {
+            avatar
+            Text(companion.nickname)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.text700)
+                .lineLimit(1)
         }
-        .accessibilityLabel("자동 생성된 여행 경로 \(stops.joined(separator: ", "))")
+        .padding(.leading, 6)
+        .padding(.trailing, 10)
+        .frame(height: 36)
+        .background(MoyeoTheme.subtleBackground)
+        .clipShape(Capsule())
+        .accessibilityLabel("함께 간 멤버 \(companion.nickname)")
     }
 
-    private func routePoints(in size: CGSize) -> [CGPoint] {
-        [
-            CGPoint(x: size.width * 0.17, y: size.height * 0.74),
-            CGPoint(x: size.width * 0.40, y: size.height * 0.58),
-            CGPoint(x: size.width * 0.67, y: size.height * 0.45),
-            CGPoint(x: size.width * 0.83, y: size.height * 0.24)
-        ]
+    @ViewBuilder
+    private var avatar: some View {
+        if let url = companion.profileImageURL {
+            CachedRemoteImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                MoyeoTheme.leaf
+            }
+            .frame(width: 24, height: 24)
+            .clipShape(Circle())
+        } else {
+            MascotAvatar(
+                mascot: MoyeoNicknameAnimal.emoji(forNickname: companion.nickname)
+                    ?? MoyeoNicknameAnimal.unknown,
+                size: 24,
+                background: MoyeoTheme.leaf
+            )
+        }
+    }
+}
+
+/// 24 경로 미리보기 — 방문지 좌표로 실제 카카오 지도를 그린다 (NO-MOCK-CANON R4).
+private struct FeedWriteRoutePreview: View {
+    let stops: [ItineraryStop]
+
+    private var routeMarkers: [MoyeoMapMarker] {
+        stops.compactMap { stop in
+            guard let coordinate = MoyeoMapCoordinate(latitude: stop.latitude, longitude: stop.longitude) else {
+                return nil
+            }
+            return MoyeoMapMarker(id: stop.id, coordinate: coordinate, order: stop.order)
+        }
+    }
+
+    var body: some View {
+        let markers = routeMarkers
+        if markers.count == stops.count, let first = markers.first {
+            MoyeoMapView(
+                content: MoyeoMapContent(
+                    center: first.coordinate,
+                    level: 11,
+                    markers: markers,
+                    polyline: markers.map(\.coordinate)
+                ),
+                isInteractive: false,
+                fallback: { MoyeoTheme.mapGreen }
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("여행 경로 지도, 방문지 \(stops.count)곳")
+        }
     }
 }
 

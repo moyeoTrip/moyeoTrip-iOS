@@ -25,7 +25,7 @@ struct ServerChatRoomMember: Decodable, Identifiable, Hashable {
     var id: Int64 { userId }
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 }
 
@@ -35,6 +35,8 @@ struct ServerChatRoomMemberList: Decodable, Hashable {
     let waitlistCount: Int
     let members: [ServerChatRoomMember]
 
+    /// 이 응답만 보고 판정한 내 userId. 말풍선 정렬에는 쓰지 않는다 —
+    /// 그건 `ServerChatRoomContent.currentUserID` 가 토큰에서 먼저 읽는다 (TAB-STATE-CANON R6).
     var currentUserID: Int64? {
         members.first { $0.me }?.userId
     }
@@ -158,7 +160,7 @@ struct ServerChatMessage: Decodable, Identifiable, Hashable {
     var isSystem: Bool { type == "SYSTEM" }
 
     var imageURL: URL? {
-        imageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(imageUrl)
     }
 }
 
@@ -177,6 +179,15 @@ struct ServerChatRoomContent: Hashable {
     var noticeHistory: ServerChatRoomNoticeHistory?
     var roadmap: ServerCurrentRoadmap?
     var messages: [ServerChatMessage] = []
+
+    /// 말풍선을 왼쪽·오른쪽 어디에 그릴지 정하는 내 userId (TAB-STATE-CANON R6).
+    ///
+    /// **액세스 토큰 페이로드에서 동기로 읽는다.** 동행자 목록의 `me` 플래그를 기다리면
+    /// 그 응답이 오기 전까지 내가 보낸 메시지가 남의 것처럼 왼쪽에 그려졌다가 뒤늦게 튄다.
+    /// 세션을 읽지 못할 때만 목록으로 떨어진다.
+    var currentUserID: Int64? {
+        MoyeoCurrentUser.id ?? memberList.currentUserID
+    }
 }
 
 // MARK: - 클라이언트
@@ -287,7 +298,8 @@ enum ServerDateTime {
 // MARK: - 화면 모델 매핑
 
 extension ServerTripMapper {
-    static let serverThreadIDPrefix = "server-chat-"
+    /// 순수 상수라 액터 격리가 필요 없다 — 뷰 밖(매퍼)에서도 부른다.
+    nonisolated static let serverThreadIDPrefix = "server-chat-"
 
     static let serverNoticeIDPrefix = "server-notice-"
 
@@ -322,7 +334,7 @@ extension ServerTripMapper {
             recruitmentDeadline: room.ended ? "" : dDayText(room.recruitmentDDay),
             scheduleSummary: scheduleText(startDate: room.startDate, endDate: room.endDate),
             serverRoomID: room.roomId,
-            thumbnailURL: room.thumbnail.flatMap(URL.init(string:))
+            thumbnailURL: MoyeoImageURL.resolve(room.thumbnail)
         )
     }
 
@@ -352,16 +364,12 @@ extension ServerTripMapper {
         return dDay <= 0 ? "D-Day" : "D-\(dDay)"
     }
 
-    /// 서버 공지 → 20-3 공지 카드. 서버는 제목을 따로 주지 않아 첫 줄을 제목으로 쓴다.
+    /// 서버 공지 → 20-3 공지 카드. 본문이 카드의 주인공이다 —
+    /// 첫 줄을 떼어 제목으로 쓰던 것을 없앴다 (정본 `ATTACH-COMPOSER-CANON.md` §2).
     static func notice(from notice: ServerChatRoomNotice) -> TripNotice {
-        let content = notice.content ?? ""
-        var lines = content.components(separatedBy: "\n")
-        let title = lines.first ?? ""
-        lines.removeFirst()
         return TripNotice(
             id: "\(serverNoticeIDPrefix)\(notice.noticeId)",
-            title: title,
-            body: lines.joined(separator: "\n"),
+            body: notice.content ?? "",
             createdAt: ServerDateTime.noticeTimeText(from: notice.createdAt),
             isPinned: notice.pinned,
             authorName: notice.authorNickname
@@ -377,7 +385,9 @@ extension ServerTripMapper {
             body: messageBody(message),
             time: ServerDateTime.bubbleTimeText(from: message.createdAt),
             isMine: message.senderId != nil && message.senderId == currentUserID,
-            kind: message.isSystem ? .system : .text
+            kind: message.isSystem ? .system : .text,
+            // 카드로 그려야 하는 종류(장소·만날 위치·투표·정산 메모·사진)를 위해 원본을 실어 둔다
+            server: message
         )
     }
 
@@ -417,8 +427,10 @@ extension ServerTripMapper {
         // 함수 참조 대신 클로저로 호출해 main-actor 격리를 유지한다(Swift 6).
         updated.members = memberList.members.map { member(from: $0) }
         updated.statusSummary = memberStatusSummary(thread: thread, memberList: memberList)
+        // 내 메시지 판정은 토큰에서 온다 — 멤버 목록을 기다리지 않는다 (TAB-STATE-CANON R6).
+        let currentUserID = content.currentUserID
         updated.messages = content.messages.map {
-            chatMessage(from: $0, currentUserID: memberList.currentUserID)
+            chatMessage(from: $0, currentUserID: currentUserID)
         }
         updated.pinnedNotices = content.noticeHistory?.allNotices.map { notice(from: $0) } ?? []
         updated.isCurrentUserHost = memberList.members.contains { $0.me && $0.host }

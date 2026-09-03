@@ -13,10 +13,11 @@ import SwiftUI
 
 /// 카드가 그릴 대상. 진입점마다 서버가 주는 필드가 달라서, 받은 값만 채우고 없는 칸은 지운다.
 enum ProfileCardSubject: Hashable {
-  /// 화면기획 25 기준 목데이터 (로그인 전 · 캡처)
-  case planningMock
-  /// 27 도감의 목데이터 친구
-  case mockFriend(String)
+  /// 유저 id 를 모르는 진입점. 그릴 근거가 없어 카드 대신 빈 상태를 그린다 (NO-MOCK-CANON R1).
+  case unavailable
+  /// 내 프로필. `GET /users/me` 응답에는 userID 가 없어 공개 프로필 API 를 부를 수 없다 —
+  /// 받은 값(닉네임 · 이미지 · 소개 · 여행 스타일)만 카드에 그린다.
+  case me(nickname: String, profileImageURL: URL?, introduction: String?, travelStyles: [String])
   /// 27 도감의 실서버 동행자 — 나와 동행한 횟수 · 내가 남긴 메시지까지 들고 있다
   case serverCompanion(ServerTravelDexCompanion)
   /// 유저 id 만 아는 진입점 (피드 작성자 · 멤버 액션 시트 · 친구 목록)
@@ -42,14 +43,24 @@ struct ProfileCardUserReference: Hashable {
 struct ProfileCardView: View {
   let subject: ProfileCardSubject
 
+  /// 내 카드인지. 자기에게 친구 신청을 걸 수는 없어 하단 동작을 하나 줄인다.
+  private var isMe: Bool {
+    if case .me = subject { return true }
+    // 남의 카드로 들어왔더라도 대상이 나면 마찬가지다 (피드 작성자가 나인 경우).
+    if let id = subject.userID, let mine = MoyeoCurrentUser.id { return id == mine }
+    return false
+  }
+
   /// 공개 프로필 — 닉네임 색상 · 소개 · 여행 스타일 · 평균 매너 점수
   @State private var publicProfile: ServerPublicProfile?
   /// 다른 여행자들이 남긴 평가 (뒷면)
   @State private var receivedReviews: [ServerReceivedTravelReview]?
 
-  @State private var flipped: Bool
+  /// 뒤집힘을 **부호 있는 반회전 수**로 센다. `0` 앞면, `±1` 뒷면, `±2` 다시 앞면.
+  /// 부호가 방향이다 — 왼쪽으로 밀면 줄고 오른쪽으로 밀면 는다. `Bool` 이던 동안에는
+  /// 어느 쪽으로 밀어도 늘 같은 방향으로 돌았다.
+  @State private var flipTurns: Int
   /// 90도에서 면을 바꾼다 — 그 전에 바꾸면 거울상 앞면이 보인다.
-  @State private var showsBack: Bool
 
   /// 회전·확대. 손가락을 따라가는 동안에는 애니메이션 없이 그대로 갱신한다.
   @State private var rotation = ProfileCardRotation.neutral
@@ -65,8 +76,7 @@ struct ProfileCardView: View {
   ///   **실사용 기본값은 앞면이다.**
   init(subject: ProfileCardSubject, startsFlipped: Bool = false) {
     self.subject = subject
-    _flipped = State(initialValue: startsFlipped)
-    _showsBack = State(initialValue: startsFlipped)
+    _flipTurns = State(initialValue: startsFlipped ? 1 : 0)
   }
 
   private var companion: ProfileCardCompanion {
@@ -88,7 +98,16 @@ struct ProfileCardView: View {
       // 카드는 화면 세로 중앙에 선다 (화면기획 25)
       VStack(spacing: 0) {
         Spacer(minLength: 0)
-        card
+        if subject.isUnavailable {
+          // 누구의 카드인지 모르면 그릴 근거가 없다 — 목 카드를 대신 띄우지 않는다
+          MoyeoEmptyStateView(
+            message: MoyeoEmptyText.loadFailed,
+            systemImage: "person.crop.circle",
+            accessibilityIdentifier: "profile.card.empty"
+          )
+        } else {
+          card
+        }
         Spacer(minLength: 0)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -96,8 +115,11 @@ struct ProfileCardView: View {
       .padding(.top, 4)
       .padding(.bottom, 12)
 
-      ProfileCardActionBar(isFlipped: flipped) {
-        setFlipped(!flipped)
+      if !subject.isUnavailable {
+        ProfileCardActionBar(isMe: isMe) {
+          // 버튼에는 방향이 없다 — 오른쪽으로 돈다.
+          flip(by: 1)
+        }
       }
     }
     .background(MoyeoTheme.subtleBackground.ignoresSafeArea())
@@ -109,15 +131,12 @@ struct ProfileCardView: View {
   // MARK: 카드
 
   private var card: some View {
-    faces
-      .frame(width: ProfileCardMetrics.width)
-      // 뒤집기는 안쪽 레이어가 맡는다 — 기울기와 한 변환에 합치면 기울기에도 700ms 가 걸려
-      // 손가락을 못 따라온다 (changeLog18 §2-4).
-      .rotation3DEffect(
-        .degrees(flipped ? 180 : 0),
-        axis: (x: 0, y: 1, z: 0),
-        perspective: ProfileCardMetrics.perspective
-      )
+    // 뒤집기는 안쪽 레이어가 맡는다 — 기울기와 한 변환에 합치면 기울기에도 700ms 가 걸려
+    // 손가락을 못 따라온다 (changeLog18 §2-4).
+    ProfileCardFlip(degrees: Double(flipTurns) * 180) { showsBack in
+      faces(showsBack: showsBack)
+    }
+    .frame(width: ProfileCardMetrics.width)
       .background(glow)
       .overlay {
         // 기울기 좌표는 회전 전 좌표계에서 읽는다 — 회전값이 좌표를 되먹이지 않게 한다.
@@ -142,21 +161,23 @@ struct ProfileCardView: View {
       .accessibilityIdentifier("profile.card")
   }
 
-  @ViewBuilder
-  private var faces: some View {
-    if showsBack {
-      ProfileCardBackFace(companion: companion, palette: palette, isLifted: isLifted)
-        // 컨테이너가 180도 돌아 있으므로 뒷면은 다시 180도 돌려 거울상을 푼다.
-        .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
-        .transition(.identity)
-    } else {
-      ProfileCardFrontFace(
-        companion: companion,
-        palette: palette,
-        holoPoint: holoPoint,
-        isLifted: isLifted
-      )
-      .transition(.identity)
+  /// 앞면이 카드 크기를 정하고, 뒷면은 그 위에 겹친다 — **두 면이 항상 같은 크기다** (웹과 같은 방식).
+  /// 한 면씩만 그리면 뒷면이 내용만큼 작아져 뒤집을 때 카드가 줄어들었다.
+  private func faces(showsBack: Bool) -> some View {
+    ProfileCardFrontFace(
+      companion: companion,
+      palette: palette,
+      holoPoint: holoPoint,
+      isLifted: isLifted
+    )
+    .opacity(showsBack ? 0 : 1)
+    .accessibilityHidden(showsBack)
+    .overlay {
+      if showsBack {
+        ProfileCardBackFace(companion: companion, palette: palette, isLifted: isLifted)
+          // 컨테이너가 180도 돌아 있으므로 뒷면은 다시 180도 돌려 거울상을 푼다.
+          .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
+      }
     }
   }
 
@@ -199,19 +220,18 @@ struct ProfileCardView: View {
           isLifted = false
         }
         if ProfileCardMetrics.isFlipSwipe(value.translation) {
-          setFlipped(!flipped)
+          // 스와이프한 방향으로 돈다 — 왼쪽으로 밀면 왼쪽으로 넘어간다.
+          flip(by: value.translation.width < 0 ? -1 : 1)
         }
       }
   }
 
-  private func setFlipped(_ value: Bool) {
+  /// `direction` 은 `+1`(오른쪽) 또는 `-1`(왼쪽). 스와이프 방향이 그대로 회전 방향이다.
+  private func flip(by direction: Int) {
     withAnimation(ProfileCardMetrics.flipAnimation) {
-      flipped = value
+      flipTurns += direction
     }
-    // 카드가 모서리를 보이는 순간(700ms 의 절반)에 면을 바꾼다.
-    withAnimation(ProfileCardMetrics.faceSwapAnimation) {
-      showsBack = value
-    }
+    // 면 교체는 따로 걸지 않는다 — `ProfileCardFlip` 이 실제 회전값에서 고른다.
   }
 
   // MARK: 서버 값
@@ -231,10 +251,10 @@ extension ProfileCardSubject {
   /// 라우트 식별용 안정 키. `hashValue` 는 실행마다 값이 달라져 쓸 수 없다.
   var routeKey: String {
     switch self {
-    case .planningMock:
-      return "planningMock"
-    case .mockFriend(let friendID):
-      return "mock.\(friendID)"
+    case .unavailable:
+      return "unavailable"
+    case .me(let nickname, _, _, _):
+      return "me.\(nickname)"
     case .serverCompanion(let companion):
       return "companion.\(companion.userId)"
     case .serverUser(let reference):
@@ -242,16 +262,26 @@ extension ProfileCardSubject {
     }
   }
 
-  /// 서버에 물어볼 수 있는 유저인지. 목데이터 카드는 nil 이다.
+  /// 서버 공개 프로필을 물어볼 수 있는 유저인지.
   var userID: Int64? {
     switch self {
-    case .planningMock, .mockFriend:
+    case .unavailable:
       return nil
+    case .me:
+      // 내 카드도 남의 카드와 같은 공개 프로필을 쓴다 — 여행·피드·매너 점수·받은 평가.
+      // 여기서 nil 을 주는 동안 내 카드에는 닉네임과 소개만 있었다.
+      return MoyeoCurrentUser.id
     case .serverCompanion(let companion):
       return companion.userId
     case .serverUser(let reference):
       return reference.userID
     }
+  }
+
+  /// 그릴 근거가 아예 없는 대상인지 — 카드 대신 빈 상태를 그린다.
+  var isUnavailable: Bool {
+    if case .unavailable = self { return true }
+    return false
   }
 }
 
@@ -298,16 +328,51 @@ private struct ProfileCardHeader: View {
   }
 }
 
-/// 하단 `뒤집기`/`앞면` · `친구 신청` · `메시지`.
+/// 카드를 Y축으로 돌리면서 **지금 실제 회전값**으로 어느 면을 그릴지 고른다.
+///
+/// `Animatable` 을 채택하면 애니메이션 중간값이 `animatableData` 로 들어온다 — 그래서
+/// `body` 안의 `degrees` 는 목표값이 아니라 **그 프레임의 각도**다. 면을 시간으로 미루면
+/// (예: "700ms 의 절반에 바꾼다") 회전 곡선이 선형이 아닐 때 어긋나, 90도를 지난 뒤에도
+/// 앞면이 거울상으로 남는다. SwiftUI 는 뒷면을 잘라 주지 않으므로 그 사이 앞면의
+/// 프로필 이미지가 그대로 보였다. 안드로이드가 쓰던 방식(`flipRotation <= 90f`)과 같게 맞췄다.
+private struct ProfileCardFlip<Content: View>: View, Animatable {
+  var degrees: Double
+  @ViewBuilder var content: (Bool) -> Content
+
+  var animatableData: Double {
+    get { degrees }
+    set { degrees = newValue }
+  }
+
+  /// 90도~270도 구간에서는 뒷면이 앞을 향한다. 음수 회전(왼쪽으로 넘김)도 같게 다룬다.
+  private var showsBack: Bool {
+    var normalized = degrees.truncatingRemainder(dividingBy: 360)
+    if normalized < 0 { normalized += 360 }
+    return normalized > 90 && normalized < 270
+  }
+
+  var body: some View {
+    content(showsBack)
+      .rotation3DEffect(
+        .degrees(degrees),
+        axis: (x: 0, y: 1, z: 0),
+        perspective: ProfileCardMetrics.perspective
+      )
+  }
+}
+
+/// 하단 `카드 뒤집기` · `친구 신청`.
 /// 스와이프로도 뒤집히지만, 뒤집을 수 있다는 걸 알 방법이 필요해 버튼도 둔다 (changeLog18 §2-4).
 private struct ProfileCardActionBar: View {
-  let isFlipped: Bool
+  let isMe: Bool
   let onFlip: () -> Void
 
   var body: some View {
     HStack(spacing: 8) {
       Button(action: onFlip) {
-        Text(isFlipped ? "앞면" : "뒤집기")
+        // 문구를 고정한다 — 누를 때마다 이름이 바뀌면 무엇을 누르는 버튼인지 매번 다시 읽어야 한다.
+        // 어느 면인지는 카드가 이미 보여준다.
+        Text("카드 뒤집기")
           .font(MoyeoTypography.font(size: 14, weight: .semibold))
           .foregroundStyle(MoyeoTheme.brandText)
           .padding(.horizontal, 20)
@@ -316,16 +381,20 @@ private struct ProfileCardActionBar: View {
       .buttonStyle(.plain)
       .accessibilityIdentifier("profile.flip")
 
-      // DM 기획이 없다 — 여기서 할 수 있는 행동은 친구 신청뿐이다.
-      // 동작은 아직 붙이지 않았다: 성공/실패 안내 문구가 정해지지 않았다.
-      Text("친구 신청")
-        .font(MoyeoTypography.font(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity)
-        .frame(height: 48)
-        .background(MoyeoTheme.forest)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityIdentifier("profile.message")
+      // 자기에게 친구 신청을 걸 수는 없다 — 내 카드에서는 그리지 않는다.
+      if !isMe {
+        // DM 기획이 없다 — 여기서 할 수 있는 행동은 친구 신청뿐이다.
+        // 동작은 아직 붙이지 않았다: 성공/실패 안내 문구가 정해지지 않았다.
+        // 식별자가 `profile.message` 였다 — 문구와 어긋나 무엇을 잡는지 알 수 없었다.
+        Text("친구 신청")
+          .font(MoyeoTypography.font(size: 14, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 48)
+          .background(MoyeoTheme.forest)
+          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          .accessibilityIdentifier("profile.friendRequest")
+      }
     }
     .padding(.horizontal, 20)
     .padding(.bottom, 28)
@@ -350,8 +419,10 @@ enum ProfileCardMetrics {
   static let enterAnimation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.26)
   /// 뒤집기는 700ms (changeLog18 §2-4)
   static let flipAnimation = Animation.timingCurve(0.16, 1, 0.3, 1, duration: 0.7)
-  /// 뒤집기 중간(모서리가 보일 때)에 면을 바꾼다
-  static let faceSwapAnimation = Animation.linear(duration: 0.01).delay(0.35)
+  // 면 교체를 시간으로 미루던 값(`faceSwapDelay`)은 없앴다. 회전 곡선이 아주 빠른
+  // ease-out 이라 "절반 시간"이 90도가 아니었고, 90도를 지난 뒤에도 한동안 앞면이
+  // 거울상으로 보였다 — 프로필 이미지가 스쳐 보인 원인이다 (사용자가 발견).
+  // 지금은 `ProfileCardFlip` 이 **실제 회전값**으로 고른다 (안드로이드와 같은 방식).
   /// 스와이프 뒤집기 최소 가로 이동
   static let flipSwipeDistance: CGFloat = 40
 

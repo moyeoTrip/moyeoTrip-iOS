@@ -90,6 +90,61 @@ struct HostManageRouteRow: View {
     }
 }
 
+/// 18 모집 관리에서 다음 화면으로 가는 줄 — 18-4 여행 확정 / 18-5 집합 정보 수정.
+/// 서버 모임이 아니면(목데이터·미로그인) 열 방이 없어 잠근다.
+struct HostManageLinkRow: View {
+    let title: String
+    let detail: String
+    let icon: String
+    var isEnabled = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isEnabled ? MoyeoTheme.forest : MoyeoTheme.text400)
+                    .frame(width: 40, height: 40)
+                    .background(MoyeoTheme.subtleBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.text400)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MoyeoTheme.card)
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+    }
+}
+
+/// 방 id 하나만 넘겨 여는 화면(18-1 · 18-2 · 20-1c)의 `navigationDestination(item:)` 값.
+/// `Int64` 는 `Identifiable` 이 아니라 그대로 넘길 수 없다.
+struct RoomIDRoute: Identifiable, Hashable {
+    let roomID: Int64
+    /// 같은 방이라도 화면이 다르면 다른 목적지다.
+    var kind: String = ""
+
+    var id: String { "\(kind).\(roomID)" }
+}
+
 struct HostManageEmptyState<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -106,11 +161,29 @@ struct HostManageEmptyState<Content: View>: View {
     }
 }
 
+/// 18 접힌 대기자·거절 기록 한 줄. 누르면 그 사람의 25 프로필 카드를 연다.
+///
+/// 예전에는 `chevron.right` 만 그려 눌릴 것처럼 보였는데 아무 동작이 없었다.
+/// 열 프로필이 없으면(서버 신청자가 아니라 `serverUserID` 가 없을 때) 화살표도 그리지 않는다 —
+/// 눌릴 것처럼 보이면서 안 눌리는 것이 원래 결함이었다.
 struct HostCompactApplicantRow: View {
     let applicant: HostApplicant
     let detail: String
+    var action: (() -> Void)?
 
     var body: some View {
+        if let action {
+            Button(action: action) {
+                row
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(applicant.name) 프로필 열기")
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 12) {
             Text(applicant.avatar)
                 .font(.title3)
@@ -126,12 +199,15 @@ struct HostCompactApplicantRow: View {
                     .foregroundStyle(MoyeoTheme.muted)
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(MoyeoTheme.text400)
+            if action != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.text400)
+            }
         }
         .padding(.horizontal, 16)
         .frame(height: 70)
+        .contentShape(Rectangle())
         .background(MoyeoTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
@@ -176,6 +252,23 @@ struct HostApprovedCompanionsRow: View {
 
 /// 화면기획 18 모집 관리의 신청자. 서버 신청(`GET .../applications`)과
 /// 캡처용 목데이터가 같은 형태를 쓴다 — 파일 길이 규칙 때문에 이 파일에 둔다.
+extension HostApplicant {
+    /// 접힌 대기자·거절 기록 행을 눌렀을 때 열 25 프로필 카드.
+    /// 서버 신청자가 아니면 열 사람이 없다 — 그때는 nil 이라 행이 화살표도 그리지 않는다.
+    var profileCardRoute: SupportRoute? {
+        guard let serverUserID else { return nil }
+        return .publicProfile(
+            .serverUser(
+                ProfileCardUserReference(
+                    userID: serverUserID,
+                    nickname: name,
+                    profileImageUrl: profileImageURL?.absoluteString
+                )
+            )
+        )
+    }
+}
+
 struct HostApplicant: Identifiable, Hashable {
     let id: String
     let name: String
@@ -192,28 +285,7 @@ struct HostApplicant: Identifiable, Hashable {
         Participant(id: id, name: name, avatar: avatar)
     }
 
-    // 화면기획 18 모집 관리의 승인 대기 2명
-    static let mockPending = [
-        HostApplicant(
-            id: "applicant-bear",
-            name: "우직한 곰 7821",
-            avatar: "🐻",
-            meta: "31세 · 남성 · 매너 4.9 · 여행 8회",
-            note: "단풍 보러 가요. 사진 좋아해서 풍경 잘 담아드릴 수 있어요!"
-        ),
-        HostApplicant(
-            id: "applicant-raccoon",
-            name: "호기심 많은 너구리 9027",
-            avatar: "🦝",
-            meta: "26세 · 여성 · 매너 4.7",
-            note: "야경 사진 찍는 걸 좋아해요. 잘 부탁드려요!"
-        )
-    ]
-
-    // 화면기획 18 — 본인 외 3명 (아바타 무리)
-    static let mockApproved = [
-        HostApplicant(id: "approved-deer", name: "숲속 사슴 2417", avatar: "🦌", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
-        HostApplicant(id: "approved-turtle", name: "잔잔한 거북이 9032", avatar: "🐢", meta: "매너 4.8 · 여행 8회", note: "기존 참여자"),
-        HostApplicant(id: "approved-rabbit", name: "느긋한 토끼 7821", avatar: "🐰", meta: "매너 4.8 · 여행 8회", note: "기존 참여자")
-    ]
+    /// 서버 신청 목록을 못 받았을 때의 자리. 목 신청자를 채우지 않는다 (NO-MOCK-CANON R1).
+    static let noPending: [HostApplicant] = []
+    static let noApproved: [HostApplicant] = []
 }

@@ -4,10 +4,11 @@
 //
 
 struct TripInteractionContext {
-    var trips: [TripRecruitment] = MockData.trips
-    var chatThreads: [ChatThread] = MockData.chatThreads
+    var trips: [TripRecruitment] = []
+    var chatThreads: [ChatThread] = []
     var appliedTripIDs: Set<String> = []
-    var chatThreadProvider: (TripRecruitment) -> ChatThread? = { MockData.chatThread(forTripID: $0.id) }
+    /// 서버에서 받은 방만 넘긴다. 못 찾으면 nil 이고 화면은 빈 상태를 그린다.
+    var chatThreadProvider: (TripRecruitment) -> ChatThread? = { _ in nil }
     var onApplyTrip: (TripRecruitment) -> Void = { _ in }
     var onCreateRecruitment: (TripRecruitment, ChatThread) -> Void = { _, _ in }
     var onSendChatMessage: (ChatThread, ChatMessage) -> Void = { _, _ in }

@@ -122,21 +122,12 @@ final class MoyeoTripStatePropagationUITests: XCTestCase {
         XCTAssertTrue(discoverSegment.waitForExistence(timeout: 3))
         XCTAssertGreaterThanOrEqual(discoverSegment.frame.height, 48)
 
-        let firstPost = app.buttons["feed.post.feed-01"]
-        XCTAssertTrue(firstPost.waitForExistence(timeout: 3))
-        // 태그 칩 줄이 빠져(부제 한 줄로 통일) 카드가 약 18pt 낮아졌다
-        XCTAssertGreaterThanOrEqual(firstPost.frame.height, 240)
-        XCTAssertLessThanOrEqual(firstPost.frame.height, 460)
-
-        let author = app.staticTexts["feed.post.feed-01.author"]
-        let title = app.staticTexts["feed.post.feed-01.title"]
-        let subtitle = app.staticTexts["feed.post.feed-01.subtitle"]
-        XCTAssertTrue(author.exists)
-        XCTAssertTrue(title.exists)
-        XCTAssertTrue(subtitle.exists)
-        XCTAssertGreaterThanOrEqual(title.frame.minY - author.frame.maxY, 8)
-        XCTAssertGreaterThanOrEqual(subtitle.frame.minY - title.frame.maxY, 4)
-        XCTAssertLessThanOrEqual(subtitle.frame.maxX, firstPost.frame.maxX - 8)
+        // 목 피드(`feed-01`)는 사라졌다 — 서버 피드가 없으면 §2 빈 상태만 남는다
+        // (NO-MOCK-CANON R1 · R6: 목데이터를 강제하던 단언을 반대로 뒤집었다).
+        XCTAssertFalse(app.buttons["feed.post.feed-01"].exists)
+        let emptyFeed = app.otherElements["feed.empty"]
+        XCTAssertTrue(emptyFeed.waitForExistence(timeout: 3))
+        XCTAssertTrue(emptyFeed.label.contains("아직 올라온 피드가 없어요."))
 
         let writeButton = app.buttons["feed.write.open"].firstMatch
         XCTAssertTrue(writeButton.waitForExistence(timeout: 3))

@@ -16,6 +16,9 @@ struct MoyeoMapView<Fallback: View>: View {
     /// 지도 위에 카드·탭바가 덮이는 화면에서 카카오 로고를 그만큼 띄운다 (로고는 가리면 안 된다).
     var logoBottomInset: CGFloat = 0
     var onPinMove: ((MoyeoMapCoordinate) -> Void)?
+    /// 핀을 눌렀을 때 그 핀의 `MoyeoMapMarker.id`.
+    /// 주지 않으면 핀은 **눌리지 않는다** — 코스 미리보기처럼 탭할 것이 없는 지도는 그대로 둔다.
+    var onMarkerTap: ((String) -> Void)?
     @ViewBuilder var fallback: () -> Fallback
 
     @State private var liveMapUnavailable = false
@@ -38,6 +41,7 @@ struct MoyeoMapView<Fallback: View>: View {
                 isInteractive: isInteractive,
                 logoBottomInset: logoBottomInset,
                 onCenterChange: onPinMove,
+                onMarkerTap: onMarkerTap,
                 onUnavailable: { liveMapUnavailable = true }
             )
             if draggablePin {
@@ -58,6 +62,7 @@ private struct KakaoMapRepresentable: UIViewControllerRepresentable {
     let isInteractive: Bool
     let logoBottomInset: CGFloat
     let onCenterChange: ((MoyeoMapCoordinate) -> Void)?
+    let onMarkerTap: ((String) -> Void)?
     let onUnavailable: () -> Void
 
     func makeUIViewController(context: Context) -> KakaoMapHostController {
@@ -68,12 +73,14 @@ private struct KakaoMapRepresentable: UIViewControllerRepresentable {
             logoBottomInset: logoBottomInset
         )
         host.onCenterChange = onCenterChange
+        host.onMarkerTap = onMarkerTap
         host.onUnavailable = onUnavailable
         return host
     }
 
     func updateUIViewController(_ uiViewController: KakaoMapHostController, context: Context) {
         uiViewController.onCenterChange = onCenterChange
+        uiViewController.onMarkerTap = onMarkerTap
         uiViewController.onUnavailable = onUnavailable
         uiViewController.update(content: content, tracksCenter: tracksCenter)
     }
@@ -95,6 +102,8 @@ final class KakaoMapHostController: UIViewController {
     private let logoBottomInset: CGFloat
     private var appliedContent: MoyeoMapContent?
     private var cameraHandler: (any DisposableEventHandler)?
+    /// 놓으면 핸들러가 바로 해제된다 — 레이어를 다시 만들 때마다 갱신한다.
+    private var markerTapHandler: (any DisposableEventHandler)?
 
     /// 스크롤 안의 핀 드래그 지도는 부모 스크롤보다 먼저 손가락을 잡아야 한다.
     private lazy var mapPanRecognizer: UIPanGestureRecognizer = {
@@ -104,6 +113,7 @@ final class KakaoMapHostController: UIViewController {
     }()
 
     var onCenterChange: ((MoyeoMapCoordinate) -> Void)?
+    var onMarkerTap: ((String) -> Void)?
     var onUnavailable: (() -> Void)?
 
     init(content: MoyeoMapContent, tracksCenter: Bool, isInteractive: Bool, logoBottomInset: CGFloat) {
@@ -233,6 +243,21 @@ final class KakaoMapHostController: UIViewController {
                 )
             )
         guard let layer else { return }
+        // 핀 탭(화면기획 11) — 누른 핀의 `poiID` 가 곧 `MoyeoMapMarker.id` 다.
+        // 카드를 바꾸는 것까지만 하고, 상세로 가는 건 **카드를 눌렀을 때**다.
+        //
+        // 핸들러는 **지도**에 건다(`KakaoMap.addPoisTappedEventHandler`).
+        // `LabelLayer` 에는 이 함수가 없고, `LodPoi.addPoiTappedEventHandler` 는 핀 하나짜리다.
+        if onMarkerTap != nil, markerTapHandler == nil {
+            markerTapHandler = map.addPoisTappedEventHandler(target: self) { host in
+                { param in
+                    // 이 지도에는 마커 레이어가 하나뿐이지만, 경로·집합 핀이 늘면 다른 레이어의
+                    // 탭까지 카드로 흘러온다 — 레이어를 확인해서 우리 마커만 받는다.
+                    guard param.layerID == Identifier.markerLayer else { return }
+                    host.onMarkerTap?(param.poiID)
+                }
+            }
+        }
         layer.clearAllItems()
 
         for marker in content.markers {
@@ -251,7 +276,8 @@ final class KakaoMapHostController: UIViewController {
                 )
             )
             let options = PoiOptions(styleID: styleID, poiID: marker.id)
-            options.clickable = false
+            // 탭을 받을 화면에서만 켠다. 꺼져 있으면 핸들러를 걸어도 이벤트가 오지 않는다.
+            options.clickable = onMarkerTap != nil
             options.rank = marker.order ?? 0
             layer.addPoi(option: options, at: mapPoint(marker.coordinate))?.show()
         }

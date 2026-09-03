@@ -100,17 +100,19 @@ final class MoyeoPushNotificationManager: NSObject {
         }
     }
 
+    /// 서버로 보낼 최신 등록 토큰. 공백뿐이면 `nil` 이다 —
+    /// 그대로 보내면 서버가 400 `40016 FCM_TOKEN_BLANK` 로 가입·로그인을 막는다 (SIGNUP-GATE-CANON R6).
     func currentToken() async -> String? {
         #if canImport(FirebaseMessaging)
         do {
             let token = try await Messaging.messaging().token()
             store(token: token)
-            return token
+            return AuthFCMToken.normalized(token)
         } catch {
-            return cachedToken
+            return AuthFCMToken.normalized(cachedToken)
         }
         #else
-        return cachedToken
+        return AuthFCMToken.normalized(cachedToken)
         #endif
     }
 
@@ -121,7 +123,7 @@ final class MoyeoPushNotificationManager: NSObject {
     }
 
     func markTokenRegisteredWithBackend(_ token: String?) {
-        guard let token, !token.isEmpty else { return }
+        guard let token = AuthFCMToken.normalized(token) else { return }
         UserDefaults.standard.set(token, forKey: registeredTokenDefaultsKey)
     }
 
@@ -133,8 +135,8 @@ final class MoyeoPushNotificationManager: NSObject {
         )
     }
 
-    private func store(token: String) {
-        guard !token.isEmpty else { return }
+    private func store(token rawToken: String) {
+        guard let token = AuthFCMToken.normalized(rawToken) else { return }
         let didChange = cachedToken != token
         UserDefaults.standard.set(token, forKey: tokenDefaultsKey)
         if didChange {
@@ -180,12 +182,9 @@ final class MoyeoAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        #if canImport(FirebaseCore)
-        if Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil,
-           FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
-        #endif
+        // MoyeoTripApp.init() 에서 이미 구성했다면 건너뛴다.
+        // 델리게이트만으로 시작하는 경로(테스트·확장)를 위해 호출은 남겨 둔다.
+        MoyeoFirebaseBootstrap.configureIfPossible()
         MoyeoPushNotificationManager.shared.configure()
         return true
     }

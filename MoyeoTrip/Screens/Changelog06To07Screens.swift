@@ -50,8 +50,33 @@ struct TourismPlace: Identifiable, Hashable {
     /// 서버 관광 콘텐츠 유형 ID — 서버 장소일 때만 채워진다 (17-1a 타입 필터)
     var serverContentTypeID: Int?
 
+    /// 메뉴판 탭은 **서버가 준 메뉴 사진이 있을 때만** 만든다.
+    /// 라벨만 보고 탭을 만들면 실데이터에 0장인데도 빈 탭이 생긴다.
     var showsMenuImages: Bool {
-        type == .restaurant && !menuImageLabels.isEmpty
+        type == .restaurant && !menuImageURLs.isEmpty
+    }
+
+    /// 서버 콘텐츠 ID 만 아는 상태의 빈 장소.
+    ///
+    /// 상세 화면이 `loadDetail()` 로 실제 값을 채운다. 번들 목록에 없는 ID 로 들어왔을 때
+    /// 엉뚱한 목데이터 장소로 떨어지면, 그 장소의 목 ID 로 서버를 불러 상세가 항상 실패한다.
+    static func pending(id: String) -> TourismPlace {
+        TourismPlace(
+            id: id,
+            type: .attraction,
+            title: "",
+            address: nil,
+            latitude: nil,
+            longitude: nil,
+            thumbnailURL: nil,
+            postalCode: nil,
+            phone: nil,
+            phoneLabel: nil,
+            homepage: nil,
+            summary: nil,
+            imageLabels: [],
+            menuImageLabels: []
+        )
     }
 
     /// 좌표는 서버가 주지 않는 항목이 있다 — 둘 다 있을 때만 표기한다
@@ -119,7 +144,7 @@ struct PlaceSearchView: View {
         service: TourismContentProviding? = nil
     ) {
         self.onAdd = onAdd
-        let resolvedService = service ?? (UITestRuntime.isEnabled
+        let resolvedService = service ?? (UITestRuntime.usesMockTourism
             ? SampleTourismContentService()
             : TourismAPIClient())
         _model = StateObject(wrappedValue: TourismPlaceSearchModel(service: resolvedService))
@@ -144,6 +169,43 @@ struct PlaceSearchView: View {
         let filtersTypeLocally = !usesServerTypes && selectedType != nil
         guard !filtersTypeLocally, let total = model.totalElements else { return "\(filteredPlaces.count)곳" }
         return "\(total)곳"
+    }
+
+    /// 17-1a `지도에서 보기` — 목록이 이미 들고 있는 방문지 좌표를 그대로 순번 마커로 올린다.
+    /// 새 API 는 필요 없고, 좌표가 없거나 (0,0)인 방문지는 지도에 올릴 근거가 없어 뺀다.
+    /// 안드로이드 `PlaceAndTermsScreens.kt` 의 `place-search-map-toggle` 과 같은 규칙이다.
+    private var mapMarkers: [MoyeoMapMarker] {
+        let located: [(id: String, coordinate: MoyeoMapCoordinate)] = filteredPlaces
+            .compactMap { place in
+                guard
+                    let coordinate = MoyeoMapCoordinate(latitude: place.latitude, longitude: place.longitude),
+                    coordinate.latitude != 0, coordinate.longitude != 0
+                else {
+                    return nil
+                }
+                return (id: "place-\(place.id)", coordinate: coordinate)
+            }
+        return located.enumerated().map { index, item in
+            MoyeoMapMarker(id: item.id, coordinate: item.coordinate, order: index + 1)
+        }
+    }
+
+    /// 좌표가 하나도 없으면 **지도를 그리지 않는다** — 손으로 그린 가짜 지도를 두지 않는다 (NO-MOCK R4).
+    @ViewBuilder
+    private var mapPreview: some View {
+        let markers = mapMarkers
+        if let first = markers.first {
+            MoyeoMapView(
+                content: MoyeoMapContent(center: first.coordinate, level: 11, markers: markers),
+                isInteractive: false,
+                fallback: { MoyeoTheme.mapGreen }
+            )
+            .frame(height: 150)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("방문지 지도, \(markers.count)곳")
+            .accessibilityIdentifier("placeSearch.mapPreview")
+        }
     }
 
     var body: some View {
@@ -185,8 +247,7 @@ struct PlaceSearchView: View {
                 }
 
                 if showsMap {
-                    MoyeoPhotoTile(mascot: "🗺️", mood: .forest, height: 150, cornerRadius: 12)
-                        .accessibilityIdentifier("placeSearch.mapPreview")
+                    mapPreview
                 }
             }
             .padding(.horizontal, 20)
@@ -325,7 +386,7 @@ private struct PlaceSearchRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CachedRemoteImage(url: place.thumbnailURL) { image in
+            CachedRemoteImage(url: place.thumbnailURL, fallbackShape: .square) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 // 사진 자리에 카테고리 아이콘을 띄우면 사진 자리가 아이콘 자리로 읽힌다
@@ -343,10 +404,8 @@ private struct PlaceSearchRow: View {
                 if let address = place.address {
                     Text(address).font(.caption).foregroundStyle(MoyeoTheme.muted).lineLimit(2)
                 }
-                if let latitude = place.latitude, let longitude = place.longitude {
-                    Text(String(format: "%.4f, %.4f", latitude, longitude))
-                        .font(.caption2).foregroundStyle(MoyeoTheme.text400).monospacedDigit()
-                }
+                // 주소 줄이 바로 위에 있다 — 좌표까지 보여줄 이유가 없다(기획에도 없다).
+                // 좌표는 지도를 그리는 입력값이지 읽는 화면에 둘 값이 아니다.
             }
             Spacer(minLength: 4)
             Button(action: onAdd) {
@@ -383,7 +442,7 @@ struct PlaceDetailView: View {
     ) {
         _place = State(initialValue: place)
         self.onAdd = onAdd
-        self.service = service ?? (UITestRuntime.isEnabled
+        self.service = service ?? (UITestRuntime.usesMockTourism
             ? SampleTourismContentService()
             : TourismAPIClient())
     }
@@ -394,7 +453,7 @@ struct PlaceDetailView: View {
                 // 사진이 없을 때도 화면기획·웹·안드로이드처럼 풍경 자리표시자를 쓴다.
                 // 아이콘만 크게 놓으면 같은 화면인데 iOS만 사진이 없는 것처럼 보인다.
                 ZStack(alignment: .topTrailing) {
-                    CachedRemoteImage(url: place.imageURLs.first ?? place.thumbnailURL) { image in
+                    CachedRemoteImage(url: place.imageURLs.first ?? place.thumbnailURL, fallbackShape: .landscape) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
                         MoyeoPhotoTile(mascot: "", mood: .forest, height: 210, cornerRadius: MoyeoTheme.cardRadius)
@@ -425,7 +484,9 @@ struct PlaceDetailView: View {
                 VStack(spacing: 12) {
                     detailRow("mappin.and.ellipse", place.address, place.postalCode.map { "우편번호 \($0)" })
                     detailRow("phone", place.phone, place.phoneLabel)
-                    detailRow("map", place.coordinateText, "지도에서 열기")
+                    // 좌표가 있을 때만 이 행을 그리지만, **보여주는 것은 동작 문구**다.
+                    // 좌표 숫자는 지도를 여는 입력값이지 읽는 사람에게 보일 값이 아니다.
+                    detailRow("map", place.coordinateText == nil ? nil : "지도에서 열기", nil)
                     detailRow("globe", place.homepage, "홈페이지")
                 }
                 .padding(14)
@@ -447,35 +508,42 @@ struct PlaceDetailView: View {
                         .accessibilityIdentifier("placeDetail.fallback")
                 }
 
+                // 탭 숫자도 **서버가 준 사진 장수**다. 예전에는 번들 라벨 개수를 셌다.
                 HStack(spacing: 20) {
-                    tabButton("사진 \(place.imageLabels.count)", selected: !showsMenu) { showsMenu = false }
+                    tabButton("사진 \(place.imageURLs.count)", selected: !showsMenu) { showsMenu = false }
                     if place.showsMenuImages {
-                        tabButton("메뉴판 \(place.menuImageLabels.count)", selected: showsMenu) { showsMenu = true }
+                        tabButton("메뉴판 \(place.menuImageURLs.count)", selected: showsMenu) { showsMenu = true }
                     }
                 }
 
                 let labels = showsMenu ? place.menuImageLabels : place.imageLabels
                 let urls = showsMenu ? place.menuImageURLs : place.imageURLs
-                // 화면기획·웹은 3열 풍경 타일이다. 아이콘 + 라벨 자리표시자는 사진이 깨진 것처럼 읽힌다.
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
-                    spacing: 8
-                ) {
-                    ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                        CachedRemoteImage(url: urls.indices.contains(index) ? urls[index] : nil) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            MoyeoPhotoTile(
-                                mascot: "",
-                                mood: Self.galleryMood(index: index, showsMenu: showsMenu),
-                                height: 74,
-                                cornerRadius: 10
+                // 서버가 준 사진만 그린다. 예전에는 라벨 수만큼 칸을 만들고
+                // 색 타일(`galleryMood`)로 채워, 없는 사진이 있는 것처럼 보였다 (NO-MOCK R1).
+                if urls.isEmpty {
+                    MoyeoEmptyStateView(
+                        message: "아직 등록된 사진이 없어요.",
+                        accessibilityIdentifier: "placeDetail.photos.empty"
+                    )
+                } else {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
+                        spacing: 8
+                    ) {
+                        ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                            CachedRemoteImage(url: url) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                MoyeoTheme.leaf
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 74)
+                            .frame(height: 74)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .accessibilityLabel(
+                                labels.indices.contains(index) ? labels[index] : "사진 \(index + 1)"
                             )
                         }
-                        .frame(maxWidth: .infinity, minHeight: 74)
-                        .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .accessibilityLabel(label)
                     }
                 }
             }
@@ -503,8 +571,8 @@ struct PlaceDetailView: View {
         .toolbar {
             // 화면기획·웹의 우측 상단 공유
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                } label: {
+                // 이전에는 빈 클로저라 눌러도 아무 일도 없었다 (29-4 약관 공유와 같은 ShareLink 를 쓴다).
+                ShareLink(item: shareText, subject: Text(place.title)) {
                     Image(systemName: "square.and.arrow.up")
                         .foregroundStyle(MoyeoTheme.ink)
                 }
@@ -516,12 +584,9 @@ struct PlaceDetailView: View {
         .task { await loadDetail() }
     }
 
-    /// 갤러리 타일 톤은 화면기획처럼 장마다 조금씩 달라야 한 장을 여러 번 붙인 것처럼 보이지 않는다.
-    private static func galleryMood(index: Int, showsMenu: Bool) -> CourseMood {
-        let photoMoods: [CourseMood] = [.sunrise, .forest, .coral, .blossom, .river, .sunrise, .forest, .coral]
-        let menuMoods: [CourseMood] = [.sunrise, .coral, .blossom, .forest]
-        let moods = showsMenu ? menuMoods : photoMoods
-        return moods[index % moods.count]
+    /// 공유 본문 — 이름과 주소만 보낸다. **좌표는 넣지 않는다** (21·15·17-1a·17-1b 에서 뺀 것과 같다).
+    private var shareText: String {
+        [place.title, place.address].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
     /// 값이 없으면(서버가 null) 줄 자체를 그리지 않는다. 안내 문구도 값이 있을 때만 붙인다.
@@ -604,21 +669,6 @@ enum LegalDocumentEntry: Hashable {
     case settings
 }
 
-struct AuthTermsDirectLaunchView: View {
-    // 동의는 사용자가 직접 켜는 항목이다. 진입 상태는 화면기획·웹·안드로이드와 같이 모두 꺼짐.
-    @State private var agreedTerms: Set<AuthTerm> = []
-
-    var body: some View {
-        AuthTermsView(
-            agreedTerms: $agreedTerms,
-            isSubmitting: false,
-            errorMessage: nil,
-            finishAction: {}
-        )
-        .accessibilityIdentifier("screen.authTerms.direct")
-    }
-}
-
 struct LegalDocumentContent: Hashable {
     let title: String
     let isRequired: Bool
@@ -626,11 +676,25 @@ struct LegalDocumentContent: Hashable {
     let effectiveDate: String
     let summary: String
     let sections: [LegalSection]
+    /// 서버가 준 원문 마크다운. 있으면 이걸로 그린다(표·목록을 살린다).
+    /// 번들 문서는 섹션으로만 갖고 있어 `nil` 이다.
+    var markdown: String?
 
     struct LegalSection: Hashable {
         let title: String
         let body: String
     }
+
+    /// 서버 본문이 아직 오지 않았고 번들 문서도 없는 자리. 헤더만 그리고 본문은 비운다 —
+    /// 없는 약관 내용을 지어내지 않는다.
+    static let empty = LegalDocumentContent(
+        title: "약관",
+        isRequired: true,
+        version: "",
+        effectiveDate: "",
+        summary: "",
+        sections: []
+    )
 
     static let service = LegalDocumentContent(
         title: "이용약관", isRequired: true, version: "v1.2", effectiveDate: "2026년 5월 1일 시행",
@@ -718,14 +782,20 @@ struct LegalDocumentContent: Hashable {
 }
 
 struct LegalDocumentDetailView: View {
-    let kind: LegalDocumentKind
+    /// 번들 문서. 서버 약관에서 열렸고 대응하는 번들 문서가 없으면 `nil` 이다.
+    let kind: LegalDocumentKind?
     let entry: LegalDocumentEntry
+    /// 서버 약관에서 열렸을 때의 `termId`.
+    ///
+    /// 있으면 이 ID 로 본문을 받는다 — 제목 키워드로 찾지 않는다.
+    /// 서버가 약관을 새로 추가해도 키워드 표에 없다는 이유로 본문을 못 여는 일이 없어야 한다.
+    var serverTermID: Int64?
     var onAgree: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     /// 실서버 약관 — 로그인 세션이 있고 약관 API가 성공하면 서버 본문으로 대체한다
     @State private var serverDocument: LegalDocumentContent?
 
-    private var document: LegalDocumentContent { serverDocument ?? kind.content }
+    private var document: LegalDocumentContent { serverDocument ?? kind?.content ?? .empty }
 
     var body: some View {
         ScrollView {
@@ -759,10 +829,16 @@ struct LegalDocumentDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                ForEach(document.sections, id: \.title) { section in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(section.title).font(.subheadline.weight(.heavy))
-                        Text(section.body).font(.subheadline).foregroundStyle(MoyeoTheme.text700)
+                if let markdown = document.markdown {
+                    // 서버 약관은 표를 포함한 마크다운이다 — 줄을 그대로 이으면
+                    // `| 구분 | 수집 항목 |` 과 구분선이 본문에 노출된다.
+                    MoyeoMarkdownView(markdown: markdown)
+                } else {
+                    ForEach(document.sections, id: \.title) { section in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(section.title).font(.subheadline.weight(.heavy))
+                            Text(section.body).font(.subheadline).foregroundStyle(MoyeoTheme.text700)
+                        }
                     }
                 }
 
@@ -800,8 +876,8 @@ struct LegalDocumentDetailView: View {
         .toolbar {
             // 화면기획·웹의 우측 상단 공유
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                } label: {
+                // 이전에는 빈 클로저라 눌러도 아무 일도 없었다.
+                ShareLink(item: shareText, subject: Text(document.title)) {
                     Image(systemName: "square.and.arrow.up")
                         .foregroundStyle(MoyeoTheme.ink)
                 }
@@ -809,28 +885,59 @@ struct LegalDocumentDetailView: View {
                 .accessibilityIdentifier("terms.detail.share")
             }
         }
-        .accessibilityIdentifier("screen.terms.\(kind.rawValue).\(entry == .signup ? "signup" : "settings")")
+        .accessibilityIdentifier(
+            "screen.terms.\(kind?.rawValue ?? "server\(serverTermID.map(String.init) ?? "")").\(entry == .signup ? "signup" : "settings")"
+        )
+    }
+
+    /// 공유할 본문. 서버 원문이 있으면 그대로, 없으면 번들 문서를 텍스트로 옮긴다.
+    private var shareText: String {
+        if let markdown = document.markdown, !markdown.isEmpty {
+            return "\(document.title)\n\n\(markdown)"
+        }
+        let body = document.sections
+            .map { "## \($0.title)\n\n\($0.body)" }
+            .joined(separator: "\n\n")
+        return "\(document.title)\n\n\(body)"
     }
 
     /// 서버 약관 목록에서 이 화면의 약관을 찾아 본문(마크다운)을 받아온다
     private func loadServerTerm() async {
-        guard MoyeoServerSync.isEnabled, serverDocument == nil else { return }
-        guard let summaries = try? await TermsAPIClient.shared.terms() else { return }
-        let keyword = kind.serverTitleKeyword
-        guard let match = summaries.first(where: { $0.title.contains(keyword) }) else { return }
-        guard let detail = try? await TermsAPIClient.shared.term(id: match.termId) else { return }
+        // 약관은 공개 엔드포인트다 — 가입 중(세션 없음)에도 본문을 받아야 한다.
+        guard MoyeoServerSync.allowsPublicEndpoints, serverDocument == nil else { return }
+        let termID: Int64
+        if let serverTermID {
+            termID = serverTermID
+        } else {
+            guard let kind,
+                  let summaries = try? await TermsAPIClient.shared.terms(),
+                  let match = summaries.first(where: { $0.title.contains(kind.serverTitleKeyword) })
+            else { return }
+            termID = match.termId
+        }
+        guard let detail = try? await TermsAPIClient.shared.term(id: termID) else { return }
         serverDocument = LegalDocumentContent(
             title: detail.title,
             isRequired: detail.required,
             version: detail.version,
             effectiveDate: "",
             summary: "",
-            sections: ServerTermContentParser.sections(from: detail.content)
+            sections: ServerTermContentParser.sections(from: detail.content),
+            markdown: detail.content
         )
     }
 }
 
 extension LegalDocumentKind {
+    /// 서버 약관 제목 → 번들 문서. 서버가 본문을 못 줄 때만 쓰는 대비책이다.
+    /// 대응하는 번들 문서가 없으면 `nil` 이고, 그때는 서버 본문만으로 그린다.
+    init?(serverTitle: String) {
+        guard let match = LegalDocumentKind.allCases.first(where: {
+            serverTitle.contains($0.serverTitleKeyword)
+        }) else { return nil }
+        self = match
+    }
+
     /// 서버 약관 제목에서 이 문서를 찾기 위한 키워드
     var serverTitleKeyword: String {
         switch self {

@@ -6,9 +6,14 @@ enum AuthDirectScreen: String, Hashable {
     case onboarding3
     case login
     case emailLogin
+    /// 08-H 비밀번호 재설정. 08-A 의 `비밀번호를 잊으셨나요?` 가 가는 곳이다 —
+    /// 로그인하지 못하는 사람이 스스로 풀 수 있는 유일한 길이라 캡처 라우트도 따로 둔다.
+    case passwordReset
     case nickname
     case profileBasic
     case profileTaste
+    /// 약관 동의. 실제 가입 플로우의 단계를 그대로 연다 — 캡처 전용 화면을 따로 두지 않는다.
+    case profileTerms
     case profileImage
 }
 
@@ -19,8 +24,16 @@ struct AuthFlowView: View {
     @State private var nickname = ""
     @State private var selectedBirthdate: AuthBirthdate?
     @State private var selectedGender: AuthGender?
-    @State private var selectedTravelStyles = TravelTasteSelection.defaultStyles
-    @State private var selectedInterestRegions = TravelTasteSelection.defaultInterestRegions
+    // 아무것도 고르지 않은 상태로 시작한다. 미리 골라두면 사용자가 고르지 않은 취향이
+    // 본인 것으로 저장된다.
+    // 담는 값은 **서버 id** 다. 라벨로 담으면 가입 요청에서 다시 id 를 찾아야 하고,
+    // 표기가 조금만 달라도 선택이 통째로 유실된다 (정본 R4).
+    @State private var selectedTravelStyles: Set<Int64> = []
+    @State private var selectedInterestRegions: Set<Int64> = []
+    /// 06-1 후보는 서버가 준다 (`GET /users/me/profile/options` · 토큰 없이 200).
+    @StateObject private var tasteOptions = AuthTasteOptionsModel()
+    @State private var agreedTermIDs: Set<Int64> = []
+    @State private var confirmedMinimumAge = false
     @State private var email = ""
     @State private var password = ""
     @State private var passwordConfirmation = ""
@@ -29,6 +42,10 @@ struct AuthFlowView: View {
     private let onComplete: () -> Void
     private let allowsDismissal: Bool
     private let shouldRestoreSession: Bool
+    /// 화면을 직접 지정해 연 진입인지 — 캡처·QA 경로다.
+    /// 정본 R2(40919 는 조용히 다음으로)를 여기서도 적용하면 화면이 홈으로 튀어
+    /// 07 자리에 홈이 찍힌다. 안드로이드·웹도 같은 이유로 이 경로만 예외를 둔다.
+    private let isDirectEntry: Bool
 
     init(
         dependencies: AuthFlowDependencies? = nil,
@@ -51,14 +68,19 @@ struct AuthFlowView: View {
         // 닉네임은 사용자가 후보에서 직접 고르는 값이다. 화면기획·웹·안드로이드와 같이 진입 시점에는
         // 아무 후보도 선택되지 않은 상태여야 하고, 그래서 "다음" CTA도 비활성으로 시작한다.
         _nickname = State(initialValue: "")
-        _selectedBirthdate = State(initialValue: directScreen == .profileBasic ? .april1998 : nil)
+        // 생년월일도 사용자가 직접 고르는 값이다. 캡처 진입에서도 미리 채우지 않는다 —
+        // 채워두면 캡처가 실제 첫 화면이 아니라 값이 들어간 화면을 찍는다.
+        _selectedBirthdate = State(initialValue: nil)
         // 성별은 사용자가 직접 고르는 값이다. 화면기획·웹과 같이 진입 시점에는 아무것도 고르지 않은 상태.
         _selectedGender = State(initialValue: nil)
         self.allowsDismissal = allowsDismissal
         shouldRestoreSession = directScreen == nil && !showsProviderListForUITest
+        isDirectEntry = directScreen != nil
         self.onComplete = onComplete
     }
 
+    // 캡처 라우트 카탈로그라 분기가 화면 수만큼 늘어난다 — 쪼개면 오히려 찾기 어려워진다.
+    // swiftlint:disable:next cyclomatic_complexity
     nonisolated private static func directConfiguration(
         _ screen: AuthDirectScreen
     ) -> (stage: AuthFlowStage, onboardingIndex: Int) {
@@ -68,9 +90,11 @@ struct AuthFlowView: View {
         case .onboarding3: (.onboarding, 2)
         case .login: (.login, 0)
         case .emailLogin: (.emailLogin, 0)
+        case .passwordReset: (.passwordReset, 0)
         case .nickname: (.nickname, 0)
         case .profileBasic: (.basics, 0)
         case .profileTaste: (.taste, 0)
+        case .profileTerms: (.terms, 0)
         case .profileImage: (.profileImage, 0)
         }
     }
@@ -92,10 +116,27 @@ struct AuthFlowView: View {
         .toolbar(.hidden, for: .navigationBar)
         .animation(.easeInOut(duration: 0.22), value: viewModel.stage)
         .task {
+            // 직접 진입(캡처·QA)은 세션 복원을 타지 않는다 — 복원은 refreshToken 을 요구하는데
+            // 캡처 세션에는 그 값이 없다(`UITestRuntime.prepareLiveSessionIfNeeded`).
+            // 대신 라이브 캡처에서는 심어 둔 **액세스 토큰만** 채택해 07 이 서버 응답을 그린다.
+            // 토큰이 없으면(목 캡처·실사용) 아무것도 부르지 않는다 — 부르면
+            // `로그인 정보가 완전하지 않아요` 오류 배너만 뜬다.
+            if isDirectEntry {
+                guard viewModel.adoptLiveCaptureSessionIfNeeded() else { return }
+                if viewModel.stage == .profileImage {
+                    await viewModel.loadProfileImages()
+                }
+                return
+            }
             guard shouldRestoreSession else { return }
             if await viewModel.restoreSession() {
                 completeFlow()
             }
+        }
+        // 프로필 이미지 API 가 `40919`("이미 설정 완료")로 답하면 오류 대신 그냥 넘어간다 (정본 R2).
+        .onChange(of: viewModel.signupDidComplete) { _, didComplete in
+            guard didComplete, !isDirectEntry else { return }
+            completeFlow()
         }
     }
 
@@ -135,44 +176,18 @@ struct AuthFlowView: View {
                     }
                 }
             }
-        case .emailLogin:
+        case .emailLogin, .emailRegistration:
+            // 로그인/가입을 따로 고르지 않는다 — 한 번 시도하고 계정이 없으면 그대로 만든다.
             AuthEmailCredentialsView(
-                mode: .signIn,
                 email: $email,
                 password: $password,
-                passwordConfirmation: $passwordConfirmation,
                 isSubmitting: viewModel.isSubmittingEmail,
                 errorMessage: viewModel.errorMessage,
-                submitAction: { authenticateEmail(mode: .signIn) },
-                createAccountAction: {
-                    viewModel.clearError()
-                    password = ""
-                    passwordConfirmation = ""
-                    viewModel.stage = .emailRegistration
-                },
-                signInAction: {},
+                submitAction: { authenticateEmail() },
                 forgotPasswordAction: {
                     viewModel.clearError()
                     viewModel.stage = .passwordReset
                 }
-            )
-        case .emailRegistration:
-            AuthEmailCredentialsView(
-                mode: .createAccount,
-                email: $email,
-                password: $password,
-                passwordConfirmation: $passwordConfirmation,
-                isSubmitting: viewModel.isSubmittingEmail,
-                errorMessage: viewModel.errorMessage,
-                submitAction: { authenticateEmail(mode: .createAccount) },
-                createAccountAction: {},
-                signInAction: {
-                    viewModel.clearError()
-                    password = ""
-                    passwordConfirmation = ""
-                    viewModel.stage = .emailLogin
-                },
-                forgotPasswordAction: {}
             )
         case .passwordReset:
             AuthPasswordResetView(
@@ -205,11 +220,14 @@ struct AuthFlowView: View {
             AuthTravelTasteView(
                 selectedTravelStyles: $selectedTravelStyles,
                 selectedInterestRegions: $selectedInterestRegions,
+                options: tasteOptions,
                 isSubmitting: viewModel.isSubmittingSignup,
                 errorMessage: viewModel.errorMessage,
                 backAction: { moveBack() },
-                continueAction: { submitSignup() }
+                continueAction: { viewModel.stage = .terms }
             )
+        case .terms:
+            termsStep
         case .profileImage:
             AuthProfileImageView(
                 nickname: viewModel.selectedNicknameForProfile,
@@ -238,16 +256,9 @@ struct AuthFlowView: View {
         }
     }
 
-    private func submitSignup() {
-        guard let selectedGender, let selectedBirthdate else { return }
+    private func authenticateEmail() {
         Task {
-            await viewModel.submitSignup(gender: selectedGender, birthdate: selectedBirthdate)
-        }
-    }
-
-    private func authenticateEmail(mode: AuthEmailMode) {
-        Task {
-            if await viewModel.authenticateEmail(email: email, password: password, mode: mode) {
+            if await viewModel.authenticateEmail(email: email, password: password) {
                 completeFlow()
             }
         }
@@ -263,25 +274,26 @@ struct AuthFlowView: View {
     private func moveBack() {
         guard !viewModel.isBusy else { return }
         viewModel.clearError()
-        switch viewModel.stage {
-        case .splash:
-            dismissIfAllowed()
-        case .onboarding:
+        if viewModel.stage == .onboarding {
             moveBackFromOnboarding()
-        case .login:
-            viewModel.stage = .onboarding
-        case .emailLogin:
-            viewModel.stage = .login
-        case .emailRegistration, .passwordReset:
-            viewModel.stage = .emailLogin
-        case .nickname:
-            viewModel.stage = .login
-        case .basics:
-            viewModel.stage = .nickname
-        case .taste:
-            viewModel.stage = .basics
-        case .profileImage:
+        } else if let previous = Self.previousStage(before: viewModel.stage) {
+            viewModel.stage = previous
+        } else {
             dismissIfAllowed()
+        }
+    }
+
+    /// 뒤로 갈 단계. `nil` 이면 플로우를 닫는다.
+    nonisolated private static func previousStage(before stage: AuthFlowStage) -> AuthFlowStage? {
+        switch stage {
+        case .splash, .onboarding, .profileImage: nil
+        case .login: .onboarding
+        case .emailLogin: .login
+        case .emailRegistration, .passwordReset: .emailLogin
+        case .nickname: .login
+        case .basics: .nickname
+        case .taste: .basics
+        case .terms: .taste
         }
     }
 
@@ -321,6 +333,9 @@ struct AuthFlowView: View {
             return AuthHeaderProgress(label: "프로필 설정", current: 6, total: 8)
         case .taste:
             return AuthHeaderProgress(label: "프로필 설정", current: 7, total: 8)
+        case .terms:
+            // 약관 동의는 프로필 8단계 밖의 보조 화면이다 — 안드로이드와 같이 프로그레스를 그리지 않는다.
+            return nil
         case .profileImage:
             return AuthHeaderProgress(label: "프로필 설정", current: 8, total: 8)
         }
@@ -396,5 +411,36 @@ private struct AuthFlowHeader: View {
         .padding(.top, 6)
         .padding(.bottom, 12)
         .background(MoyeoTheme.background)
+    }
+}
+
+// MARK: - 약관 단계
+
+private extension AuthFlowView {
+    func submitSignup() {
+        guard let selectedGender, let selectedBirthdate else { return }
+        Task {
+            await viewModel.submitSignup(
+                gender: selectedGender,
+                birthdate: selectedBirthdate,
+                travelStyleIds: selectedTravelStyles.sorted(),
+                interestedRegionIds: selectedInterestRegions.sorted(),
+                agreedTermIds: agreedTermIDs.sorted()
+            )
+        }
+    }
+
+    var termsStep: some View {
+        AuthTermsView(
+            terms: viewModel.serverTerms,
+            isLoading: viewModel.isLoadingTerms,
+            loadFailed: viewModel.termsLoadFailed,
+            agreedTermIDs: $agreedTermIDs,
+            confirmedMinimumAge: $confirmedMinimumAge,
+            isSubmitting: viewModel.isSubmittingSignup,
+            errorMessage: viewModel.errorMessage,
+            retryAction: { Task { await viewModel.loadTerms() } },
+            finishAction: { submitSignup() }
+        )
     }
 }

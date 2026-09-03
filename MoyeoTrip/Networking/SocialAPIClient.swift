@@ -14,7 +14,7 @@ struct ServerFriendUser: Decodable, Hashable {
     let introduction: String?
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 }
 
@@ -53,7 +53,7 @@ struct ServerBlockedUser: Decodable, Identifiable, Hashable {
     var id: Int64 { userId }
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 }
 
@@ -82,7 +82,7 @@ struct ServerTravelDexCompanion: Decodable, Identifiable, Hashable {
     var id: Int64 { userId }
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 }
 
@@ -125,14 +125,24 @@ final class SocialAPIClient: @unchecked Sendable {
         try await api.sendVoid("/api/v1/users/me/friend-requests/\(requestID)", method: "DELETE")
     }
 
-    func removeFriend(friendshipID: Int64) async throws {
-        try await api.sendVoid("/api/v1/users/me/friends/\(friendshipID)", method: "DELETE")
+    /// 27-2a 친구 끊기 — **되돌릴 수 없다.** 호출부는 확인 단계를 거친 뒤에만 부른다.
+    ///
+    /// 경로 변수는 **상대 사용자 ID** 다(`DELETE /users/me/friends/{friendUserId}`).
+    /// 예전에는 `friendshipId` 를 넣고 있었다 — 호출부가 없어 드러나지 않았던 결함이다.
+    func removeFriend(friendUserID: Int64) async throws {
+        try await api.sendVoid("/api/v1/users/me/friends/\(friendUserID)", method: "DELETE")
     }
 
     // MARK: 차단
 
     func blockedUsers() async throws -> [ServerBlockedUser] {
         try await api.get("/api/v1/users/me/blocks")
+    }
+
+    /// 차단. 30-2 신고 시트가 실제로 반영하는 유일한 동작이다 —
+    /// 신고 접수 API 는 서버에 없어서, 시트가 할 수 있는 건 차단뿐이다(웹 30-2 와 같은 사정).
+    func block(userID: Int64) async throws {
+        try await api.sendVoid("/api/v1/users/me/blocks/\(userID)", method: "POST")
     }
 
     func unblock(userID: Int64) async throws {

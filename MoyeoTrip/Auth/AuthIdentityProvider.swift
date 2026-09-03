@@ -5,6 +5,17 @@ protocol AuthIdentityProviding {
     func signInWithEmail(_ email: String, password: String) async throws -> String
     func createEmailAccount(_ email: String, password: String) async throws -> String
     func sendPasswordReset(to email: String) async throws
+    /// 기기에 남아 있는 로그인 상태에서 새 idToken 을 받는다. 로그인 상태가 없으면 `nil`.
+    ///
+    /// 세션 복원 중 `40902`(회원 정보 미입력)로 되돌아갈 때 쓴다 (SIGNUP-GATE-CANON R2-1).
+    /// 가입 API 는 Firebase idToken 을 요구하는데, 그 값은 세션에 저장되지 않는다.
+    /// Firebase SDK 가 로그인 상태를 유지하므로 재로그인을 요구하지 않고 여기서 다시 받는다.
+    func currentUserIDToken() async throws -> String?
+}
+
+extension AuthIdentityProviding {
+    /// 기본값은 "유지된 로그인 상태 없음" — Firebase 를 쓰는 구현만 실제 토큰을 준다.
+    func currentUserIDToken() async throws -> String? { nil }
 }
 
 struct MockAuthIdentityProvider: AuthIdentityProviding {
@@ -42,9 +53,15 @@ enum AuthIdentityError: LocalizedError {
     case weakPassword
     case missingIDToken
     case missingConfiguration(String)
+    /// 사용자가 소셜 로그인 화면에서 스스로 빠져나왔다 (AUTH-SILENT-CASES-CANON R1).
+    /// 실패와 **다른 값**이라야 호출부가 조용히 아무것도 하지 않기를 고를 수 있다.
+    case canceledByUser
 
     var errorDescription: String? {
         switch self {
+        case .canceledByUser:
+            // 취소는 화면에 띄우지 않는다 (정본 R2). 문구를 두면 언젠가 새어 나온다.
+            return nil
         case .unsupportedProvider:
             return "현재 빌드에서 이 로그인 방식을 사용할 수 없어요."
         case .invalidEmail:
@@ -94,6 +111,12 @@ struct FirebaseAuthIdentityProvider: AuthIdentityProviding {
 
     func sendPasswordReset(to email: String) async throws {
         try await Auth.auth().sendPasswordReset(withEmail: email)
+    }
+
+    /// Firebase 는 로그인 상태를 기기에 유지한다 — 재로그인 없이 새 idToken 을 받을 수 있다.
+    func currentUserIDToken() async throws -> String? {
+        guard let user = Auth.auth().currentUser else { return nil }
+        return try await user.getIDToken()
     }
 
     private func googleIDToken() async throws -> String {

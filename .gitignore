@@ -43,3 +43,9 @@ fastlane/test_output/
 .env
 .env.*
 !.env.example
+
+# Sentry 자격증명 (토큰 포함) — 커밋하지 않는다
+.sentryclirc
+
+# QA 테스트 계정 자격 증명 (워크스페이스 루트에 있지만, 옮겨져도 커밋되지 않게)
+qa-accounts.local.json

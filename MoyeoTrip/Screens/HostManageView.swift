@@ -7,12 +7,15 @@ struct HostManageView: View {
     let onApproveApplicant: (TripRecruitment, Participant) -> Void
     let onRejectApplicant: (TripRecruitment, Participant) -> Void
     let onSetRecruitmentClosed: (TripRecruitment, Bool) -> Void
-    @State private var pendingApplicants = HostApplicant.mockPending
-    @State private var approvedApplicants = HostApplicant.mockApproved
+    @State private var pendingApplicants = HostApplicant.noPending
+    @State private var approvedApplicants = HostApplicant.noApproved
     @State private var rejectedApplicants: [HostApplicant] = []
     @State private var isRecruitmentClosed: Bool
     @State private var selectedThread: ChatThread?
     @State private var routeDestination: SupportRoute?
+    /// 18-4 여행 확정 / 불발 · 18-5 집합 정보 수정 — 서버 모임에서만 연다.
+    @State private var tripStatusRoute: RoomIDRoute?
+    @State private var meetingEditRoute: RoomIDRoute?
     /// 서버 승인 대기 목록을 받았는지. 받았으면(빈 배열이어도) 목데이터 대기자를 쓰지 않는다 (18)
     @State private var usesServerApplications = false
     /// 승인·거절 처리 중인 신청 — 중복 탭을 막는다
@@ -65,8 +68,40 @@ struct HostManageView: View {
                     .buttonStyle(.plain)
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
-                    .padding(.bottom, 18)
+                    .padding(.bottom, 12)
                     .accessibilityIdentifier("hostManage.route")
+
+                    // 18-5 집합 정보 수정 — 모집을 연 뒤 집합 장소·시간을 고칠 길이 없었다.
+                    // 근거 `PUT /chat-rooms/{id}/meeting-info` (정본 §6-1).
+                    HostManageLinkRow(
+                        title: "집합 정보 수정",
+                        detail: "집합 장소·안내 문구·집합 일시를 고쳐요. 고치면 동행자 모두에게 알림이 가요.",
+                        icon: "mappin.and.ellipse",
+                        isEnabled: trip.serverRoomID != nil
+                    ) {
+                        if let roomID = trip.serverRoomID {
+                            meetingEditRoute = RoomIDRoute(roomID: roomID, kind: "meetingEdit")
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+                    .accessibilityIdentifier("hostManage.meetingEdit")
+
+                    // 18-4 여행 확정 / 불발 — 참가자가 보는 20-4 확정 모먼트는 있는데
+                    // 호스트가 그 버튼을 누르는 화면이 없었다 (정본 §6-1).
+                    HostManageLinkRow(
+                        title: "여행 확정하기",
+                        detail: "이 인원으로 떠날지, 이번 모집을 접을지 정해요.",
+                        icon: "checkmark.seal",
+                        isEnabled: trip.serverRoomID != nil
+                    ) {
+                        if let roomID = trip.serverRoomID {
+                            tripStatusRoute = RoomIDRoute(roomID: roomID, kind: "tripStatus")
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 18)
+                    .accessibilityIdentifier("hostManage.tripStatus")
 
                     Divider()
                         .overlay(MoyeoTheme.line)
@@ -102,7 +137,11 @@ struct HostManageView: View {
                             .padding(.top, 24)
                             .padding(.bottom, 12)
                         ForEach(rejectedApplicants) { applicant in
-                            HostCompactApplicantRow(applicant: applicant, detail: "거절된 신청")
+                            HostCompactApplicantRow(
+                                applicant: applicant,
+                                detail: "거절된 신청",
+                                action: applicant.profileCardRoute.map { route in { routeDestination = route } }
+                            )
                                 .padding(.horizontal, 20)
                                 .accessibilityIdentifier("hostRejected.\(applicant.id)")
                         }
@@ -142,6 +181,12 @@ struct HostManageView: View {
         }
         .navigationDestination(item: $routeDestination) { route in
             SupportDestinationView(route: route)
+        }
+        .navigationDestination(item: $tripStatusRoute) { route in
+            TripStatusView(roomID: route.roomID)
+        }
+        .navigationDestination(item: $meetingEditRoute) { route in
+            MeetingInfoEditView(roomID: route.roomID)
         }
         .task {
             guard
@@ -198,8 +243,13 @@ struct HostManageView: View {
             }
             ForEach(Array(pendingApplicants.dropFirst())) { applicant in
                 // 화면기획 18 — 접힌 대기자는 요약(나이·성별·매너)과 chevron만 보인다
-                HostCompactApplicantRow(applicant: applicant, detail: applicant.meta)
+                HostCompactApplicantRow(
+                    applicant: applicant,
+                    detail: applicant.meta,
+                    action: applicant.profileCardRoute.map { route in { routeDestination = route } }
+                )
                     .padding(.top, 8)
+                    .accessibilityIdentifier("hostPending.\(applicant.id)")
             }
         }
     }
@@ -370,127 +420,5 @@ private struct HostManageSectionTitle: View {
                     .foregroundStyle(MoyeoTheme.muted)
             }
         }
-    }
-}
-
-private struct HostApplicantCard: View {
-    let applicant: HostApplicant
-    let primaryLabel: String
-    let secondaryLabel: String
-    let onPrimary: () -> Void
-    let onSecondary: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HostApplicantHeader(applicant: applicant)
-            // 신청 한마디는 인용 블록으로 (화면기획). 신청자가 안 남겼으면 빈 인용을 그리지 않는다.
-            if !applicant.note.isEmpty {
-                Text("\u{201C}\(applicant.note)\u{201D}")
-                    .font(.caption)
-                    .foregroundStyle(MoyeoTheme.muted)
-                    .lineLimit(2)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                    .background(MoyeoTheme.subtleBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-
-            HStack(spacing: 10) {
-                Button(action: onSecondary) {
-                    Text(secondaryLabel)
-                        .font(.subheadline.weight(.heavy))
-                        .foregroundStyle(MoyeoTheme.ink)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 42)
-                        .background(MoyeoTheme.card)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(applicant.name) \(secondaryLabel)")
-                .accessibilityIdentifier("hostApplicant.\(applicant.id).reject")
-
-                Button(action: onPrimary) {
-                    Text(primaryLabel)
-                        .font(.subheadline.weight(.heavy))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 42)
-                        .background(MoyeoTheme.forest)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(applicant.name) \(primaryLabel)")
-                .accessibilityIdentifier("hostApplicant.\(applicant.id).approve")
-            }
-        }
-        .padding(16)
-        .background(MoyeoTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(MoyeoTheme.line, lineWidth: 1)
-        }
-    }
-}
-
-private struct HostApplicantHeader: View {
-    let applicant: HostApplicant
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // 서버 신청자는 프로필 이미지를 준다. 없으면 leaf 원만 남기고 마스코트를 지어내지 않는다.
-            if let profileImageURL = applicant.profileImageURL {
-                CachedRemoteImage(url: profileImageURL) { image in
-                    image
-                        .resizable()
-                        .scaledToFill()
-                } placeholder: {
-                    MoyeoTheme.leaf
-                }
-                .frame(width: 44, height: 44)
-                .clipShape(Circle())
-            } else {
-                Text(applicant.avatar)
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-                    .background(MoyeoTheme.leaf)
-                    .clipShape(Circle())
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(applicant.name)
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                Text(applicant.meta)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.muted)
-            }
-            Spacer()
-            // 화면기획 18 — 대기 카드 우상단 더보기
-            Image(systemName: "ellipsis")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.text400)
-        }
-    }
-}
-
-struct HostManagePill: View {
-    let text: String
-
-    init(_ text: String) {
-        self.text = text
-    }
-
-    /// 마감 배지(D-3)는 화면기획처럼 코랄 톤으로 구분한다
-    private var isDeadline: Bool { text.hasPrefix("D-") }
-
-    var body: some View {
-        Text(text)
-            .font(.caption.weight(.heavy))
-            .foregroundStyle(isDeadline ? MoyeoTheme.coral : MoyeoTheme.forest)
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(isDeadline ? MoyeoTheme.coral.opacity(0.14) : MoyeoTheme.leaf)
-            .clipShape(Capsule())
     }
 }

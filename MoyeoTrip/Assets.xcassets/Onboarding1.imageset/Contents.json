@@ -1,22 +1,22 @@
 {
-  "images" : [
+  "images": [
     {
-      "appearances" : [
+      "appearances": [
         {
-          "appearance" : "luminosity",
-          "value" : "dark"
+          "appearance": "luminosity",
+          "value": "dark"
         }
       ],
-      "filename" : "onboarding-1-night.png",
-      "idiom" : "universal"
+      "filename": "onboarding-1-night.heic",
+      "idiom": "universal"
     },
     {
-      "filename" : "onboarding-1.png",
-      "idiom" : "universal"
+      "filename": "onboarding-1.heic",
+      "idiom": "universal"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "xcode",
+    "version": 1
   }
 }

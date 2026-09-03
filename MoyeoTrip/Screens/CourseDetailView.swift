@@ -15,6 +15,8 @@ struct CourseDetailView: View {
     @State private var feedbackMessage: String?
     /// 실서버 코스 상세 — 목록에 없는 작성자·연결된 모임 수가 여기서 온다 (14)
     @State private var serverDetail: TravelCourse?
+    /// 14 `모집 중인 모임 보기` — `GET /travel-courses/{courseId}/chat-rooms` (정본 §4)
+    @State private var showsRecruitments = false
 
     /// 서버 상세를 받았으면 그것으로 그린다. 실패하면 들어올 때 받은 코스를 그대로 유지한다.
     private var displayCourse: TravelCourse {
@@ -45,8 +47,11 @@ struct CourseDetailView: View {
                                 .padding(.horizontal, 20)
                         }
 
-                        DetailPanel(title: "코스 미리보기") {
-                            CourseRouteMap(route: displayCourse.stops, mood: displayCourse.mood)
+                        // 방문지 좌표가 있을 때만 실지도를 그린다 — 좌표가 없으면 섹션째 숨긴다
+                        if !displayCourse.itinerary.isEmpty {
+                            DetailPanel(title: "코스 미리보기") {
+                                CourseRouteMap(stops: displayCourse.itinerary)
+                            }
                         }
 
                         Color.clear
@@ -71,16 +76,27 @@ struct CourseDetailView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom) {
-            // 서버 코스에는 연결된 목데이터 모집이 없다 — 모집 만들기/참여 바는 목데이터 코스에서만 보여준다
-            if !displayCourse.isServerBacked {
-                CourseDetailBottomBar(
-                    onCreateRecruitment: {
-                        supportRoute = .createRecruitment(course.id)
-                    },
-                    onOpenRecruitments: {
+            CourseDetailBottomBar(
+                onCreateRecruitment: {
+                    supportRoute = .createRecruitment(course.id)
+                },
+                onOpenRecruitments: {
+                    // 이 코스로 열린 모집은 서버가 준다 — 세션이 아는 모집만 뒤지지 않는다 (정본 §4).
+                    // 서버 코스가 아니면(목데이터 진입) 물어볼 곳이 없어 세션 목록으로 남는다.
+                    if course.serverCourseID != nil {
+                        showsRecruitments = true
+                    } else {
                         selectedTrip = tripContext.trips.first { $0.courseID == course.id }
-                            ?? MockData.trip(forCourseID: course.id)
                     }
+                }
+            )
+        }
+        .navigationDestination(isPresented: $showsRecruitments) {
+            if let courseID = course.serverCourseID {
+                CourseRecruitmentsView(
+                    courseID: courseID,
+                    courseTitle: displayCourse.title,
+                    tripContext: tripContext
                 )
             }
         }
@@ -186,19 +202,16 @@ private struct CourseDetailHero: View {
             Group {
                 if let thumbnailURL = course.thumbnailURL {
                     // 실서버 코스 — 서버가 준 대표 썸네일을 그린다
-                    CachedRemoteImage(url: thumbnailURL) { image in
+                    CachedRemoteImage(url: thumbnailURL, fallbackShape: .landscape) { image in
                         image
                             .resizable()
                             .scaledToFill()
                     } placeholder: {
                         MoyeoTheme.leaf
                     }
-                } else if course.isServerBacked {
-                    MoyeoTheme.leaf
                 } else {
-                    Image(course.heroImageAssetName)
-                        .resizable()
-                        .scaledToFill()
+                    // 코스 히어로는 이미지가 필수인 자리다 — 없으면 빈 썸네일만 둔다
+                    MoyeoPlaceholderImageView(shape: .landscape)
                 }
             }
             .frame(height: 174)
@@ -217,10 +230,6 @@ private struct CourseDetailHero: View {
                         Pill(text: firstTag, tint: course.mood.accent)
                     }
                     Pill(text: course.status.rawValue, tint: course.mood.accent)
-                    // "추천" 배지는 서버가 주는 정보가 아니다 — 목데이터 코스에서만 보여준다
-                    if !course.isServerBacked {
-                        Pill(text: "추천", tint: course.mood.accent)
-                    }
                 }
 
                 if let publishingInfo = course.publishingInfo {
@@ -237,19 +246,15 @@ private struct CourseDetailHero: View {
                 HStack(spacing: 0) {
                     CourseMetricColumn(icon: "clock", label: "소요시간", value: course.duration)
                     CourseMetricColumn(icon: "map", label: "이동거리", value: course.distance)
-                    if course.isServerBacked {
-                        // 서버 코스 평점 — 평가가 없으면 서버가 null을 준다
-                        if let rating = course.serverAverageRating {
-                            CourseMetricColumn(
-                                icon: "star.fill",
-                                label: "평점",
-                                value: String(format: "%.1f", rating)
-                            )
-                        } else {
-                            CourseMetricColumn(icon: "star", label: "평점", value: "아직 없음")
-                        }
+                    // 평점 — 평가가 없으면 서버가 null을 준다. 값을 지어내지 않는다.
+                    if let rating = course.serverAverageRating {
+                        CourseMetricColumn(
+                            icon: "star.fill",
+                            label: "평점",
+                            value: String(format: "%.1f", rating)
+                        )
                     } else {
-                        CourseMetricColumn(icon: "star.fill", label: "평점", value: "4.8")
+                        CourseMetricColumn(icon: "star", label: "평점", value: "아직 없음")
                     }
                 }
             }
@@ -263,7 +268,22 @@ private struct CoursePublishingSource: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            MascotAvatar(mascot: info.travelerAvatar, size: 30, background: MoyeoTheme.leaf)
+            // 서버가 작성자 프로필 이미지를 주면 **반드시 이미지**다 (2026-09-02 추가).
+            // `null` 일 때만 닉네임에서 유도한 마스코트로 떨어진다.
+            if let avatarURL = info.travelerAvatarURL {
+                CachedRemoteImage(url: avatarURL) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    MoyeoTheme.leaf
+                }
+                .frame(width: 30, height: 30)
+                .clipShape(Circle())
+                .accessibilityIdentifier("course.detail.creatorAvatarImage")
+            } else {
+                MascotAvatar(mascot: info.travelerAvatar, size: 30, background: MoyeoTheme.leaf)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(info.travelerName) 님이 다녀온 코스")
@@ -321,87 +341,38 @@ private struct CourseMetricColumn: View {
     }
 }
 
+/// 14 코스 미리보기 — 방문지 좌표를 실제 카카오 지도에 순번 마커 + 경로선으로 그린다.
+/// 좌표가 없는 방문지가 하나라도 있으면 그리지 않는다 (NO-MOCK-CANON R4).
 private struct CourseRouteMap: View {
-    let route: [String]
-    let mood: CourseMood
-    private let mapBackground = adaptiveColor(light: "#DCECE4", dark: "#16251F")
-    private let ridgeColor = adaptiveColor(light: "#FFFFFF", dark: "#31423A")
-    private let lowlandColor = adaptiveColor(light: "#BED8C4", dark: "#23362E")
-    private let pointBackground = adaptiveColor(light: "#FFFFFF", dark: "#1D2C26")
-    private let pointTextColor = adaptiveColor(light: "#0F1714", dark: "#E8F5ED")
+    let stops: [ItineraryStop]
 
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                    .fill(mapBackground)
-
-                Canvas { context, size in
-                    let routePoints = [0, 1, 2, 3].map { position(for: $0, size: size) }
-                    var ridge = Path()
-                    ridge.move(to: CGPoint(x: 0, y: size.height * 0.36))
-                    ridge.addLine(to: CGPoint(x: size.width, y: size.height * 0.22))
-                    context.stroke(
-                        ridge,
-                        with: .color(ridgeColor.opacity(0.60)),
-                        style: StrokeStyle(lineWidth: 30, lineCap: .round)
-                    )
-
-                    var lowland = Path()
-                    lowland.move(to: CGPoint(x: 0, y: size.height * 0.62))
-                    lowland.addLine(to: CGPoint(x: size.width, y: size.height * 0.50))
-                    context.stroke(
-                        lowland,
-                        with: .color(lowlandColor),
-                        style: StrokeStyle(lineWidth: 26, lineCap: .round)
-                    )
-
-                    var routeLine = Path()
-                    routeLine.move(to: routePoints[0])
-                    routePoints.dropFirst().forEach { routeLine.addLine(to: $0) }
-                    context.stroke(
-                        routeLine,
-                        with: .color(MoyeoTheme.forest),
-                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
-                    )
-                }
-
-                ForEach(Array(route.prefix(4).enumerated()), id: \.offset) { index, stop in
-                    HStack(spacing: 6) {
-                        Text("\(index + 1)")
-                            .font(.caption.bold())
-                            .foregroundStyle(.white)
-                            .frame(width: 24, height: 24)
-                            .background(index == 0 ? MoyeoTheme.coral : mood.accent)
-                            .clipShape(Circle())
-                        Text(stop)
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(pointTextColor)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(pointBackground.opacity(0.88))
-                    .clipShape(Capsule())
-                    .position(position(for: index, size: proxy.size))
-                }
+    private var routeMarkers: [MoyeoMapMarker] {
+        stops.compactMap { stop in
+            guard let coordinate = MoyeoMapCoordinate(latitude: stop.latitude, longitude: stop.longitude) else {
+                return nil
             }
+            return MoyeoMapMarker(id: stop.id, coordinate: coordinate, order: stop.order)
         }
-        .frame(height: 146)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("course.route.preview")
     }
 
-    private func position(for index: Int, size: CGSize) -> CGPoint {
-        switch index {
-        case 0:
-            return CGPoint(x: size.width * 0.16, y: size.height * 0.75)
-        case 1:
-            return CGPoint(x: size.width * 0.40, y: size.height * 0.52)
-        case 2:
-            return CGPoint(x: size.width * 0.66, y: size.height * 0.32)
-        default:
-            return CGPoint(x: size.width * 0.74, y: size.height * 0.16)
+    var body: some View {
+        let markers = routeMarkers
+        if markers.count == stops.count, let first = markers.first {
+            MoyeoMapView(
+                content: MoyeoMapContent(
+                    center: first.coordinate,
+                    level: 11,
+                    markers: markers,
+                    polyline: markers.map(\.coordinate)
+                ),
+                isInteractive: false,
+                fallback: { MoyeoTheme.mapGreen }
+            )
+            .frame(height: 146)
+            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("코스 경로 지도, 방문지 \(stops.count)곳")
+            .accessibilityIdentifier("course.route.preview")
         }
     }
 }
@@ -470,30 +441,5 @@ private struct DetailPanel<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
-    }
-}
-
-private extension TravelCourse {
-    var heroImageAssetName: String {
-        switch id {
-        case "course-cheongsong-juwangsan":
-            return "weather_fog_seokguram"
-        case "course-andong-hahoe":
-            return "weather_rain_hahoe"
-        case "course-gyeongju-history":
-            return "weather_sunny_cheomseongdae"
-        case "course-pohang-drive":
-            return "weather_wind_homigot"
-        case "course-ulleung-island":
-            return "weather_wind_homigot"
-        case "course-mungyeong-saejae":
-            return "weather_cloudy_bulguksa"
-        case "course-yeongju-buseoksa":
-            return "weather_snow_buseoksa"
-        case "course-andong-dosan":
-            return "weather_heatwave_dosan"
-        default:
-            return "weather_sunny_cheomseongdae"
-        }
     }
 }

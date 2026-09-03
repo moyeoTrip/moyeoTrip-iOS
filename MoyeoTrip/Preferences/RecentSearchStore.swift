@@ -65,7 +65,7 @@ final class UserDefaultsRecentSearchStore: RecentSearchStoring {
     }
 }
 
-/// 캡처 모드용 저장소 — 기획 목데이터로 시작하고 디스크에 남기지 않는다.
+/// 디스크에 남기지 않는 저장소 — 테스트에서 쓴다.
 final class InMemoryRecentSearchStore: RecentSearchStoring {
     private var searches: [String]
 
@@ -91,14 +91,9 @@ final class RecentSearchModel: ObservableObject {
         searches = store.load()
     }
 
-    /// 실행 환경에 맞는 저장소를 고른다 — 캡처 모드는 기획 목데이터 고정, 그 밖에는 `UserDefaults` 영구 저장.
+    /// 캡처도 실제 앱과 같은 저장소를 쓴다 (NO-MOCK-CANON R2) — 캡처 전용 검색어 주입은 없다.
     static func forCurrentRuntime() -> RecentSearchModel {
-        if UITestPlanningMockData.isActive {
-            return RecentSearchModel(
-                store: InMemoryRecentSearchStore(searches: UITestPlanningMockData.recentSearches)
-            )
-        }
-        return RecentSearchModel(store: UserDefaultsRecentSearchStore())
+        RecentSearchModel(store: UserDefaultsRecentSearchStore())
     }
 
     func record(_ keyword: String) {

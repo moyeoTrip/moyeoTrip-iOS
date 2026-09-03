@@ -38,12 +38,12 @@ final class AuthAccountService {
 
         do {
             try await apiClient.withdraw(accessToken: tokens.accessToken)
-        } catch AuthClientError.server(let statusCode, _) where statusCode == 401 {
+        } catch AuthClientError.server(let statusCode, _, _) where statusCode == 401 {
             let refreshed = try await apiClient.refreshSession(refreshToken: tokens.refreshToken)
             tokens = refreshed.tokens
             try sessionStore.save(tokens)
             try await apiClient.withdraw(accessToken: tokens.accessToken)
-        } catch AuthClientError.server(let statusCode, _) where statusCode == 404 {
+        } catch AuthClientError.server(let statusCode, _, _) where statusCode == 404 {
             try sessionStore.clear()
             profileStore.clear()
             await clearProviderSessions()
@@ -102,7 +102,7 @@ final class AuthCurrentUserService {
         let response: AuthProfileImagesResponse
         do {
             response = try await apiClient.profileImages(accessToken: tokens.accessToken)
-        } catch AuthClientError.server(let statusCode, _) where statusCode == 401 {
+        } catch AuthClientError.server(let statusCode, _, _) where statusCode == 401 {
             let refreshed = try await apiClient.refreshSession(refreshToken: tokens.refreshToken)
             tokens = refreshed.tokens
             try sessionStore.save(tokens)
@@ -139,16 +139,7 @@ final class AuthProviderLinkService: ObservableObject {
     private let fcmTokenProvider: AuthFCMTokenProviding
 
     static var current: AuthProviderLinkService {
-        if ProcessInfo.processInfo.arguments.contains("UITEST_MODE") {
-            let sessionStore = InMemoryAuthSessionStore()
-            try? sessionStore.save(AuthTokens(accessToken: "mock-access", refreshToken: "mock-refresh"))
-            return AuthProviderLinkService(
-                apiClient: MockAuthAPIClient(arguments: ProcessInfo.processInfo.arguments),
-                identityProvider: MockAuthIdentityProvider(delayNanoseconds: 50_000_000),
-                sessionStore: sessionStore
-            )
-        }
-        return AuthProviderLinkService()
+        AuthProviderLinkService()
     }
 
     init(
@@ -209,7 +200,8 @@ final class AuthProviderLinkService: ObservableObject {
     }
 
     private func submitLink(idToken: String) async throws {
-        let fcmToken = await fcmTokenProvider.currentToken()
+        // 공백만 있는 토큰은 서버가 400 `40016` 으로 막는다 — 없으면 필드를 생략한다 (정본 R6).
+        let fcmToken = AuthFCMToken.normalized(await fcmTokenProvider.currentToken())
         providers = try await withValidAccessToken { accessToken in
             try await apiClient.linkProvider(
                 idToken: idToken,
@@ -226,7 +218,12 @@ final class AuthProviderLinkService: ObservableObject {
         guard var tokens = try sessionStore.load() else { throw AuthClientError.missingTokens }
         do {
             return try await operation(tokens.accessToken)
-        } catch AuthClientError.server(let statusCode, _) where statusCode == 401 {
+        } catch AuthClientError.server(let statusCode, let code, let message) where statusCode == 401 {
+            // 갱신 토큰이 없는 세션(캡처 세션)은 갱신할 수 없다 — 401 을 그대로 올린다.
+            // 빈 refreshToken 으로 `/auth/refresh` 를 부르면 400 이 돌아와 원인이 가려진다.
+            guard !tokens.refreshToken.isEmpty else {
+                throw AuthClientError.server(statusCode: statusCode, code: code, message: message)
+            }
             let refreshed = try await apiClient.refreshSession(refreshToken: tokens.refreshToken)
             tokens = refreshed.tokens
             try sessionStore.save(tokens)

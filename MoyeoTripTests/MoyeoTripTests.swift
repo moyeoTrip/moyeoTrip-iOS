@@ -15,84 +15,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MoyeoTripTests {
-    @Test func mockDataRelationshipsAreCoherent() {
-        #expect(Set(MockData.courses.map(\.id)).count == MockData.courses.count)
-        #expect(Set(MockData.trips.map(\.id)).count == MockData.trips.count)
-        #expect(MockData.trips.allSatisfy { $0.joined <= $0.capacity })
-        #expect(MockData.trips.allSatisfy { $0.minimumParticipants == 3 })
-        #expect(MockData.feedPosts.allSatisfy { !$0.route.isEmpty })
-        #expect(MockData.participants.allSatisfy { participant in
-            participant.name.range(of: #"^[가-힣]+ [가-힣]+ [0-9]{4}$"#, options: .regularExpression) != nil
-        })
-
-        let tripIDs = Set(MockData.trips.map(\.id))
-        let linkedTripIDs = MockData.spots.compactMap(\.linkedTripID)
-        #expect(linkedTripIDs.allSatisfy { tripIDs.contains($0) })
-        #expect(MockData.chatThreads.allSatisfy { !$0.messages.isEmpty })
-        #expect(MockData.chatThreads.filter(\.isReadOnly).allSatisfy { thread in
-            thread.archiveNotice?.contains("14일") == true
-                && thread.archiveNotice?.contains("친구 도감") == true
-                && thread.closureReason != nil
-        })
-        #expect(MockData.chatThread(forTripID: "trip-gyeongju-night")?.id == "chat-gyeongju-night")
-        #expect(MockData.trips.allSatisfy { MockData.chatThread(forTripID: $0.id) != nil })
-        #expect(MockData.courses.allSatisfy { MockData.trip(forCourseID: $0.id) != nil })
-        #expect(MockData.course(forSpotID: "spot-ulleung")?.id == "course-ulleung-island")
-        #expect(MockData.trip(forCourseID: "unknown-course") == nil)
-    }
-
-    @Test func visibleTripCountsStayAlignedWithPlanningData() {
-        let hahoe = MockData.trip(for: "trip-andong-hahoe")
-        let dosan = MockData.trip(for: "trip-andong-dosan")
-        let hahoeThread = MockData.chatThread(forTripID: "trip-andong-hahoe")
-        let dosanThread = MockData.chatThread(forTripID: "trip-andong-dosan")
-
-        #expect(hahoe.map { "\($0.joined)/\($0.capacity)명" } == "3/6명")
-        #expect(hahoeThread?.statusSummary.hasPrefix("3/6명") == true)
-        #expect(dosan.map { "\($0.joined)/\($0.capacity)명" } == "2/4명")
-        #expect(dosanThread?.statusSummary.hasPrefix("2/4명") == true)
-        #expect(dosan?.status == .open)
-        #expect(dosanThread?.statusSummary.contains("모집중") == true)
-    }
-
-    @Test func recruitmentSeatPolicyReflectsCapacity() {
-        let openTrip = MockData.trips[0]
-        // 자리 1개 남은 모집: 영주 부석사 눈꽃 산책(4/5명).
-        // 경주 단풍·야경은 기준 목데이터에서 4/8명(모집중)으로 바뀌었다.
-        let nearlyFullTrip = MockData.trip(for: "trip-yeongju-buseoksa")!
-        let fullTrip = TripRecruitment(
-            id: "full-trip",
-            courseID: "course-test-full",
-            title: "가득 찬 테스트 모임",
-            region: "경주",
-            coverMascot: "🐰",
-            hostName: "테스터",
-            hostAvatar: "🐰",
-            schedule: "오늘",
-            meetupPoint: "경주역",
-            price: "무료",
-            capacity: 4,
-            joined: 4,
-            minimumParticipants: 3,
-            status: .confirmed,
-            summary: "정원 계산 검증",
-            vibe: "테스트",
-            tags: [],
-            route: [],
-            participants: []
-        )
-
-        #expect(openTrip.remainingSeats == 3)
-        #expect(openTrip.seatAvailability == .open(remainingSeats: 3))
-        #expect(openTrip.needsMoreParticipants == 1)
-        #expect(!openTrip.hasMetMinimumParticipants)
-        #expect(nearlyFullTrip.hasMetMinimumParticipants)
-        #expect(nearlyFullTrip.seatAvailability == .almostFull(remainingSeats: 1))
-        #expect(fullTrip.seatAvailability == .full)
-        #expect(fullTrip.progress == 1)
-        #expect(!fullTrip.canJoin)
-    }
-
     @Test func weatherHeroPolicyChoosesSafeContentForRain() {
         let heavyRain = WeatherHeroPolicy.content(for: .heavyRain)
         let sunny = WeatherHeroPolicy.content(for: .sunny)
@@ -105,8 +27,8 @@ struct MoyeoTripTests {
         #expect(heavyRain.badge == "대체 추천")
         #expect(heavyRain.place == "경주 월정교")
         #expect(heavyRain.imageAssetName == "weather_heavy_rain_woljeonggyo")
-        #expect(heavyRain.imageAsset.lightFileName == "weather-heavy-rain-woljeonggyo.png")
-        #expect(heavyRain.imageAsset.darkFileName == "weather-heavy-rain-woljeonggyo-night.png")
+        #expect(heavyRain.imageAsset.lightFileName == "weather-heavy-rain-woljeonggyo.heic")
+        #expect(heavyRain.imageAsset.darkFileName == "weather-heavy-rain-woljeonggyo-night.heic")
         #expect(heavyRain.copy.contains("실내형 코스"))
         #expect(rain.state == .caution)
         #expect(rain.badge == "주의")
@@ -115,19 +37,8 @@ struct MoyeoTripTests {
         #expect(dust.state == .blocked)
         #expect(dust.badge == "대체 추천")
         #expect(dust.imageAssetName == "weather_dust_donggung_wolji")
-        #expect(MockData.currentWeatherCondition == .sunny)
-        #expect(
-            WeatherCoursePolicy.recommendedCourses(for: .sunny, courses: MockData.courses).prefix(3).map(\.id)
-                == ["course-cheongsong-juwangsan", "course-andong-hahoe", "course-gyeongju-history"]
-        )
-        #expect(
-            WeatherCoursePolicy.recommendedCourses(for: .heavyRain, courses: MockData.courses).first?.id
-                == "course-gyeongju-history"
-        )
-        #expect(
-            WeatherCoursePolicy.recommendedCourses(for: .wind, courses: MockData.courses).first?.id
-                == "course-andong-hahoe"
-        )
+        // 코스 추천은 서버 코스 목록으로만 돈다 — 목 코스 상수는 더 이상 없다 (NO-MOCK-CANON R1)
+        #expect(WeatherCoursePolicy.recommendedCourses(for: .sunny, courses: []).isEmpty)
     }
 
     @Test func generatedAssetsHaveLightAndDarkCatalogVariants() throws {
@@ -164,72 +75,9 @@ struct MoyeoTripTests {
         ])
     }
 
-    @Test func courseStatusSeparatesWalkingLoad() {
-        let balancedCourse = MockData.courses.first { $0.id == "course-cheongsong-juwangsan" }
-        let activeCourse = MockData.courses.first { $0.id == "course-ulleung-island" }
-
-        #expect(balancedCourse?.status == .balanced)
-        #expect(balancedCourse?.isBeginnerFriendly == true)
-        #expect(activeCourse?.status == .active)
-        #expect(activeCourse?.isBeginnerFriendly == false)
-    }
-
     @Test func visibilityDefaultsMatchPlanningRules() {
         #expect(FeedVisibility.friendsOnly.rawValue == "친구만")
         #expect(DogamVisibility.friendsOnly.rawValue == "친구에게만")
-        #expect(MockData.feedPosts.first?.visibility == .friendsOnly)
-        #expect(MockData.dogamFriends.first?.nickname.hasSuffix("3492") == true)
-    }
-
-    @Test func hostRecruitmentStatePropagatesToTripAndChatModels() {
-        let trip = MockData.trips[0]
-        let applicant = Participant(id: "applicant-deer", name: "따스한 사슴 3492", avatar: "🦌")
-        let approvedTrip = trip.withHostApprovedParticipant(applicant)
-
-        #expect(approvedTrip.joined == trip.joined + 1)
-        #expect(approvedTrip.status == .confirmed)
-        #expect(approvedTrip.participants.contains(applicant))
-        #expect(approvedTrip.chatStatusSummary == "3/5명 · 확정")
-        #expect(approvedTrip.chatStatusDetail == "출발 확정 · 신청 대기 0명")
-
-        let closedTrip = approvedTrip.withRecruitmentClosed(true)
-
-        #expect(closedTrip.status == .cancelled)
-        #expect(!closedTrip.canJoin)
-        #expect(closedTrip.applicationActionTitle == "모집 종료")
-        #expect(closedTrip.chatStatusSummary == "3/5명 · 모집 취소")
-        #expect(closedTrip.chatStatusDetail.contains("새 신청을 받지 않아요"))
-        #expect(closedTrip.withAppliedCurrentUser(MockData.profile) == closedTrip)
-
-        let reopenedTrip = closedTrip.withRecruitmentClosed(false)
-
-        #expect(reopenedTrip.status == .confirmed)
-        #expect(reopenedTrip.chatStatusSummary == "3/5명 · 확정")
-
-        let thread = MockData.chatThreads[0].withTripStatus(approvedTrip)
-        let noticedThread = thread.withSystemNotice("따스한 사슴 3492님이 참여 확정됐어요.")
-
-        #expect(noticedThread.statusSummary == "3/5명 · 확정")
-        #expect(noticedThread.lastMessage.contains("참여 확정"))
-        #expect(noticedThread.messages.count == thread.messages.count + 1)
-        #expect(noticedThread.messages.last?.senderName == "모여트립")
-    }
-
-    @Test func tripDetailScheduleTextFollowsRecruitmentSchedule() {
-        let dateTexts = MockData.trips.map(\.detailDateText)
-        let timeTexts = MockData.trips.map(\.detailTimeText)
-
-        #expect(dateTexts == [
-            "2026.05.25 (토)",
-            "2026.06.09 (화)",
-            "2026.06.05 (금)",
-            "2026.06.15 (월)",
-            "2026.07.12 (일)",
-            "2026.10.31 (토)",
-            "2026.12.14 (월)",
-            "2026.07.07 (화)"
-        ])
-        #expect(timeTexts == ["08:00", "10:00", "14:00", "09:30", "09:00", "08:30", "10:00", "10:30"])
     }
 
     @Test func systemNoticeSenderPolicyIncludesBrandNotices() {
@@ -291,8 +139,8 @@ struct MoyeoTripTests {
     private var expectedSplashAsset: GeneratedImageAsset {
         GeneratedImageAsset(
             catalogName: "splash_generated",
-            lightFileName: "splash-generated.png",
-            darkFileName: "splash-generated-night.png"
+            lightFileName: "splash-generated.heic",
+            darkFileName: "splash-generated-night.heic"
         )
     }
 
@@ -300,48 +148,48 @@ struct MoyeoTripTests {
         [
             GeneratedImageAsset(
                 catalogName: "weather_sunny_cheomseongdae",
-                lightFileName: "weather-sunny-cheomseongdae.png",
-                darkFileName: "weather-sunny-cheomseongdae-night.png"
+                lightFileName: "weather-sunny-cheomseongdae.heic",
+                darkFileName: "weather-sunny-cheomseongdae-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_cloudy_bulguksa",
-                lightFileName: "weather-cloudy-bulguksa.png",
-                darkFileName: "weather-cloudy-bulguksa-night.png"
+                lightFileName: "weather-cloudy-bulguksa.heic",
+                darkFileName: "weather-cloudy-bulguksa-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_rain_hahoe",
-                lightFileName: "weather-rain-hahoe.png",
-                darkFileName: "weather-rain-hahoe-night.png"
+                lightFileName: "weather-rain-hahoe.heic",
+                darkFileName: "weather-rain-hahoe-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_snow_buseoksa",
-                lightFileName: "weather-snow-buseoksa.png",
-                darkFileName: "weather-snow-buseoksa-night.png"
+                lightFileName: "weather-snow-buseoksa.heic",
+                darkFileName: "weather-snow-buseoksa-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_fog_seokguram",
-                lightFileName: "weather-fog-seokguram.png",
-                darkFileName: "weather-fog-seokguram-night.png"
+                lightFileName: "weather-fog-seokguram.heic",
+                darkFileName: "weather-fog-seokguram-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_wind_homigot",
-                lightFileName: "weather-wind-homigot.png",
-                darkFileName: "weather-wind-homigot-night.png"
+                lightFileName: "weather-wind-homigot.heic",
+                darkFileName: "weather-wind-homigot-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_heavy_rain_woljeonggyo",
-                lightFileName: "weather-heavy-rain-woljeonggyo.png",
-                darkFileName: "weather-heavy-rain-woljeonggyo-night.png"
+                lightFileName: "weather-heavy-rain-woljeonggyo.heic",
+                darkFileName: "weather-heavy-rain-woljeonggyo-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_heatwave_dosan",
-                lightFileName: "weather-heatwave-dosan.png",
-                darkFileName: "weather-heatwave-dosan-night.png"
+                lightFileName: "weather-heatwave-dosan.heic",
+                darkFileName: "weather-heatwave-dosan-night.heic"
             ),
             GeneratedImageAsset(
                 catalogName: "weather_dust_donggung_wolji",
-                lightFileName: "weather-dust-donggung-wolji.png",
-                darkFileName: "weather-dust-donggung-wolji-night.png"
+                lightFileName: "weather-dust-donggung-wolji.heic",
+                darkFileName: "weather-dust-donggung-wolji-night.heic"
             )
         ]
     }
@@ -398,8 +246,21 @@ extension MoyeoTripTests {
 
     @MainActor
     @Test func nicknameRefreshDoesNotAddAClientSideLimit() async {
+        // `initialResponse` 는 **후보가 빈** 자리다(NO-MOCK-CANON R1 — 화면이 스켈레톤을 그린다).
+        // `refreshCandidates()` 는 후보 3개를 요구하므로 그걸 성공 픽스처로 쓰면 항상 실패한다.
         let model = AuthNicknameViewModel(
-            provider: AuthNicknameTestProvider(result: .success(AuthNicknameViewModel.initialResponse))
+            provider: AuthNicknameTestProvider(
+                result: .success(
+                    AuthNicknameCandidatesResponse(
+                        selectionToken: "server-selection-1",
+                        candidates: [
+                            AuthNicknameCandidate(id: "a", nickname: "포근한 두루미 4186", color: "NAVY"),
+                            AuthNicknameCandidate(id: "b", nickname: "느긋한 수달 7351", color: "MINT"),
+                            AuthNicknameCandidate(id: "c", nickname: "용감한 토끼 2640", color: "PINK")
+                        ]
+                    )
+                )
+            )
         )
 
         for _ in 0..<6 {
@@ -429,7 +290,13 @@ extension MoyeoTripTests {
 
         model.prepareSignup(nickname: "따스한 사슴 3492", selectionToken: "selection-test")
         #expect(model.stage == .basics)
-        await model.submitSignup(gender: .female, birthdate: .april1998)
+        await model.submitSignup(
+            gender: .female,
+            birthdate: .april1998,
+            travelStyleIds: [1, 3],
+            interestedRegionIds: [4, 17],
+            agreedTermIds: [1, 2]
+        )
 
         #expect(model.stage == .profileImage)
         #expect(
@@ -439,7 +306,10 @@ extension MoyeoTripTests {
                 nickname: "따스한 사슴 3492",
                 gender: "F",
                 birthDate: "1998-04-12",
-                fcmToken: "fcm-test"
+                travelStyleIds: [1, 3],
+                interestedRegionIds: [4, 17],
+                fcmToken: "fcm-test",
+                agreedTermIds: [1, 2]
             )
         )
         #expect(apiClient.capturedSignupProvider == .kakao)
@@ -489,7 +359,7 @@ extension MoyeoTripTests {
             )
         )
 
-        #expect(!(await model.authenticateEmail(email: "moyeo@example.com", password: "password", mode: .signIn)))
+        #expect(!(await model.authenticateEmail(email: "moyeo@example.com", password: "password")))
         #expect(model.stage == .profileImage)
         #expect(model.profileImages == restoredCandidates)
         #expect(model.remainingProfileGenerations == 1)
@@ -640,7 +510,7 @@ extension MoyeoTripTests {
     @MainActor
     @Test func missingWithdrawnUserClearsStoredSessionDuringLaunchRestore() async throws {
         let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
-        apiClient.refreshError = AuthClientError.server(statusCode: 404, message: "user missing")
+        apiClient.refreshError = AuthClientError.server(statusCode: 404, code: nil, message: "user missing")
         let sessionStore = InMemoryAuthSessionStore()
         try sessionStore.save(AuthTokens(accessToken: "stale-access", refreshToken: "stale-refresh"))
         let model = AuthFlowViewModel(
@@ -691,14 +561,50 @@ extension MoyeoTripTests {
         #expect(model.stage == .emailLogin)
         #expect(apiClient.capturedLoginProvider == nil)
 
-        #expect(!(await model.authenticateEmail(
-            email: "moyeo@example.com",
-            password: "password",
-            mode: .createAccount
-        )))
+        // 로그인/가입을 따로 고르지 않는다 — 먼저 로그인해 보고 계정이 없을 때만 만든다.
+        // 여기서는 로그인이 성공하므로 로그인 토큰이 그대로 서버로 간다.
+        #expect(!(await model.authenticateEmail(email: "moyeo@example.com", password: "password")))
         #expect(model.stage == .nickname)
         #expect(apiClient.capturedLoginProvider == .email)
+        #expect(apiClient.capturedLoginRequest?.idToken == "firebase-id-email-signin")
+    }
+
+    /// 계정이 없으면(로그인이 `invalidCredential` 로 실패) 그대로 새 계정을 만든다.
+    ///
+    /// Email Enumeration Protection 때문에 "계정 없음"과 "비밀번호 틀림"이 같은 코드로 오므로,
+    /// 가입 시도가 성공하면 계정이 없었던 것이다.
+    @MainActor
+    @Test func emailSignInFallsBackToAccountCreationWhenSignInMisses() async {
+        let apiClient = AuthFlowTestAPIClient(loginState: .userInfoRequired)
+        let model = AuthFlowViewModel(
+            dependencies: AuthFlowDependencies(
+                apiClient: apiClient,
+                identityProvider: AuthIdentitySignInMissTestProvider(),
+                sessionStore: InMemoryAuthSessionStore(),
+                fcmTokenProvider: AuthFCMTokenTestProvider(token: nil)
+            )
+        )
+
+        #expect(!(await model.authenticateEmail(email: "moyeo@example.com", password: "password")))
         #expect(apiClient.capturedLoginRequest?.idToken == "firebase-id-email-signup")
+    }
+
+    /// 계정은 있고 비밀번호가 틀린 경우 — 가입 시도가 `emailAlreadyInUse` 로 막힌다.
+    @MainActor
+    @Test func emailWrongPasswordSurfacesPasswordMessage() async {
+        let apiClient = AuthFlowTestAPIClient(loginState: .userInfoRequired)
+        let model = AuthFlowViewModel(
+            dependencies: AuthFlowDependencies(
+                apiClient: apiClient,
+                identityProvider: AuthIdentityEmailExistsTestProvider(),
+                sessionStore: InMemoryAuthSessionStore(),
+                fcmTokenProvider: AuthFCMTokenTestProvider(token: nil)
+            )
+        )
+
+        #expect(!(await model.authenticateEmail(email: "moyeo@example.com", password: "wrong")))
+        #expect(model.errorMessage == AuthClientError.wrongEmailPassword.errorDescription)
+        #expect(apiClient.capturedLoginRequest == nil)
     }
 
     @MainActor
@@ -728,12 +634,15 @@ extension MoyeoTripTests {
             #expect(request.url?.path == "/api/v1/auth/signup")
             #expect(request.httpMethod == "POST")
             let data = try #require(request.authTestBodyData)
-            let payload = try JSONSerialization.jsonObject(with: data) as? [String: String]
-            #expect(payload?["idToken"] == "firebase-id")
-            #expect(payload?["nicknameSelectionToken"] == "selection-token")
-            #expect(payload?["nickname"] == "따스한 사슴 3492")
-            #expect(payload?["gender"] == "F")
-            #expect(payload?["birthDate"] == "1998-04-12")
+            // `travelStyleIds`·`interestedRegionIds` 가 배열로 추가되면서 `[String: String]` 캐스팅이
+            // nil 로 떨어지고 아래 기대값이 **전부** 조용히 실패했다(테스트 밖 스텁이라 이름도 안 붙었다).
+            // 그 필드 추가 자체는 결함 수정이었다 — 07 에서 고른 값이 어디로도 안 갔다.
+            let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            #expect(payload?["idToken"] as? String == "firebase-id")
+            #expect(payload?["nicknameSelectionToken"] as? String == "selection-token")
+            #expect(payload?["nickname"] as? String == "따스한 사슴 3492")
+            #expect(payload?["gender"] as? String == "F")
+            #expect(payload?["birthDate"] as? String == "1998-04-12")
             let body = Data(
                 #"{"accessToken":"access","refreshToken":"refresh","signupState":"PROFILE_IMAGE_REQUIRED"}"#.utf8
             )
@@ -751,7 +660,8 @@ extension MoyeoTripTests {
                 nickname: "따스한 사슴 3492",
                 gender: "F",
                 birthDate: "1998-04-12",
-                fcmToken: nil
+                fcmToken: nil,
+                agreedTermIds: [1, 2]
             )
         )
 
@@ -875,7 +785,7 @@ extension MoyeoTripTests {
     @MainActor
     @Test func providerLookupRefreshesExpiredAccessAndPersistsRotatedTokens() async throws {
         let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
-        apiClient.linkedProviderErrors = [AuthClientError.server(statusCode: 401, message: "expired")]
+        apiClient.linkedProviderErrors = [AuthClientError.server(statusCode: 401, code: nil, message: "expired")]
         let sessionStore = InMemoryAuthSessionStore()
         try sessionStore.save(AuthTokens(accessToken: "old-access", refreshToken: "old-refresh"))
         let service = AuthProviderLinkService(
@@ -951,7 +861,8 @@ extension MoyeoTripTests {
                 nickname: "따스한 사슴 3492",
                 gender: "F",
                 birthDate: "1998-04-12",
-                fcmToken: nil
+                fcmToken: nil,
+                agreedTermIds: [1, 2]
             )
         )
         #expect(response.signupState == .profileImageRequired)
@@ -1042,7 +953,7 @@ extension MoyeoTripTests {
     @Test func accountWithdrawalRefreshesExpiredAccessTokenThenClearsSession() async throws {
         let apiClient = AuthFlowTestAPIClient(loginState: .signupComplete)
         apiClient.withdrawErrors = [
-            AuthClientError.server(statusCode: 401, message: "expired")
+            AuthClientError.server(statusCode: 401, code: nil, message: "expired")
         ]
         let sessionStore = InMemoryAuthSessionStore()
         try sessionStore.save(AuthTokens(accessToken: "old-access", refreshToken: "old-refresh"))
@@ -1071,49 +982,6 @@ extension MoyeoTripTests {
 
         #expect(sessionStore.tokens == nil)
         #expect(profileStore.load() == nil)
-    }
-
-    @Test func androidStyleMockIdentifiersResolveToIOSRecords() {
-        let courseAliases = [
-            ("cheongsong-juwangsan", "course-cheongsong-juwangsan"),
-            ("andong-hahoe", "course-andong-hahoe"),
-            ("ulleung-island", "course-ulleung-island"),
-            ("gyeongju-healing", "course-gyeongju-history"),
-            ("course-gyeongju-healing", "course-gyeongju-history"),
-            ("pohang-sea", "course-pohang-drive"),
-            ("course-pohang-sea", "course-pohang-drive"),
-            ("mungyeong-saejae", "course-mungyeong-saejae"),
-            ("yeongju-buseoksa", "course-yeongju-buseoksa"),
-            ("andong-dosan", "course-andong-dosan")
-        ]
-
-        for (alias, iosID) in courseAliases {
-            #expect(MockData.course(for: alias)?.id == iosID)
-        }
-
-        #expect(MockData.trip(forCourseID: "gyeongju-healing")?.id == "trip-gyeongju-night")
-        #expect(MockData.trip(forCourseID: "pohang-sea")?.id == "trip-pohang-drive")
-        #expect(MockData.trip(for: "gyeongju-healing")?.id == "trip-gyeongju-night")
-        #expect(MockData.trip(for: "course-pohang-sea")?.id == "trip-pohang-drive")
-        #expect(MockData.trip(for: "trip-gyeongju-history")?.id == "trip-gyeongju-night")
-
-        for number in 1...7 {
-            #expect(MockData.feedPost(for: "feed-\(number)")?.id == String(format: "feed-%02d", number))
-        }
-
-        let chatAliases = [
-            ("chat-gyeongju-fall", "chat-gyeongju-night"),
-            ("chat-juwangsan", "chat-cheongsong-juwangsan"),
-            ("chat-andong-hanok", "chat-andong-hahoe")
-        ]
-
-        for (alias, iosID) in chatAliases {
-            #expect(MockData.chatThread(for: alias)?.id == iosID)
-        }
-
-        #expect(MockData.chatThread(forTripID: "gyeongju-healing")?.id == "chat-gyeongju-night")
-        #expect(MockData.chatThread(forTripID: "pohang-sea")?.id == "chat-pohang-drive")
-        #expect(UITestInitialState(arguments: ["UITEST_SCREEN=feed-detail:feed-1"]).feedPostID == "feed-01")
     }
 
     @Test func changeLogDirectLaunchKeysResolveDeterministically() {
@@ -1242,26 +1110,19 @@ extension MoyeoTripTests {
         #expect(LegalDocumentKind.allCases.allSatisfy { !$0.content.sections.isEmpty })
     }
 
-    @Test func placeDetailsExposeMenuImagesOnlyForRestaurants() {
+    @Test func placeDetailsExposeMenuImagesOnlyForRestaurants() throws {
         let restaurant = TourismPlaceCatalog.places.first(where: { $0.type == .restaurant })
         let nonRestaurants = TourismPlaceCatalog.places.filter { $0.type != .restaurant }
 
-        #expect(restaurant?.showsMenuImages == true)
+        // 메뉴판 탭은 **서버가 준 메뉴 사진이 있을 때만** 만든다 — 라벨만 보고 만들면 빈 탭이 생긴다.
+        // 번들 목록의 식당에는 사진이 없으니 규칙 자체를 검사한다(예전 기대값은 라벨만 봤다).
+        #expect(restaurant?.showsMenuImages == false)
+        var restaurantWithMenu = try #require(restaurant)
+        restaurantWithMenu.menuImageURLs = [URL(string: "https://cdn.example/menu.webp")!]
+        #expect(restaurantWithMenu.showsMenuImages == true)
         #expect(nonRestaurants.allSatisfy { !$0.showsMenuImages })
         // 기획 목데이터는 캡처 기준 화면이라 주소·전화가 비어 있으면 안 된다
         #expect(TourismPlaceCatalog.places.allSatisfy { ($0.address?.isEmpty == false) && ($0.phone?.isEmpty == false) })
-    }
-
-    @Test func recruitmentDataSeparatesRecruitmentAndCourseConditions() {
-        let trip = MockData.trips[0]
-        let thread = MockData.chatThread(forTripID: trip.id)
-
-        #expect(trip.title != MockData.course(for: trip.courseID)?.title)
-        #expect((20...100).contains(trip.minimumAge))
-        #expect((20...100).contains(trip.maximumAge))
-        #expect(thread?.tripTitle == trip.title)
-        #expect(thread?.courseName == MockData.course(for: trip.courseID)?.title)
-        #expect(thread?.ageRange == trip.ageRangeText)
     }
 
     @Test func pushTokenRegistrationStateTracksRefreshBoundary() {
@@ -1287,6 +1148,40 @@ private struct AuthIdentityTestProvider: AuthIdentityProviding {
 
     func createEmailAccount(_ email: String, password: String) async throws -> String {
         "firebase-id-email-signup"
+    }
+
+    func sendPasswordReset(to email: String) async throws {}
+}
+
+/// 로그인은 실패(계정 없음/비밀번호 오류로 구분 불가)하고 가입은 성공하는 제공자.
+private struct AuthIdentitySignInMissTestProvider: AuthIdentityProviding {
+    func socialIDToken(for provider: AuthServiceProvider) async throws -> String {
+        "firebase-id-\(provider.pathComponent)"
+    }
+
+    func signInWithEmail(_ email: String, password: String) async throws -> String {
+        throw NSError(domain: "FIRAuthErrorDomain", code: 17004)
+    }
+
+    func createEmailAccount(_ email: String, password: String) async throws -> String {
+        "firebase-id-email-signup"
+    }
+
+    func sendPasswordReset(to email: String) async throws {}
+}
+
+/// 로그인도 실패하고 가입도 `emailAlreadyInUse` 로 막히는 제공자 — 비밀번호가 틀린 경우다.
+private struct AuthIdentityEmailExistsTestProvider: AuthIdentityProviding {
+    func socialIDToken(for provider: AuthServiceProvider) async throws -> String {
+        "firebase-id-\(provider.pathComponent)"
+    }
+
+    func signInWithEmail(_ email: String, password: String) async throws -> String {
+        throw NSError(domain: "FIRAuthErrorDomain", code: 17004)
+    }
+
+    func createEmailAccount(_ email: String, password: String) async throws -> String {
+        throw NSError(domain: "FIRAuthErrorDomain", code: 17007)
     }
 
     func sendPasswordReset(to email: String) async throws {}
@@ -1538,26 +1433,18 @@ private struct AssetCatalogAppearance: Decodable, Equatable {
     )
 }
 
-/// 이메일 로그인·가입 입력 규칙 (화면에서 분리한 정책)
+/// 이메일로 시작하기 입력 규칙 (화면에서 분리한 정책)
+///
+/// 로그인/가입을 따로 고르지 않으므로 "비밀번호 확인" 입력이 없다 —
+/// 로그인일 수도 있는 입력에 확인란을 요구할 수 없다.
 @Suite
 struct EmailCredentialsPolicyTests {
-    @Test func emailCredentialsPolicyBlocksMismatchedSignUp() {
-        // 가입 모드에서는 비밀번호와 확인이 같아야 제출할 수 있다
-        #expect(!EmailCredentialsPolicy.canSubmit(
-            email: "moyeo@example.com", password: "password", passwordConfirmation: "different", isRegistration: true))
-        #expect(EmailCredentialsPolicy.canSubmit(
-            email: "moyeo@example.com", password: "password", passwordConfirmation: "password", isRegistration: true))
-        // 로그인 모드에서는 확인 칸을 보지 않는다
-        #expect(EmailCredentialsPolicy.canSubmit(
-            email: "moyeo@example.com", password: "password", passwordConfirmation: "", isRegistration: false))
-        // 이메일 형식과 최소 길이
-        #expect(!EmailCredentialsPolicy.canSubmit(
-            email: "moyeo", password: "password", passwordConfirmation: "password", isRegistration: true))
-        #expect(!EmailCredentialsPolicy.canSubmit(
-            email: "moyeo@example.com", password: "12345", passwordConfirmation: "12345", isRegistration: true))
-        // 경고는 확인 칸에 입력이 있고 값이 다를 때만 보인다
-        #expect(!EmailCredentialsPolicy.showsPasswordMismatch(password: "password", passwordConfirmation: ""))
-        #expect(EmailCredentialsPolicy.showsPasswordMismatch(password: "password", passwordConfirmation: "diff"))
-        #expect(!EmailCredentialsPolicy.showsPasswordMismatch(password: "password", passwordConfirmation: "password"))
+    @Test func emailCredentialsPolicyRequiresEmailAndMinimumPassword() {
+        #expect(EmailCredentialsPolicy.canSubmit(email: "moyeo@example.com", password: "password"))
+        // 이메일 형식
+        #expect(!EmailCredentialsPolicy.canSubmit(email: "moyeo", password: "password"))
+        // 최소 길이 6자
+        #expect(!EmailCredentialsPolicy.canSubmit(email: "moyeo@example.com", password: "12345"))
+        #expect(EmailCredentialsPolicy.canSubmit(email: "moyeo@example.com", password: "123456"))
     }
 }

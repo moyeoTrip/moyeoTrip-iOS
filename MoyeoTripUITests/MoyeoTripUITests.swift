@@ -170,14 +170,6 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertFalse(termsCopy.exists)
     }
 
-    private func assertDefaultTravelTasteSelection() {
-        XCTAssertEqual(element("auth.taste.style.자연").value as? String, "선택됨")
-        XCTAssertEqual(element("auth.taste.style.사진").value as? String, "선택됨")
-        XCTAssertEqual(element("auth.taste.region.경주").value as? String, "선택됨")
-        XCTAssertEqual(element("auth.taste.region.안동").value as? String, "선택됨")
-        XCTAssertTrue(element("auth.taste.continue").isEnabled)
-    }
-
     private func openNicknameSelection(extraArguments: [String] = []) {
         app.terminate()
         // 재실행하면서 인자를 덮어쓰면 호출부가 넘긴 플래그가 사라진다
@@ -390,28 +382,12 @@ final class MoyeoTripUITests: XCTestCase {
     }
 
     @MainActor
-    func testMockAuthFlowCompletesBackToHome() {
-        app.terminate()
+    func testAuthFlowStopsAtNicknameWithoutServerCandidates() {
+        // 목 인증 클라이언트가 사라져(NO-MOCK-CANON R2) 캡처도 실제 인증 경로를 탄다.
+        // 세션이 없으면 이름 후보를 못 받아 5/8 에서 멈춘다 — 예전 "끝까지 통과" 단언을 뒤집었다.
         launch(extraArguments: ["UITEST_SCREEN=auth"])
-        XCTAssertTrue(element("auth.header.step").waitForExistence(timeout: 5))
-
-        XCTAssertTrue(app.staticTexts["고민 없이 고르는\n경북 코스"].waitForExistence(timeout: 5))
-        XCTAssertEqual(element("auth.header.label").label, "온보딩")
-        XCTAssertEqual(element("auth.header.step").label, "1/8")
-        performTransition(
-            "onboarding-1-to-2",
-            action: { tapButton("다음", timeout: 5) },
-            destination: app.staticTexts["3명이 모이면\n채팅방이 열려요"]
-        )
-        XCTAssertTrue(app.staticTexts["3명이 모이면\n채팅방이 열려요"].exists)
-        XCTAssertEqual(element("auth.header.step").label, "2/8")
-        performTransition(
-            "onboarding-2-to-3",
-            action: { tapButton("다음") },
-            destination: app.staticTexts["여행 뒤엔\n자연스럽게 친구로"]
-        )
-        XCTAssertTrue(app.staticTexts["여행 뒤엔\n자연스럽게 친구로"].exists)
-        XCTAssertEqual(element("auth.header.step").label, "3/8")
+        tapButton("다음", timeout: 5)
+        tapButton("다음")
         performTransition(
             "onboarding-to-login",
             action: { tapButton("로그인 시작") },
@@ -419,98 +395,35 @@ final class MoyeoTripUITests: XCTestCase {
         )
 
         assertLoginProviderContracts()
-        performTransition(
-            "login-to-nickname",
-            action: { tapElement("auth.login.kakao") },
-            destination: element("auth.nickname.option.deer")
-        )
-
+        tapElement("auth.login.kakao")
         XCTAssertTrue(app.staticTexts["어떤 친구로 시작할까요?"].waitForExistence(timeout: 3))
         XCTAssertEqual(element("auth.header.label").label, "프로필 설정")
         XCTAssertEqual(element("auth.header.step").label, "5/8")
-        XCTAssertTrue(element("auth.nickname.option.deer").exists)
-        XCTAssertTrue(app.staticTexts["함께 천천히 경북을 둘러보는 여행자예요"].exists)
-        XCTAssertFalse(element("auth.nickname.continue").isEnabled)
-        tapElement("auth.nickname.option.deer")
-        XCTAssertTrue(element("auth.nickname.continue").isEnabled)
-        performTransition(
-            "nickname-to-basics",
-            action: { tapElement("auth.nickname.continue") },
-            destination: element("auth.basic.birthdate")
-        )
-
-        XCTAssertTrue(element("auth.basic.nickname").waitForExistence(timeout: 3))
-        XCTAssertEqual(element("auth.header.step").label, "6/8")
-        XCTAssertTrue(element("auth.basic.birthdate").waitForExistence(timeout: 3))
-        tapElement("auth.basic.gender.female")
-        XCTAssertEqual(element("auth.basic.continue").label, "저장하고 다음")
-        performTransition(
-            "basics-to-taste",
-            action: { tapElement("auth.basic.continue") },
-            destination: element("auth.taste.style.자연")
-        )
-
-        XCTAssertEqual(element("auth.header.step").label, "7/8")
-        assertDefaultTravelTasteSelection()
-        performTransition(
-            "taste-to-profile-image",
-            action: { tapElement("auth.taste.continue") },
-            destination: element("auth.profile.generate")
-        )
-
-        XCTAssertTrue(app.staticTexts["여행에서 만날 내 친구를 골라주세요"].waitForExistence(timeout: 3))
-        XCTAssertEqual(element("auth.header.step").label, "8/8")
-        XCTAssertFalse(app.staticTexts["약관 동의"].exists)
-        tapElement("auth.profile.generate")
-        let generatingCard = element("auth.profile.generating")
-        XCTAssertTrue(generatingCard.waitForExistence(timeout: 2))
-        XCTAssertTrue(generatingCard.label.contains("프로필 이미지 생성 중"))
-        let profileOption = element("auth.profile.option.1")
-        XCTAssertTrue(profileOption.waitForExistence(timeout: 3))
-        tapElement("auth.profile.option.1")
-        XCTAssertFalse(app.staticTexts["모여트립 in 경북"].exists)
-        XCTAssertTrue(element("auth.profile.confirm").isEnabled)
-        performTransition(
-            "profile-image-to-home",
-            action: { tapElement("auth.profile.confirm") },
-            destination: element("tab.home")
-        )
-
-        XCTAssertTrue(app.staticTexts["모여트립 in 경북"].waitForExistence(timeout: 3))
-    }
-
-    @MainActor
-    func testNicknameRefreshReplacesCandidatesAndClearsSelection() {
-        openNicknameSelection()
-
-        tapElement("auth.nickname.option.deer")
-        XCTAssertTrue(element("auth.nickname.continue").isEnabled)
-
-        tapElement("auth.nickname.refresh")
-        XCTAssertFalse(element("auth.nickname.continue").isEnabled)
-        let refreshedCandidate = element("auth.nickname.option.batch-2-0")
-        XCTAssertTrue(refreshedCandidate.waitForExistence(timeout: 3))
+        XCTAssertTrue(element("auth.nickname.empty").waitForExistence(timeout: 5))
         XCTAssertFalse(element("auth.nickname.option.deer").exists)
         XCTAssertFalse(element("auth.nickname.continue").isEnabled)
-        XCTAssertTrue(app.staticTexts["마음에 들 때까지 새 후보를 받아보세요"].exists)
+        XCTAssertFalse(app.staticTexts["모여트립 in 경북"].exists)
     }
 
     @MainActor
-    func testNicknameRefreshFailureKeepsCandidatesAndSelection() {
-        openNicknameSelection(extraArguments: ["UITEST_NICKNAME_REFRESH_FAIL"])
+    func testNicknameStepNeverShowsFabricatedCandidates() {
+        // 목 후보(`deer` · `batch-2-0`)는 사라졌다 — 서버가 안 주면 아무 이름도 뜨지 않는다
+        openNicknameSelection()
 
-        tapElement("auth.nickname.option.deer")
-        XCTAssertTrue(element("auth.nickname.continue").isEnabled)
+        XCTAssertFalse(element("auth.nickname.option.deer").exists)
+        XCTAssertFalse(element("auth.nickname.option.batch-2-0").exists)
+        XCTAssertFalse(element("auth.nickname.continue").isEnabled)
+    }
 
-        tapElement("auth.nickname.refresh")
-        let errorText = element("auth.nickname.refresh.error")
-        XCTAssertTrue(errorText.waitForExistence(timeout: 4))
-        XCTAssertEqual(errorText.label, "새 이름을 불러오지 못했어요. 다시 시도해주세요.")
-        XCTAssertTrue(element("auth.nickname.option.deer").exists)
-        XCTAssertEqual(element("auth.nickname.option.deer").value as? String, "선택됨")
-        XCTAssertTrue(element("auth.nickname.continue").isEnabled)
-        XCTAssertFalse(element("auth.nickname.refresh.remaining").exists)
-        XCTAssertFalse(element("auth.nickname.refresh.limit").exists)
+    @MainActor
+    func testNicknameFailureShowsCanonicalEmptyStateWithRetry() {
+        openNicknameSelection()
+
+        // §2 실패 = "불러오지 못했어요." + 다시 시도
+        let empty = element("auth.nickname.empty")
+        XCTAssertTrue(empty.waitForExistence(timeout: 5))
+        XCTAssertTrue(empty.label.contains("불러오지 못했어요."))
+        XCTAssertTrue(app.buttons["다시 시도"].exists)
     }
 
     @MainActor

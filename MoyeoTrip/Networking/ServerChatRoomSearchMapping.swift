@@ -22,8 +22,11 @@ extension ServerChatRoomSummary {
     }
 
     /// 집합 일시의 시각 표기 — "2026-09-12T08:30:00" → "08:30"
+    ///
+    /// 서버가 주지 않으면(검색·지도 응답에는 없다) 빈 문자열이다 — 화면은 빈 값이면 그 줄을 숨긴다.
     var meetingTimeText: String {
-        ServerTripMapper.timeText(fromDateTime: meetingDateTime)
+        guard let meetingDateTime else { return "" }
+        return ServerTripMapper.timeText(fromDateTime: meetingDateTime)
     }
 
     /// 당일 여행 시간 표기. 숙박이면 서버가 둘 다 null을 주므로 nil이 되어 화면에서 숨는다.
@@ -62,13 +65,44 @@ extension ServerTripMapper {
         }
     }
 
-    /// 검색 결과 → 11 탐색 지도 마커. **위경도가 둘 다 있는 항목만** 찍는다.
+    /// 지도 응답 → 11 탐색 지도의 **지역 묶음 마커**. 위경도가 둘 다 있는 항목만 찍는다.
+    ///
+    /// 원 안 숫자는 화면기획 11 그대로 **그 자리의 모임 수**다(참가자 수가 아니다).
+    /// 묶는 단위는 소수점 첫째 자리(≈10km) — 안드로이드 `meetingClusters()` 와 같은 규칙이다.
+    /// 서버 검색 응답에 지역 필드가 없어 좌표로 묶는다. 지역명을 지어내지 않는다.
     static func mapMarkers(from rooms: [ServerChatRoomSummary]) -> [MoyeoMapMarker] {
-        rooms.compactMap { room in
-            guard let coordinate = room.meetingCoordinate else { return nil }
-            // 순번 원은 코스 방문지 표기다. 모임 집합 장소는 단일 핀으로 찍는다(없는 숫자를 만들지 않는다).
-            return MoyeoMapMarker(id: "\(serverTripIDPrefix)\(room.roomId)", coordinate: coordinate)
+        var order: [String] = []
+        var groups: [String: [(roomId: Int64, coordinate: MoyeoMapCoordinate)]] = [:]
+        for room in rooms {
+            guard let coordinate = room.meetingCoordinate else { continue }
+            let key = String(format: "%.1f,%.1f", coordinate.latitude, coordinate.longitude)
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append((room.roomId, coordinate))
         }
+        return order.compactMap { key in
+            guard let group = groups[key], !group.isEmpty else { return nil }
+            let count = Double(group.count)
+            let center = MoyeoMapCoordinate(
+                latitude: group.reduce(0) { $0 + $1.coordinate.latitude } / count,
+                longitude: group.reduce(0) { $0 + $1.coordinate.longitude } / count
+            )
+            let ids = group.map { String($0.roomId) }.joined(separator: "-")
+            // id 는 `server-room-cluster-<방번호들>` 이다. **핀 탭이 이 값으로 방을 되찾으므로**
+            // 형식을 바꾸면 `clusterRoomIDs(from:)` 도 같이 바꿔야 한다.
+            return MoyeoMapMarker(
+                id: "\(serverTripIDPrefix)cluster-\(ids)",
+                coordinate: center,
+                order: group.count
+            )
+        }
+    }
+
+    /// 묶음 마커 id 에서 방 번호를 되꺼낸다. 화면기획 11 핀 탭이 쓴다.
+    /// 카드에 올릴 것은 **묶음의 첫 모집**이다 — 웹·안드로이드와 같은 선택 규칙이다.
+    static func clusterRoomIDs(from markerID: String) -> [Int64] {
+        let prefix = "\(serverTripIDPrefix)cluster-"
+        guard markerID.hasPrefix(prefix) else { return [] }
+        return markerID.dropFirst(prefix.count).split(separator: "-").compactMap { Int64($0) }
     }
 
     /// 서버 모임 마커가 하나도 없으면 nil — 화면은 기존 목업/목데이터 지도를 그대로 쓴다.
@@ -76,5 +110,34 @@ extension ServerTripMapper {
         let markers = mapMarkers(from: rooms)
         guard let first = markers.first else { return nil }
         return MoyeoMapContent(center: first.coordinate, level: 9, markers: markers)
+    }
+}
+
+extension ServerTripMapper {
+    /// 서버 모임 id 만 아는 상태에서 여는 화면(20-3 공지 이력 직접 진입)용 최소 스레드.
+    ///
+    /// 화면이 스스로 상세·공지를 받아 채우므로 여기서는 `serverRoomID` 만 실어 보낸다.
+    /// 이게 없으면 목데이터 스레드로 떨어져 실서버 화면에 목 공지가 찍힌다.
+    /// 값만 만들어 돌려주는 순수 함수라 액터 격리가 필요 없다.
+    nonisolated static func stubThread(serverRoomID roomID: Int64) -> ChatThread {
+        ChatThread(
+            id: "\(serverThreadIDPrefix)\(roomID)",
+            tripTitle: "",
+            region: "",
+            mascot: "",
+            lastMessage: "",
+            updatedAt: "",
+            unreadCount: 0,
+            statusSummary: "",
+            statusDetail: "",
+            members: [],
+            messages: [],
+            isReadOnly: true,
+            tripID: nil,
+            recruitmentDeadline: "",
+            scheduleSummary: "",
+            serverRoomID: roomID,
+            thumbnailURL: nil
+        )
     }
 }

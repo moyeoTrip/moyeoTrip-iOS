@@ -10,18 +10,21 @@ enum MoyeoMapSymbols {
     static var routeStroke: UIColor { UIColor.white.withAlphaComponent(0.9) }
 
     /// 방문지 순번 마커. 앵커는 가운데(0.5, 0.5).
+    ///
+    /// 지름 24 · 글자 11. 예전 34/15 는 **코스 미리보기(높이 140~160)에서 너무 컸다** —
+    /// 방문지가 10곳이면 마커가 지도를 덮는다. 안드로이드도 같은 값(24dp/11dp)이다.
     static func orderBadge(_ order: Int) -> UIImage {
-        let side: CGFloat = 34
+        let side: CGFloat = 24
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
         return renderer.image { _ in
             markerStroke.setFill()
             UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: side, height: side)).fill()
             markerFill.setFill()
-            UIBezierPath(ovalIn: CGRect(x: 2.5, y: 2.5, width: side - 5, height: side - 5)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 2, y: 2, width: side - 4, height: side - 4)).fill()
 
             let label = "\(order)" as NSString
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 15, weight: .heavy),
+                .font: UIFont.systemFont(ofSize: 11, weight: .heavy),
                 .foregroundColor: UIColor.white
             ]
             let textSize = label.size(withAttributes: attributes)
@@ -34,15 +37,15 @@ enum MoyeoMapSymbols {
 
     /// 집합 장소 핀. 작은 미리보기에서도 잘리지 않게 앵커는 가운데(0.5, 0.5)다.
     static var meetingPin: UIImage {
-        let head: CGFloat = 34
+        let head: CGFloat = 24
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: head, height: head))
         return renderer.image { _ in
             markerStroke.setFill()
             UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: head, height: head)).fill()
             markerFill.setFill()
-            UIBezierPath(ovalIn: CGRect(x: 2.5, y: 2.5, width: head - 5, height: head - 5)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 2, y: 2, width: head - 4, height: head - 4)).fill()
             markerStroke.setFill()
-            UIBezierPath(ovalIn: CGRect(x: head / 2 - 4.5, y: head / 2 - 4.5, width: 9, height: 9)).fill()
+            UIBezierPath(ovalIn: CGRect(x: head / 2 - 3.5, y: head / 2 - 3.5, width: 7, height: 7)).fill()
         }
     }
 }

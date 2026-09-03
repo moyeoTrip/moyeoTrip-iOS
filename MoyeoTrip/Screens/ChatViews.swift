@@ -30,7 +30,7 @@ private struct ChatThreadRow: View {
     HStack(alignment: .center, spacing: 12) {
       if let thumbnailURL = thread.thumbnailURL {
         // 실서버 모임 — 서버가 준 대표 썸네일을 그린다
-        CachedRemoteImage(url: thumbnailURL) { image in
+        CachedRemoteImage(url: thumbnailURL, fallbackShape: .square) { image in
           image
             .resizable()
             .scaledToFill()
@@ -40,8 +40,8 @@ private struct ChatThreadRow: View {
         .frame(width: 56, height: 56)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
       } else if thread.isServerBacked {
-        // 서버가 썸네일을 주지 않은 모임 — 목데이터 마스코트를 지어내지 않는다
-        MoyeoTheme.leaf
+        // 서버가 썸네일을 주지 않은 모임 — 공용 플레이스홀더로 채운다(지어낸 목데이터가 아니다)
+        MoyeoPlaceholderImageView(shape: .square)
           .frame(width: 56, height: 56)
           .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
       } else {
@@ -297,11 +297,8 @@ struct ChatRoomBody: View {
         if !displayThread.courseDisplayName.isEmpty {
           serverCourseBar
         }
-      } else {
+      } else if let tripID = thread.tripID {
         Button {
-          let tripID =
-            thread.tripID ?? MockData.trips.first { $0.title == thread.tripTitle }?.id
-            ?? MockData.trips[0].id
           let state: RouteEditState =
             thread.statusSummary.contains("확정")
             ? .tripConfirmed : (thread.courseSource == .custom ? .editable : .linkedLocked)
@@ -412,8 +409,10 @@ struct ChatRoomBody: View {
 
   /// 서버 모임은 공지가 없으면 바를 감춘다. 목데이터 스레드는 기존 기준 문구를 유지한다.
   private var pinnedNoticeTitle: String? {
-    if let title = displayThread.pinnedNotices.first?.title, !title.isEmpty {
-      return title
+    // 공지는 본문만 있다 (정본 ATTACH-COMPOSER-CANON.md §2) — 바에는 본문 첫 줄을 띄운다.
+    if let body = displayThread.pinnedNotices.first?.body,
+      let firstLine = body.components(separatedBy: "\n").first, !firstLine.isEmpty {
+      return firstLine
     }
     return thread.isServerBacked ? nil : "07:50 청송 시외버스터미널 정문 앞 집합"
   }
@@ -429,7 +428,7 @@ struct ChatRoomBody: View {
 
   private func applyServerMessages(_ content: ServerChatRoomContent) {
     let serverMessages = content.messages.map {
-      ServerTripMapper.chatMessage(from: $0, currentUserID: content.memberList.currentUserID)
+      ServerTripMapper.chatMessage(from: $0, currentUserID: content.currentUserID)
     }
     let existingIDs = Set(serverMessages.map(\.id))
     let pending = OfflineChatQueue.messages(for: thread.id)
@@ -455,10 +454,11 @@ struct ChatRoomBody: View {
       return
     }
 
+    // 내 말풍선이라 보낸 사람 표기를 쓰지 않는다 — 이름·아바타를 지어내지 않는다.
     let message = ChatMessage(
       id: UUID().uuidString,
-      senderName: MockData.profile.name,
-      avatar: MockData.profile.avatar,
+      senderName: "",
+      avatar: "",
       body: trimmed,
       time: "지금",
       isMine: true
@@ -648,13 +648,9 @@ private struct ChatRoomStatusHeader: View {
 }
 
 extension ChatThread {
+  /// 코스 이름을 못 받았으면 비워 둔다 — 자리 채우기 문구를 쓰지 않는다
   var courseDisplayName: String {
-    if !courseName.isEmpty { return courseName }
-    if let tripID, let trip = MockData.trip(for: tripID), let course = MockData.course(for: trip.courseID) {
-      return course.title
-    }
-    // 서버 모임은 코스 이름을 못 받았으면 비워 둔다 — 자리 채우기 문구를 쓰지 않는다
-    return isServerBacked ? "" : "코스 정보"
+    courseName
   }
 
   /// 서버가 값을 주지 않은 조건은 빈 문자열로 남긴다 — 서버 모임에서는 그 칩을 숨긴다
@@ -694,9 +690,22 @@ struct MessageBubble: View {
   var isPending = false
   /// 서버 메시지의 발신자 프로필 이미지 — 동행자 목록에서 붙인다
   var avatarURL: URL?
+  /// 20 투표 참여·취소. 없으면 선택지는 눌러도 아무 일이 없다 (카드 모양은 같다).
+  var isVoting = false
+  var onVote: ((ServerChatMessage, ServerChatPollOption) -> Void)?
+
+  /// 장소 · 만날 위치 · 투표 · 정산 메모 · 사진은 말풍선이 아니라 카드다.
+  /// 예전에는 이 다섯 종류가 전부 `body` 로 눌려 평범한 텍스트 말풍선으로 그려졌다 —
+  /// 좌표도, 선택지도, 사진도 화면에 없었다.
+  private var specialCard: ServerChatMessage? {
+    guard let server = message.server, server.isSpecialCard else { return nil }
+    return server
+  }
 
   var body: some View {
-    if message.kind == .routeChanged {
+    if let card = specialCard {
+      specialCardBubble(card)
+    } else if message.kind == .routeChanged {
       // 화면기획 20 — 경로 수정 카드: 제목 + 본문 + "바뀐 경로 보기 →" 링크
       VStack(alignment: .leading, spacing: 7) {
         HStack(spacing: 7) {
@@ -720,14 +729,9 @@ struct MessageBubble: View {
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       .accessibilityIdentifier("chat.routeChangedCard")
     } else if message.isSystemMessage {
-      Text(message.body)
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.forest)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(MoyeoTheme.leaf)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .frame(maxWidth: .infinity, alignment: .leading)
+      // 시스템 메시지는 웹 · 안드로이드처럼 **중앙정렬**이다 (내 메시지 · 상대 메시지 정렬은 그대로).
+      // 21 견본과 같은 줄을 쓴다 — 두 화면이 다르게 생기면 그게 결함이다.
+      ChatSystemMessageNote(content: message.body)
     } else {
       HStack(alignment: .bottom, spacing: 8) {
         if message.isMine {
@@ -783,6 +787,50 @@ struct MessageBubble: View {
         if !message.isMine {
           Spacer(minLength: 42)
         }
+      }
+    }
+  }
+
+  /// 카드형 메시지 한 줄. 보낸 사람 · 시각은 말풍선과 같은 자리에 두고,
+  /// 표면만 카드로 바꾼다 (21 견본과 같은 카드).
+  @ViewBuilder
+  private func specialCardBubble(_ card: ServerChatMessage) -> some View {
+    HStack(alignment: .bottom, spacing: 8) {
+      if message.isMine {
+        Spacer(minLength: 20)
+      } else if let avatarURL {
+        CachedRemoteImage(url: avatarURL) { image in
+          image
+            .resizable()
+            .scaledToFill()
+        } placeholder: {
+          MoyeoTheme.leaf
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(Circle())
+      } else {
+        MascotAvatar(mascot: message.avatar, size: 32, background: MoyeoTheme.leaf)
+      }
+
+      VStack(alignment: message.isMine ? .trailing : .leading, spacing: 4) {
+        if !message.isMine {
+          Text(message.senderName)
+            .font(.caption.bold())
+            .foregroundStyle(MoyeoTheme.muted)
+        }
+        ChatSpecialMessageCard(
+          message: card,
+          isVoting: isVoting,
+          onVote: onVote.map { handler in { option in handler(card, option) } }
+        )
+        .chatSpecialCardSurface()
+        Text(message.time)
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.muted)
+      }
+
+      if !message.isMine {
+        Spacer(minLength: 20)
       }
     }
   }
@@ -852,53 +900,171 @@ private struct ChatComposer: View {
   }
 }
 
+/// 21 특수 메시지 카드 6종 — **카드 렌더링 견본**이다.
+///
+/// ⚠️ 예전 이 화면은 손으로 그린 목데이터 카드 6장이었다("동궁과 월지" · "경북 경주시 원화로 102" ·
+/// "우직한 곰 7821님이 결제했어요" · "11/8 14:00 만남"). 화면은 꽉 차 보였고 빈 상태 감사도
+/// 통과했지만, 저 값은 서버에 존재하지 않는다 (`docs/alignment/NO-MOCK-CANON.md` R1).
+///
+/// 6종 전부 API 가 있다. 읽기는 `GET /chat-rooms/{roomId}/messages` 하나로 끝나고
+/// 응답의 `type` 으로 종류를 가른다. 종류별로 **가장 최근 한 건**을 견본으로 뽑고,
+/// 채팅방(20)과 **같은 카드**(`ChatSpecialMessageCard`)로 그린다 — 두 화면이 다르게
+/// 생기면 그게 결함이다. 그 방에 없는 종류는 자리 자체가 없다.
 struct SpecialMessageCardsView: View {
+  /// 견본을 뽑아 올 방. 없으면 그릴 실제 메시지가 없다.
+  let roomID: Int64?
+
+  @State private var messages: [ServerChatMessage] = []
+  @State private var status = LoadStatus.loading
+  @State private var votingMessageID: Int64?
+
+  private enum LoadStatus {
+    case loading
+    case ready
+    case failed
+  }
+
+  /// 종류별 가장 최근 한 건. 없는 종류는 nil 이고 카드를 그리지 않는다.
+  private var samples: [(kind: ChatSpecialMessageKind, message: ServerChatMessage)] {
+    ChatSpecialMessageKind.allCases.compactMap { kind in
+      guard let last = messages.last(where: { $0.type == kind.rawValue }) else { return nil }
+      return (kind, last)
+    }
+  }
+
+  private var missingLabels: [String] {
+    let drawn = Set(samples.map(\.kind))
+    return ChatSpecialMessageKind.allCases.filter { !drawn.contains($0) }.map(\.label)
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       SpecialMessageHeader()
-
-      ScrollViewReader { proxy in
-        ScrollView {
-          VStack(spacing: 10) {
-            SpecialPlaceCard()
-            SpecialMeetupCard()
-              .id("specialMessages.middle")
-            SpecialPaymentCard()
-            SpecialNoticeCard()
-            SpecialSimpleCard(
-              title: "여행이 확정됐어요!",
-              subtitle: "좋은 여행 되세요",
-              tint: MoyeoTheme.leaf
-            )
-            SpecialSimpleCard(
-              title: "아쉬운 모임이에요. 다음에 또 봐요!",
-              subtitle: "14일 후 자동으로 사라져요",
-              tint: adaptiveColor(light: "#FFF6D8", dark: "#3A321E")
-            )
-            if let state = QAScrollState.requested {
-              Color.clear
-                .frame(height: state.qaSpacerHeight)
-                .id("specialMessages.bottom")
-            }
-          }
-          .padding(.horizontal, 18)
-          .padding(.top, 12)
-          .padding(.bottom, 28)
-        }
-        .onAppear {
-          guard let state = QAScrollState.requested else { return }
-          let target = state.targetID(
-            middle: "specialMessages.middle", bottom: "specialMessages.bottom")
-          Task {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            proxy.scrollTo(target, anchor: state.anchor)
-          }
-        }
-      }
+      content
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     .toolbar(.hidden, for: .navigationBar)
     .accessibilityIdentifier("screen.specialMessages")
+    .task(id: roomID) { await load() }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    switch status {
+    case .loading:
+      MoyeoEmptyStateView(message: MoyeoEmptyText.loading)
+        .frame(maxHeight: .infinity)
+    case .failed:
+      MoyeoEmptyStateView(message: MoyeoEmptyText.loadFailed, onRetry: { Task { await load() } })
+        .frame(maxHeight: .infinity)
+    case .ready:
+      if samples.isEmpty {
+        // 방은 찾았지만 아직 카드로 그릴 메시지가 없다 — 예시로 채우지 않는다.
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noChatMessages)
+          .frame(maxHeight: .infinity)
+      } else {
+        sampleList
+      }
+    }
+  }
+
+  private var sampleList: some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        VStack(spacing: 10) {
+          ForEach(Array(samples.enumerated()), id: \.element.kind) { index, sample in
+            sampleRow(sample.kind, sample.message)
+              // `--p2` 스크롤 캡처의 기준점 — 두 번째 카드가 화면 가운데다.
+              .id(index == 1 ? "specialMessages.middle" : "specialMessages.card.\(sample.kind.rawValue)")
+          }
+          if !missingLabels.isEmpty {
+            // 없는 종류를 예시로 채우지 않는다. 대신 **왜 비었는지**를 적는다 —
+            // 카드가 빠진 것과 그 방에 그 메시지가 없는 것은 다르다.
+            Text("이 모임에 아직 없는 카드: \(missingLabels.joined(separator: " · "))")
+              .font(.caption2)
+              .foregroundStyle(MoyeoTheme.muted)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.top, 2)
+          }
+          if let state = QAScrollState.requested {
+            Color.clear
+              .frame(height: state.qaSpacerHeight)
+              .id("specialMessages.bottom")
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
+        .padding(.bottom, 28)
+      }
+      .onAppear {
+        guard let state = QAScrollState.requested else { return }
+        let target = state.targetID(
+          middle: "specialMessages.middle", bottom: "specialMessages.bottom")
+        Task {
+          try? await Task.sleep(nanoseconds: 500_000_000)
+          proxy.scrollTo(target, anchor: state.anchor)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func sampleRow(
+    _ kind: ChatSpecialMessageKind, _ message: ServerChatMessage
+  ) -> some View {
+    if kind == .system {
+      ChatSystemMessageNote(content: message.content)
+    } else {
+      VStack(alignment: .leading, spacing: 5) {
+        Text(senderLine(message))
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.muted)
+        ChatSpecialMessageCard(
+          message: message,
+          isVoting: votingMessageID == message.messageId,
+          onVote: { option in Task { await vote(message: message, option: option) } }
+        )
+        .chatSpecialCardSurface()
+      }
+    }
+  }
+
+  private func senderLine(_ message: ServerChatMessage) -> String {
+    let time = ServerDateTime.bubbleTimeText(from: message.createdAt)
+    return time.isEmpty ? message.senderNickname : "\(message.senderNickname) · \(time)"
+  }
+
+  private func load() async {
+    guard let roomID, MoyeoServerSync.isEnabled else {
+      status = .failed
+      return
+    }
+    status = .loading
+    guard let page = try? await ChatRoomContentAPIClient.shared.messages(roomID: roomID) else {
+      status = .failed
+      return
+    }
+    messages = page.messages
+    status = .ready
+  }
+
+  /// 투표는 견본에서도 실제로 참여된다 — 채팅방(20)과 같은 엔드포인트다.
+  /// 응답이 갱신된 카드를 그대로 주므로 그 메시지만 바꿔 끼운다.
+  private func vote(message: ServerChatMessage, option: ServerChatPollOption) async {
+    guard let roomID, votingMessageID == nil else { return }
+    votingMessageID = message.messageId
+    let updated: ServerChatMessage?
+    if option.votedByMe {
+      updated = try? await ChatRoomWriteAPIClient.shared.cancelVote(
+        roomID: roomID, messageID: message.messageId)
+    } else {
+      updated = try? await ChatRoomWriteAPIClient.shared.vote(
+        roomID: roomID, messageID: message.messageId, optionID: option.optionId)
+    }
+    if let updated, let index = messages.firstIndex(where: { $0.messageId == updated.messageId }) {
+      messages[index] = updated
+    }
+    votingMessageID = nil
   }
 }
 
@@ -932,184 +1098,6 @@ private struct SpecialMessageHeader: View {
         .fill(MoyeoTheme.softLine)
         .frame(height: 1)
     }
-  }
-}
-
-private struct SpecialPlaceCard: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Label("장소", systemImage: "mappin.circle")
-        .font(.caption2.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.forest)
-      Text("동궁과 월지")
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-      Text("경북 경주시 원화로 102")
-        .font(.caption2)
-        .foregroundStyle(MoyeoTheme.muted)
-      MoyeoPhotoTile(mascot: "🌙", mood: .forest, height: 64, cornerRadius: 8)
-      HStack {
-        Text("09:00-22:00")
-        Spacer()
-        Text("지도 보기 →")
-      }
-      .font(.caption2.weight(.semibold))
-      .foregroundStyle(MoyeoTheme.muted)
-    }
-    .specialCard()
-  }
-}
-
-private struct SpecialMeetupCard: View {
-  /// 화면기획 21 "만날 위치 공유" — 경주 모집의 첫 방문지 좌표를 그대로 쓴다.
-  private var coordinate: MoyeoMapCoordinate? {
-    let stop = MockData.trips.first { $0.id == "trip-gyeongju-night" }?.itinerary.first
-    return MoyeoMapCoordinate(latitude: stop?.latitude, longitude: stop?.longitude)
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Label("11/8 14:00 만남", systemImage: "calendar")
-        .font(.caption2.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.coral)
-      MapMessagePreview(coordinate: coordinate)
-        .frame(height: 88)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      Text("경주역 2번 출구")
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-      Text("길 찾기 →")
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(MoyeoTheme.muted)
-    }
-    .specialCard()
-  }
-}
-
-private struct SpecialPaymentCard: View {
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "creditcard")
-        .font(.caption.bold())
-        .foregroundStyle(MoyeoTheme.muted)
-      VStack(alignment: .leading, spacing: 5) {
-        Text("우직한 곰 7821님이 결제했어요")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(MoyeoTheme.muted)
-        Text("한옥스테이 1박")
-          .font(.caption.weight(.heavy))
-          .foregroundStyle(MoyeoTheme.ink)
-        Text("120,000원 · 4명")
-          .font(.caption2)
-          .foregroundStyle(MoyeoTheme.muted)
-      }
-      Spacer()
-      Text("1인 30,000원")
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.forest)
-    }
-    .specialCard()
-  }
-}
-
-private struct SpecialNoticeCard: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Label("공지 · 호스트", systemImage: "note.text")
-        .font(.caption2.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.forest)
-      Text("집합: 경주역 2번 출구\n시간: 11/8 (토) 14:00\n함께 출발하면 좋아요 🙌")
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(MoyeoTheme.text700)
-        .lineSpacing(3)
-    }
-    .specialCard(fill: adaptiveColor(light: "#F4FBF6", dark: "#1D2E24"))
-  }
-}
-
-private struct SpecialSimpleCard: View {
-  let title: String
-  let subtitle: String
-  let tint: Color
-
-  var body: some View {
-    HStack(spacing: 10) {
-      Image(systemName: "sparkles")
-        .font(.caption.bold())
-        .foregroundStyle(MoyeoTheme.forest)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.caption.weight(.heavy))
-          .foregroundStyle(MoyeoTheme.ink)
-        Text(subtitle)
-          .font(.caption2)
-          .foregroundStyle(MoyeoTheme.muted)
-      }
-      Spacer()
-    }
-    .specialCard(fill: tint)
-  }
-}
-
-private struct MapMessagePreview: View {
-  var coordinate: MoyeoMapCoordinate?
-
-  var body: some View {
-    if let coordinate {
-      MoyeoMapView(
-        content: MoyeoMapContent(
-          center: coordinate,
-          level: 16,
-          markers: [MoyeoMapMarker(id: "special-meetup", coordinate: coordinate)],
-          fitsContent: false
-        ),
-        isInteractive: false,
-        fallback: { mockup }
-      )
-    } else {
-      mockup
-    }
-  }
-
-  private var mockup: some View {
-    GeometryReader { proxy in
-      let size = proxy.size
-
-      ZStack {
-        adaptiveColor(light: "#EAF3E6", dark: "#1B2D23")
-        Path { path in
-          path.move(to: CGPoint(x: 0, y: size.height * 0.66))
-          path.addCurve(
-            to: CGPoint(x: size.width, y: size.height * 0.22),
-            control1: CGPoint(x: size.width * 0.28, y: size.height * 0.52),
-            control2: CGPoint(x: size.width * 0.62, y: size.height * 0.42)
-          )
-        }
-        .stroke(MoyeoTheme.forest, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-
-        ForEach([CGFloat(0.18), CGFloat(0.58), CGFloat(0.82)], id: \.self) { x in
-          Circle()
-            .fill(MoyeoTheme.forest)
-            .frame(width: 16, height: 16)
-            .overlay {
-              Circle().stroke(MoyeoTheme.elevatedCard.opacity(0.8), lineWidth: 2)
-            }
-            .position(x: size.width * x, y: size.height * (0.70 - x * 0.42))
-        }
-      }
-    }
-  }
-}
-
-extension View {
-  fileprivate func specialCard(fill: Color = MoyeoTheme.card) -> some View {
-    padding(12)
-      .background(fill)
-      .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-          .stroke(MoyeoTheme.softLine, lineWidth: 1)
-      }
   }
 }
 

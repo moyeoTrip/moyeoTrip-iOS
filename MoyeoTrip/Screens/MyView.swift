@@ -8,74 +8,32 @@
 import SwiftUI
 
 struct MyView: View {
+  /// 프로필·내 모임은 화면 밖 보관소에 있다 — 탭을 다녀와도 이미 받은 값을 즉시 그리고,
+  /// 갱신은 뒤에서 조용히 한다 (TAB-STATE-CANON R1·R3).
+  @ObservedObject var tabData: MoyeoTabDataStore
   @Binding var path: NavigationPath
-  @State private var selectedSegment = "진행중"
-  /// 실서버 프로필 — 로그인 세션이 있고 프로필 API가 성공했을 때만 채워진다
-  @State private var serverProfile: ServerMyProfile?
-  /// 실서버 내 모임 목록 — chat-rooms/my 가 성공했을 때만 채워진다 (nil = 목데이터)
-  @State private var serverRooms: [ServerMyChatRoom]?
 
   var tripContext = TripInteractionContext()
-  var profile = MockData.profile
-  var feedPosts = MockData.feedPosts
+  var profile = ProfileSummary.empty
+  var feedPosts: [FeedPost] = []
   var onAuthenticationRequired: () -> Void = {}
-  private let segments = ["진행중", "지난여행", "찜한 코스"]
-  // 화면기획 26 마이 — 진행중 카드는 4건(청송 · 안동 · 경주 · 포항)이다
+  // 26-1 — 찜은 **코스와 모집 두 가지**인데 탭이 코스뿐이었다 (정본 §6-2).
+  private let segments = ["진행중", "지난여행", "찜한 코스", "찜한 모집"]
   private var activeTrips: [TripRecruitment] {
-    Array(tripContext.trips.prefix(4))
+    tripContext.trips
   }
-  private let pastTrips = [
-    PastTrip(
-      courseID: "course-gyeongju-history",
-      title: "경주 역사 감성 여행",
-      date: "2024.04.12 (금)",
-      region: "경주",
-      summary: "월정교 야경과 첨성대 단풍길을 함께 걸었어요.",
-      mascot: "🌙",
-      mood: CourseMood.coral,
-      isPublished: false
-    ),
-    PastTrip(
-      courseID: "course-andong-hahoe",
-      title: "안동 하회마을 하루 코스",
-      date: "2024.03.22 (토)",
-      region: "안동",
-      summary: "하회마을 골목과 부용대 전망을 천천히 둘러봤어요.",
-      mascot: "🏡",
-      mood: CourseMood.sunrise,
-      isPublished: true
-    ),
-    PastTrip(
-      courseID: "course-ulleung-island",
-      title: "울릉도 2박 3일 섬 여행",
-      date: "2024.02.18 (일)",
-      region: "울릉",
-      summary: "해안 산책로와 섬마을 풍경을 여유롭게 남겼어요.",
-      mascot: "🌊",
-      mood: CourseMood.river,
-      isPublished: true
-    ),
-    PastTrip(
-      courseID: "course-mungyeong-saejae",
-      title: "문경 새재 단풍 트레킹",
-      date: "2023.11.04 (토)",
-      region: "문경",
-      summary: "완만한 고갯길과 단풍 숲길을 함께 걸었어요.",
-      mascot: "🍁",
-      mood: CourseMood.blossom,
-      isPublished: true
-    ),
-    PastTrip(
-      courseID: "course-pohang-drive",
-      title: "포항·영덕 동해 드라이브",
-      date: "2023.09.16 (토)",
-      region: "포항",
-      summary: "바다 전망 카페와 시장 먹거리를 가볍게 이었어요.",
-      mascot: "🌉",
-      mood: CourseMood.river,
-      isPublished: true
-    )
-  ]
+
+  /// 26 상단 3칸 지표의 근거 — `GET /users/{myId}/profile` 이 매너 점수 · 완료한 여행 수 ·
+  /// 공개 피드 수를 준다. `GET /users/me/profile` 에는 그 셋이 없다.
+  @State private var myMetrics: ServerPublicProfile?
+
+  private var serverProfile: ServerMyProfile? {
+    tabData.myProfile
+  }
+
+  private var serverRooms: [ServerMyChatRoom]? {
+    tabData.myRooms
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -85,7 +43,7 @@ struct MyView: View {
 
       ScrollView {
         VStack(spacing: 10) {
-          NavigationLink(value: MyRoute.profile(.planningMock, startsFlipped: false)) {
+          NavigationLink(value: MyRoute.profile(myProfileSubject, startsFlipped: false)) {
             MyProfileSummaryCard(profile: profile, serverProfile: serverProfile)
           }
           .buttonStyle(.plain)
@@ -93,9 +51,10 @@ struct MyView: View {
           .accessibilityLabel("프로필 메뉴")
           .accessibilityIdentifier("my.profileSummary")
 
-          // 서버는 여행·매너·피드 수를 내려주지 않는다 — 서버 프로필 상태에서는 숨긴다
-          if serverProfile == nil {
-            MyProfileStatPills(profile: profile)
+          // 화면기획 26 의 3칸 지표 — `여행` `매너` `피드`.
+          // 서버가 준 값만 칸을 만든다. 셋 다 없으면 줄 자체를 그리지 않는다 (R1).
+          if let myMetrics, !MyProfileMetricStrip.metrics(from: myMetrics).isEmpty {
+            MyProfileMetricStrip(profile: myMetrics)
           }
 
           VStack(alignment: .leading, spacing: 10) {
@@ -111,15 +70,13 @@ struct MyView: View {
 
             MySegmentBar(
               segments: segments,
-              selectedSegment: $selectedSegment
+              selectedSegment: $tabData.mySegment
             )
 
             MyTravelTabContent(
-              selectedSegment: selectedSegment,
+              selectedSegment: tabData.mySegment,
               activeTrips: activeTrips,
-              pastTrips: pastTrips,
-              serverRooms: serverRooms,
-              openCoursePublish: { path.append(SupportRoute.coursePublish) }
+              serverRooms: serverRooms
             )
           }
           .padding(.top, 8)
@@ -172,15 +129,29 @@ struct MyView: View {
     .navigationDestination(for: SupportRoute.self) { route in
       SupportDestinationView(route: route, onAuthCompleted: onAuthenticationRequired)
     }
-    .task {
-      guard MoyeoServerSync.isEnabled, serverProfile == nil else { return }
-      serverProfile = try? await UserProfileAPIClient.shared.myProfile()
-    }
-    .task {
-      guard MoyeoServerSync.isEnabled, serverRooms == nil else { return }
-      serverRooms = try? await ChatRoomAPIClient.shared.myRooms()
-    }
+    // 마이도 재진입할 때마다 뒤에서 갱신한다 — 가진 값은 그대로 그린 채다 (R3).
+    .task { await tabData.refreshMy() }
+    .task { await loadMyMetrics() }
     .accessibilityIdentifier("screen.my")
+  }
+
+  /// 25 프로필 카드에 그릴 내 정보. `GET /users/me` 는 userID 를 주지 않아
+  /// 받은 값(닉네임 · 이미지 · 소개 · 여행 스타일)만 넘긴다.
+  private var myProfileSubject: ProfileCardSubject {
+    guard let serverProfile else { return .unavailable }
+    return .me(
+      nickname: serverProfile.nickname,
+      profileImageURL: MoyeoImageURL.resolve(serverProfile.profileImageUrl),
+      introduction: serverProfile.introduction,
+      travelStyles: serverProfile.travelStyles.map(\.label)
+    )
+  }
+
+  /// 내 신원은 액세스 토큰에서 동기로 읽는다 (TAB-STATE-CANON R6).
+  /// 못 받으면 지표 줄을 그리지 않는다 — 숫자를 지어내지 않는다.
+  private func loadMyMetrics() async {
+    guard myMetrics == nil, MoyeoServerSync.isEnabled, let userID = MoyeoCurrentUser.id else { return }
+    myMetrics = try? await UserProfileAPIClient.shared.publicProfile(userID: userID)
   }
 
   /// 내 여행 개수 — 서버 목록을 받았으면 진행 중인 서버 방 개수를 쓴다
@@ -222,30 +193,24 @@ private struct MyProfileSummaryCard: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      AuthenticatedProfileAvatar(profile: profile, size: 58)
+      // `GET /users/me/profile` 이 준 이미지가 우선이다.
+      // 세션 프로필에는 이미지가 없을 수 있어, 그것만 보고 이모지로 떨어지곤 했다 (R5 는 폴백일 때만).
+      AuthenticatedProfileAvatar(
+        profile: profile,
+        size: 58,
+        overrideImageURL: MoyeoImageURL.resolve(serverProfile?.profileImageUrl)
+      )
       VStack(alignment: .leading, spacing: 4) {
         Text(serverProfile?.nickname ?? profile.name)
           .font(MoyeoTypography.cardTitle)
           .foregroundStyle(MoyeoTheme.ink)
           .lineLimit(1)
-        if let serverProfile {
-          // 서버 프로필 — 자기소개가 있으면 보여주고, 없으면 그 줄을 비운다
-          if let introduction = serverProfile.introduction, !introduction.isEmpty {
-            Text(introduction)
-              .font(MoyeoTypography.cardBody)
-              .foregroundStyle(MoyeoTheme.muted)
-              .lineLimit(1)
-          }
-        } else {
-          Text(profile.oneLineBio)
+        // 자기소개는 서버 값이다. 없으면 그 줄을 만들지 않는다 — 문구를 지어내지 않는다.
+        if let introduction = serverProfile?.introduction, !introduction.isEmpty {
+          Text(introduction)
             .font(MoyeoTypography.cardBody)
             .foregroundStyle(MoyeoTheme.muted)
             .lineLimit(1)
-          HStack(spacing: 6) {
-            Pill(text: "여행 \(profile.joinedTrips)", tint: MoyeoTheme.forest)
-            Pill(text: "매너 \(profile.mannerScoreText)", tint: MoyeoTheme.coral)
-          }
-          .padding(.top, 4)
         }
       }
       Spacer()
@@ -264,58 +229,17 @@ private struct MyProfileSummaryCard: View {
   }
 }
 
-private struct MyProfileStatPills: View {
-  let profile: ProfileSummary
-
-  var body: some View {
-    HStack(spacing: 8) {
-      MyProfileStatPill(value: "\(profile.joinedTrips)", label: "여행", identifier: "my.stat.joined")
-      MyProfileStatPill(value: profile.mannerScoreText, label: "매너", identifier: "my.stat.manner")
-      MyProfileStatPill(value: "\(profile.feedCount)", label: "피드", identifier: "my.stat.feed")
-    }
-  }
-}
-
-private struct MyProfileStatPill: View {
-  let value: String
-  let label: String
-  let identifier: String
-
-  var body: some View {
-    VStack(spacing: 4) {
-      Text(value)
-        .font(MoyeoTypography.sectionTitle)
-        .foregroundStyle(MoyeoTheme.ink)
-        .accessibilityIdentifier("\(identifier).value")
-      Text(label)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(MoyeoTheme.muted)
-        .accessibilityIdentifier("\(identifier).label")
-    }
-    .frame(maxWidth: .infinity)
-    .frame(height: 54)
-    .background(MoyeoTheme.card)
-    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-        .stroke(MoyeoTheme.softLine, lineWidth: 1)
-    }
-  }
-}
-
 private struct MyTravelTabContent: View {
   let selectedSegment: String
   let activeTrips: [TripRecruitment]
-  let pastTrips: [PastTrip]
   /// 실서버 내 모임 목록 — 있으면 진행중·지난여행 탭을 서버 방으로 그린다
   var serverRooms: [ServerMyChatRoom]?
-  let openCoursePublish: () -> Void
 
   var body: some View {
     if let serverRooms {
       serverContent(rooms: serverRooms)
     } else {
-      mockContent
+      sessionContent
     }
   }
 
@@ -324,16 +248,18 @@ private struct MyTravelTabContent: View {
     let filtered = selectedSegment == "지난여행" ? rooms.filter(\.ended) : rooms.filter { !$0.ended }
 
     VStack(spacing: 10) {
-      if selectedSegment == "찜한 코스" {
-        // 서버에 찜한 코스 목록 API가 없다 — 이 탭은 기존 목데이터를 유지한다
-        savedCourses
+      if selectedSegment == "찜한 모집" {
+        // 26-1 찜한 모집 — `GET /chat-rooms/my/favorites`. 목록 화면을 그대로 끼워 넣는다.
+        FavoriteRoomsSection()
+      } else if selectedSegment == "찜한 코스" {
+        // `GET /travel-courses/me/favorites` 는 실서버에 있다. 오래 "API 가 없다"고 적어 두어
+        // 탭이 늘 비어 있었다 (NO-MOCK-CANON §4-1 — 내 오판이었다).
+        FavoriteCoursesSection()
       } else if filtered.isEmpty {
-        Text(selectedSegment == "지난여행" ? "지난 여행이 없어요" : "진행 중인 여행이 없어요")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MoyeoTheme.muted)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 34)
-          .accessibilityIdentifier("my.serverTrip.empty")
+        MoyeoEmptyStateView(
+          message: MoyeoEmptyText.noChatRooms,
+          accessibilityIdentifier: "my.serverTrip.empty"
+        )
       } else {
         ForEach(filtered) { room in
           if room.ended {
@@ -352,21 +278,11 @@ private struct MyTravelTabContent: View {
     }
   }
 
-  private var savedCourses: some View {
-    ForEach(MockData.courses.dropFirst(2)) { course in
-      NavigationLink(value: course) {
-        MySavedCourseCard(course: course)
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("my.savedCourse.\(course.id)")
-    }
-  }
-
+  /// 서버 목록을 못 받았을 때. 이 세션에서 만들어진 모집만 남는다.
   @ViewBuilder
-  private var mockContent: some View {
+  private var sessionContent: some View {
     VStack(spacing: 10) {
-      switch selectedSegment {
-      case "진행중":
+      if selectedSegment == "진행중", !activeTrips.isEmpty {
         ForEach(activeTrips) { trip in
           NavigationLink(value: trip) {
             MyActiveTripCard(trip: trip)
@@ -374,28 +290,11 @@ private struct MyTravelTabContent: View {
           .buttonStyle(.plain)
           .accessibilityIdentifier("my.activeTrip.\(trip.id)")
         }
-      case "지난여행":
-        ForEach(pastTrips) { trip in
-          VStack(spacing: 7) {
-            NavigationLink(value: trip.course) {
-              MyPastTripCard(trip: trip)
-            }
-            .buttonStyle(.plain)
-            if !trip.isPublished {
-              Button(action: openCoursePublish) {
-                Label("코스 공개하기", systemImage: "map.fill")
-                  .font(.caption.weight(.bold))
-                  .frame(maxWidth: .infinity, minHeight: 44)
-              }
-              .buttonStyle(.bordered)
-              .tint(MoyeoTheme.forest)
-              .accessibilityIdentifier("my.pastTrip.\(trip.courseID).publish")
-            }
-          }
-          .accessibilityIdentifier("my.pastTrip.\(trip.courseID)")
-        }
-      default:
-        savedCourses
+      } else {
+        MoyeoEmptyStateView(
+          message: MoyeoEmptyText.noChatRooms,
+          accessibilityIdentifier: "my.trip.empty"
+        )
       }
     }
   }
@@ -409,7 +308,7 @@ private struct MyServerTripCard: View {
     HStack(spacing: MyTravelCardMetrics.gap) {
       Group {
         if let thumbnailURL = room.thumbnailURL {
-          CachedRemoteImage(url: thumbnailURL) { image in
+          CachedRemoteImage(url: thumbnailURL, fallbackShape: .square) { image in
             image
               .resizable()
               .scaledToFill()
@@ -417,7 +316,8 @@ private struct MyServerTripCard: View {
             MoyeoTheme.leaf
           }
         } else {
-          MoyeoTheme.leaf
+          // 서버가 썸네일을 주지 않은 여행 — 빈 판 대신 마스코트를 채운다
+          MoyeoPlaceholderImageView(shape: .square)
         }
       }
       .frame(width: MyTravelCardMetrics.thumbWidth, height: MyTravelCardMetrics.thumbHeight)
@@ -491,7 +391,8 @@ private struct MyHubMenuPanel: View {
         Button {
           openRoute(.friendDex)
         } label: {
-          MyHubMenuRow(title: "친구 도감", subtitle: "\(MockData.dogamFriends.count)마리 · 최근 동행 순")
+          // 도감 마릿수는 도감 화면이 서버에서 받는다 — 메뉴 줄에서 숫자를 지어내지 않는다
+          MyHubMenuRow(title: "친구 도감", subtitle: "최근 동행 순")
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("my.friendDexShortcut")
@@ -517,7 +418,8 @@ private struct MyHubMenuPanel: View {
         Button {
           openRoute(.customerCenter)
         } label: {
-          MyHubMenuRow(title: "고객센터", subtitle: "문의와 신고 내역")
+          // 신고 내역 화면은 없다 — 갈 수 있는 두 창구를 그대로 적는다 (정본 REPORT-CANON §1).
+          MyHubMenuRow(title: "고객센터", subtitle: "GitHub 이슈 · 이메일로 문의해요")
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("my.customerCenterShortcut")
@@ -560,9 +462,19 @@ private struct MyFeedListView: View {
           }
           .frame(maxWidth: .infinity, alignment: .leading)
 
-          ForEach(posts) { post in
-            MyFeedPostCard(post: post) {
-              selectedPost = post
+          // 0건이면 소개 문구 아래가 그냥 비어 있었다 — 무엇을 하면 채워지는지 알려준다.
+          if posts.isEmpty {
+            MoyeoEmptyStateView(
+              message: MoyeoEmptyText.noMyFeeds,
+              systemImage: "square.and.pencil",
+              accessibilityIdentifier: "myFeed.empty"
+            )
+            .padding(.top, 24)
+          } else {
+            ForEach(posts) { post in
+              MyFeedPostCard(post: post) {
+                selectedPost = post
+              }
             }
           }
         }
@@ -588,7 +500,9 @@ private struct MyFeedPostCard: View {
     Button(action: onOpen) {
       VStack(alignment: .leading, spacing: 12) {
         HStack(spacing: 10) {
-          MascotAvatar(mascot: post.authorAvatar, size: 38, background: MoyeoTheme.leaf)
+          // 피드 카드와 같은 컴포넌트다 — 프로필 이미지가 있으면 이미지를 그리고,
+          // 없을 때만 마스코트로 떨어진다. 여기만 마스코트를 고정하면 같은 사람이 화면마다 달라진다.
+          FeedAuthorAvatar(post: post, size: 38)
           VStack(alignment: .leading, spacing: 3) {
             Text(post.displayAuthorName)
               .font(.system(size: 16, weight: .heavy))
@@ -603,10 +517,8 @@ private struct MyFeedPostCard: View {
             .foregroundStyle(MoyeoTheme.text400)
         }
 
-        HStack(spacing: 2) {
-          FeedPhotoPreview(post: post, height: 118)
-          FeedRouteMap(route: post.route, mood: post.mood)
-        }
+        // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
+        FeedPhotoPreview(post: post, height: 118)
         .frame(height: 118)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
@@ -671,22 +583,33 @@ private struct ProfileEditView: View {
   let profile: ProfileSummary
   @State private var displayName: String
   @State private var bio: String
-  @State private var selectedTravelStyles: Set<String>
-  @State private var selectedInterestRegions: Set<String>
+  @State private var selectedTravelStyles: Set<Int64>
+  @State private var selectedInterestRegions: Set<Int64>
   @State private var isTasteEditorPresented: Bool
   @State private var saveMessage: String?
+  /// 28-1 의 세 줄(자기소개·생년월일·성별)을 실제로 고치는 시트. 예전에는 화살표만 있었다.
+  @State private var editingField: ProfileEditField?
+  /// 서버 값에서 시작해 시트에서 바뀌는 값 — 저장은 PUT users/me/profile 한 번이다.
+  @State private var birthDate = ""
+  @State private var gender = ""
+  @State private var bioDraft = ""
   /// 실서버 프로필·취향 후보 — 로그인 세션이 있을 때만 채워진다
   @State private var serverProfile: ServerMyProfile?
   @State private var serverOptions: ServerProfileOptions?
-  @State private var styleOptions = TravelTasteSelection.styleOptions
-  @State private var regionOptions = TravelTasteSelection.interestRegionOptions
+  /// 후보는 `GET users/me/profile/options` 가 정본이다 (정본 R5).
+  /// 06-1 가입 단계도 2026-08-30 부터 같은 API 를 쓴다 — 클라에 거울 표를 두지 않는다.
+  @State private var styleOptions: [TravelTasteOption] = []
+  @State private var regionOptions: [TravelTasteOption] = []
 
   init(profile: ProfileSummary, opensTasteEditor: Bool = false) {
     self.profile = profile
-    _displayName = State(initialValue: ProfileEditMockData.privateNickname)
-    _bio = State(initialValue: ProfileEditMockData.bio)
-    _selectedTravelStyles = State(initialValue: TravelTasteSelection.defaultStyles)
-    _selectedInterestRegions = State(initialValue: TravelTasteSelection.defaultInterestRegions)
+    // 닉네임·자기소개는 서버 프로필이 채운다. 별도 "비공개 닉네임" 같은 값은 없다.
+    _displayName = State(initialValue: profile.name)
+    _bio = State(initialValue: "")
+    // 서버 프로필이 채운다. 기본값을 넣어두면 서버 값이 오기 전까지 사용자가 고르지 않은
+    // 취향이 본인 것처럼 보인다.
+    _selectedTravelStyles = State(initialValue: [])
+    _selectedInterestRegions = State(initialValue: [])
     _isTasteEditorPresented = State(initialValue: opensTasteEditor)
   }
 
@@ -716,11 +639,9 @@ private struct ProfileEditView: View {
         VStack(spacing: 0) {
           VStack(spacing: 10) {
             ZStack(alignment: .bottomTrailing) {
-              AuthenticatedProfileAvatar(
-                profile: profile,
-                size: 96,
-                emojiOverride: ProfileEditMockData.privateAvatar
-              )
+              // 아바타는 닉네임에서 계산한다 (R5). `emojiOverride` 를 주면 서버 프로필
+              // 이미지까지 무시되므로 여기서는 주지 않는다.
+              AuthenticatedProfileAvatar(profile: profile, size: 96)
               Image(systemName: "lock.fill")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(MoyeoTheme.muted)
@@ -740,12 +661,16 @@ private struct ProfileEditView: View {
           .padding(.vertical, 24)
 
           ProfileEditGroupHeader("공개 프로필")
-          ProfileEditListRow(label: "자기소개", value: bio, showsChevron: true)
+          ProfileEditListRow(
+            label: "자기소개",
+            value: bio.isEmpty ? "아직 없어요" : bio,
+            action: { bioDraft = bio; editingField = .introduction }
+          )
           ProfileTravelTasteBlock(
-            travelStyles: Array(selectedTravelStyles),
-            interestRegions: Array(selectedInterestRegions),
-            styleOrder: styleOptions,
-            regionOrder: regionOptions
+            travelStyleIDs: selectedTravelStyles,
+            interestRegionIDs: selectedInterestRegions,
+            styleOptions: styleOptions,
+            regionOptions: regionOptions
           ) {
             isTasteEditorPresented = true
           }
@@ -754,15 +679,19 @@ private struct ProfileEditView: View {
           // 닉네임과 캐릭터는 선택 후 바꿀 수 없다 — 잠금 표시로 알린다
           ProfileEditListRow(label: "닉네임", value: displayName, locked: true)
           ProfileEditListRow(label: "캐릭터", value: "고정됨", locked: true)
-          if let serverProfile {
-            // 서버 프로필 — 서버가 준 값만 보여준다 (생년월일 미입력이면 그 줄을 숨긴다)
-            if let birthDateText = serverProfile.birthDateText {
-              ProfileEditListRow(label: "생년월일", value: birthDateText, showsChevron: true)
-            }
-            ProfileEditListRow(label: "성별", value: serverProfile.genderText, showsChevron: true)
-          } else {
-            ProfileEditListRow(label: "생년월일", value: "1998.04.12", showsChevron: true)
-            ProfileEditListRow(label: "성별", value: "여성", showsChevron: true)
+          // 서버 프로필이 없으면(미로그인·응답 실패) 고칠 값도 없다 — 목 생년월일·성별을
+          // 채우지 않고 줄 자체를 그리지 않는다 (NO-MOCK-CANON R1).
+          if serverProfile != nil {
+            ProfileEditListRow(
+              label: "생년월일",
+              value: birthDate.isEmpty ? "등록 안 됨" : birthDate.replacingOccurrences(of: "-", with: "."),
+              action: { editingField = .birthDate }
+            )
+            ProfileEditListRow(
+              label: "성별",
+              value: ServerMyProfile.genderText(for: gender),
+              action: { editingField = .gender }
+            )
           }
 
           Text("비공개 정보는 다른 여행자에게 보이지 않아요.")
@@ -794,6 +723,23 @@ private struct ProfileEditView: View {
       .presentationCornerRadius(24)
       .presentationBackground(MoyeoTheme.card)
     }
+    .sheet(item: $editingField) { field in
+      ProfileEditFieldSheet(
+        field: field,
+        introduction: $bioDraft,
+        birthDate: $birthDate,
+        gender: $gender,
+        onSave: {
+          if field == .introduction { bio = bioDraft }
+          editingField = nil
+          saveProfileToServer()
+        },
+        onCancel: { editingField = nil }
+      )
+      .presentationDetents([.height(field == .birthDate ? 480 : 360)])
+      .presentationCornerRadius(24)
+      .presentationBackground(MoyeoTheme.card)
+    }
     .alert(
       "저장 완료",
       isPresented: Binding<Bool>(
@@ -821,13 +767,15 @@ private struct ProfileEditView: View {
     serverProfile = loaded
     displayName = loaded.nickname
     bio = loaded.introduction ?? ""
-    selectedTravelStyles = Set(loaded.travelStyles.map(\.label))
-    selectedInterestRegions = Set(loaded.interestedRegions.map(\.signguName))
+    birthDate = loaded.birthDate ?? ""
+    gender = loaded.gender
+    selectedTravelStyles = Set(loaded.travelStyles.map(\.id))
+    selectedInterestRegions = Set(loaded.interestedRegions.map(\.id))
 
     if let options = try? await UserProfileAPIClient.shared.profileOptions() {
       serverOptions = options
-      styleOptions = options.travelStyles.map(\.label)
-      regionOptions = options.interestedRegions.map(\.signguName)
+      styleOptions = options.travelStyles.map { TravelTasteOption(id: $0.id, label: $0.label) }
+      regionOptions = options.interestedRegions.map { TravelTasteOption(id: $0.id, label: $0.signguName) }
     }
   }
 
@@ -837,29 +785,36 @@ private struct ProfileEditView: View {
       saveMessage = "서버 프로필을 불러오지 못해 저장할 수 없어요."
       return
     }
-    guard let birthDate = serverProfile.birthDate else {
+    // 서버는 생년월일을 반드시 요구한다 — 아직 등록되지 않았으면 그 줄부터 채우게 안내한다.
+    guard !birthDate.isEmpty else {
       saveMessage = "생년월일이 등록되지 않아 저장할 수 없어요."
       return
     }
+    // 서버 후보에 실제로 있는 id 만 보낸다 — 없는 id 는 `40015`·`40014` 로 저장이 막힌다.
     let styleIDs = serverOptions.travelStyles
-      .filter { selectedTravelStyles.contains($0.label) }
       .map(\.id)
+      .filter(selectedTravelStyles.contains)
     let regionIDs = serverOptions.interestedRegions
-      .filter { selectedInterestRegions.contains($0.signguName) }
       .map(\.id)
+      .filter(selectedInterestRegions.contains)
     let update = ServerProfileUpdate(
       introduction: bio.isEmpty ? nil : bio,
       travelStyleIds: styleIDs,
       interestedRegionIds: regionIDs,
       birthDate: birthDate,
-      gender: serverProfile.gender
+      gender: gender.isEmpty ? serverProfile.gender : gender
     )
     Task {
       do {
         let updated = try await UserProfileAPIClient.shared.updateProfile(update)
         self.serverProfile = updated
-        selectedTravelStyles = Set(updated.travelStyles.map(\.label))
-        selectedInterestRegions = Set(updated.interestedRegions.map(\.signguName))
+        selectedTravelStyles = Set(updated.travelStyles.map(\.id))
+        selectedInterestRegions = Set(updated.interestedRegions.map(\.id))
+        // 저장 뒤 화면은 **서버가 돌려준 값**으로 다시 맞춘다 — 시트에서 고른 값을 그대로 두면
+        // 서버가 거른 값이 저장된 것처럼 남는다.
+        bio = updated.introduction ?? ""
+        birthDate = updated.birthDate ?? ""
+        gender = updated.gender
         saveMessage = "프로필 변경사항이 저장됐어요."
       } catch {
         saveMessage = (error as? LocalizedError)?.errorDescription
@@ -870,18 +825,19 @@ private struct ProfileEditView: View {
 }
 
 private struct ProfileTravelTasteBlock: View {
-  let travelStyles: [String]
-  let interestRegions: [String]
-  var styleOrder = TravelTasteSelection.styleOptions
-  var regionOrder = TravelTasteSelection.interestRegionOptions
+  let travelStyleIDs: Set<Int64>
+  let interestRegionIDs: Set<Int64>
+  /// 서버 후보 그대로. 아직 도착하지 않았으면 비어 있고, 그때는 칩을 그리지 않는다 (정본 R5).
+  let styleOptions: [TravelTasteOption]
+  let regionOptions: [TravelTasteOption]
   let action: () -> Void
 
   private var orderedTravelStyles: [String] {
-    styleOrder.filter(travelStyles.contains)
+    styleOptions.filter { travelStyleIDs.contains($0.id) }.map(\.label)
   }
 
   private var orderedInterestRegions: [String] {
-    regionOrder.filter(interestRegions.contains)
+    regionOptions.filter { interestRegionIDs.contains($0.id) }.map(\.label)
   }
 
   var body: some View {
@@ -960,21 +916,21 @@ private struct ProfileTravelTastePreviewLine: View {
 
 private struct ProfileTravelTasteEditSheet: View {
   @Environment(\.dismiss) private var dismiss
-  @Binding private var travelStyles: Set<String>
-  @Binding private var interestRegions: Set<String>
-  @State private var draftTravelStyles: Set<String>
-  @State private var draftInterestRegions: Set<String>
-  /// 후보 목록 — 서버 연동 시 GET users/me/profile/options 의 값을 받는다
-  private let styleOptions: [String]
-  private let regionOptions: [String]
+  @Binding private var travelStyles: Set<Int64>
+  @Binding private var interestRegions: Set<Int64>
+  @State private var draftTravelStyles: Set<Int64>
+  @State private var draftInterestRegions: Set<Int64>
+  /// 후보 목록 — `GET users/me/profile/options` 응답만 쓴다 (정본 R5).
+  private let styleOptions: [TravelTasteOption]
+  private let regionOptions: [TravelTasteOption]
   /// 서버 연동 시 저장 직후 PUT users/me/profile 호출
   private let onSave: (() -> Void)?
 
   init(
-    travelStyles: Binding<Set<String>>,
-    interestRegions: Binding<Set<String>>,
-    styleOptions: [String] = TravelTasteSelection.styleOptions,
-    regionOptions: [String] = TravelTasteSelection.interestRegionOptions,
+    travelStyles: Binding<Set<Int64>>,
+    interestRegions: Binding<Set<Int64>>,
+    styleOptions: [TravelTasteOption],
+    regionOptions: [TravelTasteOption],
     onSave: (() -> Void)? = nil
   ) {
     _travelStyles = travelStyles
@@ -991,6 +947,13 @@ private struct ProfileTravelTasteEditSheet: View {
       styles: draftTravelStyles,
       interestRegions: draftInterestRegions
     )
+  }
+
+  /// 서버 프로필이 시트를 띄운 **뒤에** 도착할 수 있다. 그때 초안이 옛 값에 머물면
+  /// 칩은 꺼져 있는데 하단 개수만 옛 숫자를 세는 상태가 된다(실제로 그렇게 찍혔다).
+  private func syncDraftFromBindings() {
+    draftTravelStyles = travelStyles
+    draftInterestRegions = interestRegions
   }
 
   var body: some View {
@@ -1062,6 +1025,9 @@ private struct ProfileTravelTasteEditSheet: View {
       }
     }
     .accessibilityIdentifier("screen.profileTasteEdit")
+    .onAppear(perform: syncDraftFromBindings)
+    .onChange(of: travelStyles) { _, _ in syncDraftFromBindings() }
+    .onChange(of: interestRegions) { _, _ in syncDraftFromBindings() }
   }
 }
 
@@ -1127,21 +1093,22 @@ private struct CustomerCenterView: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: 14) {
+          // 예전에는 동작 없는 행 셋(`문의 접수`·`신고 내역`·`자주 묻는 질문`)에
+          // 근거 없는 배지(`평균 2시간`·`0건`·`FAQ`)를 달아 뒀다. 눌러도 아무 일이 없었고,
+          // 상담함·평균 응답시간은 존재하지 않는 개념이다(정본 `changeLog14`).
+          // 실제로 갈 수 있는 두 창구만 남긴다 — 웹·안드로이드와 같은 값이다.
           CustomerCenterStatusCard()
-          CustomerCenterActionRow(
-            title: "문의 접수",
-            subtitle: "모집, 채팅, 결제 문의를 남겨요",
-            badge: "평균 2시간"
+          CustomerCenterLinkRow(
+            title: MoyeoContact.issuesLabel,
+            subtitle: "버그 제보와 기능 제안을 올려요",
+            url: MoyeoContact.issuesURL,
+            identifier: "customerCenter.issues"
           )
-          CustomerCenterActionRow(
-            title: "신고 내역",
-            subtitle: "접수한 신고와 처리 상태를 확인해요",
-            badge: "0건"
-          )
-          CustomerCenterActionRow(
-            title: "자주 묻는 질문",
-            subtitle: "동행 확정, 환불, 안전 수칙을 빠르게 찾아요",
-            badge: "FAQ"
+          CustomerCenterLinkRow(
+            title: MoyeoContact.emailLabel,
+            subtitle: MoyeoContact.email,
+            url: MoyeoContact.mailtoURL,
+            identifier: "customerCenter.email"
           )
         }
         .padding(18)
@@ -1160,7 +1127,8 @@ private struct CustomerCenterStatusCard: View {
       Text("오늘도 도와드릴게요")
         .font(.headline.weight(.heavy))
         .foregroundStyle(MoyeoTheme.ink)
-      Text("여행 모집과 채팅 중 불편한 점을 남기면 상담함에 바로 접수돼요.")
+      // 상담함·접수 개념은 없다 — 실제로 열리는 두 창구를 그대로 설명한다.
+      Text(MoyeoContact.dialogBody)
         .font(.subheadline.weight(.semibold))
         .foregroundStyle(MoyeoTheme.muted)
         .lineSpacing(5)
@@ -1173,6 +1141,47 @@ private struct CustomerCenterStatusCard: View {
       RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
         .stroke(MoyeoTheme.softLine, lineWidth: 1)
     }
+  }
+}
+
+/// 실제로 여는 링크 행. 눌러도 아무 일이 없는 행을 두지 않는다.
+private struct CustomerCenterLinkRow: View {
+  let title: String
+  let subtitle: String
+  let url: URL
+  let identifier: String
+
+  @Environment(\.openURL) private var openURL
+
+  var body: some View {
+    Button {
+      openURL(url)
+    } label: {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 5) {
+          Text(title)
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.ink)
+          Text(subtitle)
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.muted)
+        }
+        Spacer(minLength: 8)
+        Image(systemName: "arrow.up.right")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(MoyeoTheme.muted)
+      }
+      .padding(16)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MoyeoTheme.card)
+      .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+          .stroke(MoyeoTheme.softLine, lineWidth: 1)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier(identifier)
   }
 }
 
@@ -1235,29 +1244,6 @@ private struct MyHubMenuRow: View {
     .padding(.horizontal, 16)
     .contentShape(Rectangle())
   }
-}
-
-extension ProfileSummary {
-  /// 화면기획 26 마이 — 프로필 요약 카드의 한 줄 소개
-  fileprivate var oneLineBio: String {
-    "자연 속에서 힐링하는 걸 좋아해요!"
-  }
-
-  /// 화면기획 25 공개 프로필 — 소개 카드는 두 줄이다
-  fileprivate var publicIntro: String {
-    "자연과 여행을 사랑합니다 🌿\n새로운 사람들과 함께하는 여행이 좋아요!"
-  }
-
-  fileprivate var mannerScoreText: String {
-    "4.7"
-  }
-}
-
-/// 화면기획 28 프로필 수정 — 비공개 정보(닉네임·캐릭터)는 공개 이름과 별개다
-private enum ProfileEditMockData {
-  static let privateNickname = "따스한 사슴 3492"
-  static let privateAvatar = "🦌"
-  static let bio = "느긋한 여행 좋아해요"
 }
 
 private struct MySegmentBar: View {
@@ -1331,17 +1317,23 @@ private struct FriendDexView: View {
   @State private var isSearching = false
   @State private var query = ""
   @State private var selectedFilter: DogamFriendFilter = .all
-  /// 실서버 여행 도감 — 로그인 세션이 있고 도감 API가 성공했을 때만 채워진다 (nil = 목데이터)
+  /// 실서버 여행 도감 — 도감 API가 성공했을 때만 채워진다 (nil = 아직 못 받음)
   @State private var serverDex: ServerTravelDex?
 
-  private var filteredFriends: [DogamFriend] {
-    MockData.dogamFriends
-      .filter { selectedFilter.includes($0) }
-      .filter { friend in
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedQuery.isEmpty
-          || friend.nickname.localizedCaseInsensitiveContains(trimmedQuery)
-      }
+  /// 한 줄 메시지를 아직 안 남긴 친구 수와, 그중 가장 최근 여행 이름.
+  /// 대상이 없으면 `nil` — 안내 카드를 아예 그리지 않는다.
+  private var emptyBackNotice: (count: Int, tripTitle: String)? {
+    guard let serverDex else { return nil }
+    let pending = serverDex.companions.filter { companion in
+      companion.memories.contains { ($0.oneLineReview ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+    guard !pending.isEmpty else { return nil }
+    let latest = pending
+      .flatMap(\.memories)
+      .filter { ($0.oneLineReview ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+      .max { $0.tripDate < $1.tripDate }
+    guard let tripTitle = latest?.tripTitle else { return nil }
+    return (pending.count, tripTitle)
   }
 
   private var filteredServerCompanions: [ServerTravelDexCompanion]? {
@@ -1356,7 +1348,7 @@ private struct FriendDexView: View {
   }
 
   private var visibleFriendCount: Int {
-    filteredServerCompanions?.count ?? filteredFriends.count
+    filteredServerCompanions?.count ?? 0
   }
 
   var body: some View {
@@ -1423,10 +1415,12 @@ private struct FriendDexView: View {
             }
 
             // 여행이 끝났는데 한 줄 메시지를 안 남긴 친구가 있으면 도감 상단에서 유도한다 (화면기획 27)
-            // 서버 도감에는 해당 목데이터 친구가 없으므로 목데이터 상태에서만 보여준다
-            if serverDex == nil {
+            // **서버 도감에서 계산한다** — 예전에는 `serverDex == nil` 일 때만 그리면서
+            // 「카드 뒷면이 비어 있는 친구 2명」과 여행 이름을 **하드코딩**했다(NO-MOCK R1).
+            // 실제 사용자에게도 늘 "2명" 이라고 보였다.
+            if let notice = emptyBackNotice {
               NavigationLink(value: SupportRoute.tripMessage) {
-                DogamEmptyBackNoticeCard()
+                DogamEmptyBackNoticeCard(count: notice.count, tripTitle: notice.tripTitle)
               }
               .buttonStyle(.plain)
               .accessibilityIdentifier("friendDex.emptyBackNotice")
@@ -1449,21 +1443,9 @@ private struct FriendDexView: View {
                   }
                 }
               }
-            } else if filteredFriends.isEmpty {
-              DogamEmptyResultView()
             } else {
-              LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(Array(filteredFriends.enumerated()), id: \.element.id) { index, friend in
-                  // 카드를 탭하면 25 프로필 카드로 넘어간다 (changeLog18)
-                  NavigationLink(
-                    value: MyRoute.profile(.mockFriend(friend.id), startsFlipped: false)
-                  ) {
-                    DogamFriendCard(friend: friend)
-                  }
-                  .buttonStyle(.plain)
-                  .id(index == 6 ? "friendDex.middle" : friend.id)
-                }
-              }
+              // 도감은 서버 응답이 전부다 — 목 친구를 채우지 않는다 (NO-MOCK-CANON R1)
+              DogamEmptyResultView()
             }
 
             Text("다음 모임에서 새 친구를 만나보세요 ✨")
@@ -1558,7 +1540,7 @@ private struct ServerDogamEmptyView: View {
 
   var body: some View {
     VStack(spacing: 6) {
-      Text(hasAnyCompanion ? "검색 결과가 없어요" : "아직 함께 여행한 친구가 없어요")
+      Text(hasAnyCompanion ? "검색 결과가 없어요" : "아직 함께 여행한 친구가 없어요.")
         .font(.subheadline.weight(.heavy))
         .foregroundStyle(MoyeoTheme.ink)
       Text(hasAnyCompanion ? "이름이나 필터를 바꿔 다시 찾아보세요." : "여행을 마치면 동행자가 도감에 기록돼요.")
@@ -1603,17 +1585,6 @@ private enum DogamFriendFilter: String, CaseIterable, Identifiable {
       return "2회 이상 만난 친구"
     case .recent:
       return "최근 1개월 동행"
-    }
-  }
-
-  func includes(_ friend: DogamFriend) -> Bool {
-    switch self {
-    case .all:
-      return true
-    case .repeated:
-      return friend.metCount >= 2
-    case .recent:
-      return friend.lastMetAt.contains("일 전")
     }
   }
 
@@ -1711,18 +1682,22 @@ private struct DogamFilterChip: View {
   }
 }
 
-/// 화면기획 27 상단 안내 — 카드 뒷면(한 줄 메시지)이 비어 있는 친구를 27-1로 유도한다
+/// 화면기획 27 상단 안내 — 카드 뒷면(한 줄 메시지)이 비어 있는 친구를 27-1로 유도한다.
+/// 수치와 여행 이름은 **서버 도감에서 온다** — 지어내지 않는다.
 private struct DogamEmptyBackNoticeCard: View {
+  let count: Int
+  let tripTitle: String
+
   var body: some View {
     HStack(spacing: 10) {
       Image(systemName: "square.and.pencil")
         .font(.system(size: 16, weight: .semibold))
         .foregroundStyle(MoyeoTheme.onLeaf)
       VStack(alignment: .leading, spacing: 3) {
-        Text("카드 뒷면이 비어 있는 친구 2명")
+        Text("카드 뒷면이 비어 있는 친구 \(count)명")
           .font(.caption.weight(.heavy))
           .foregroundStyle(MoyeoTheme.onLeaf)
-        Text("경주 단풍·야경에서 만난 친구들에게 한 줄 남겨볼까요?")
+        Text("\(tripTitle)에서 만난 친구들에게 한 줄 남겨볼까요?")
           .font(.caption2)
           .foregroundStyle(MoyeoTheme.brandText)
           .fixedSize(horizontal: false, vertical: true)
@@ -1764,53 +1739,6 @@ private struct DogamEmptyResultView: View {
   }
 }
 
-extension DogamFriend {
-  /// 화면기획 27 — 도감 카드는 "따스한 사슴"처럼 닉네임 앞 두 낱말만 보여준다
-  fileprivate var cardLabel: String {
-    nickname.split(separator: " ").prefix(2).joined(separator: " ")
-  }
-}
-
-private struct DogamFriendCard: View {
-  let friend: DogamFriend
-
-  var body: some View {
-    VStack(spacing: 6) {
-      ZStack(alignment: .topTrailing) {
-        MascotAvatar(mascot: friend.avatar, size: 44, background: MoyeoTheme.leaf)
-        if friend.metCount > 1 {
-          Text("\(friend.metCount)x")
-            .font(.system(size: 8, weight: .heavy))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .frame(height: 16)
-            .background(MoyeoTheme.forest)
-            .clipShape(Capsule())
-            .offset(x: 8, y: -5)
-        }
-      }
-
-      // 카드 라벨은 닉네임 뒤 숫자를 뺀 앞 두 낱말이다 (화면기획 27)
-      Text(friend.cardLabel)
-        .font(.caption2.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.ink)
-        .lineLimit(1)
-        .minimumScaleFactor(0.72)
-      Text(friend.lastMetAt)
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(MoyeoTheme.muted)
-    }
-    .frame(maxWidth: .infinity)
-    .frame(height: 92)
-    .background(MoyeoTheme.card)
-    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-        .stroke(friend.id == "dogam-01" ? MoyeoTheme.forest : MoyeoTheme.softLine, lineWidth: 1)
-    }
-  }
-}
-
 private struct SettingsView: View {
   @State private var chatEnabled = true
   @State private var deadlineEnabled = true
@@ -1820,7 +1748,7 @@ private struct SettingsView: View {
   @State private var isServerSettingsLoaded = false
   @State private var serverChatMode = "ALL"
   @State private var serverDNDSettings: ServerNotificationSettings?
-  @State private var selectedAction: SettingsMockAction?
+  @State private var selectedAction: SettingsRow?
   /// 29 설정 › 화면 › 테마. 행을 탭하면 시스템 기본 → 라이트 → 다크 순으로 순환한다.
   @ObservedObject private var themeStore = MoyeoThemeStore.shared
   @State private var isPerformingAccountAction = false
@@ -1873,6 +1801,10 @@ private struct SettingsView: View {
             SettingsSectionGroup("계정") {
               SettingsValueRow(action: .loginMethod) { _ in
                 isShowingProviderManagement = true
+              }
+              // 13-2 — 알림이 사라져도 내보내진 사유를 다시 볼 수 있는 유일한 길이다.
+              SettingsValueRow(action: .kickHistory) { _ in
+                supportRoute = .kickHistory
               }
               SettingsValueRow(action: .blockedUsers) { _ in
                 supportRoute = .blockedUsers
@@ -1953,14 +1885,12 @@ private struct SettingsView: View {
     .accessibilityIdentifier("screen.settings")
   }
 
-  /// 캡처 모드에서는 기획대로 `시스템 기본` 고정, 그 밖에는 저장된 사용자 설정을 보여준다
+  /// 저장된 사용자 설정을 그대로 보여준다 — 캡처도 같은 값을 쓴다 (NO-MOCK-CANON R2)
   private var themeRowValue: String {
-    UITestPlanningMockData.isActive ? MoyeoThemeMode.system.rowValue : themeStore.mode.rowValue
+    themeStore.mode.rowValue
   }
 
   private func advanceTheme() {
-    // 캡처는 강제 테마를 쓰므로 행을 눌러도 값이 흔들리지 않아야 한다
-    guard !UITestPlanningMockData.isActive else { return }
     themeStore.advance()
   }
 
@@ -2006,7 +1936,7 @@ private struct SettingsView: View {
     )
   }
 
-  private func accountAlert(for action: SettingsMockAction) -> Alert {
+  private func accountAlert(for action: SettingsRow) -> Alert {
     switch action {
     case .logout:
       return Alert(
@@ -2035,7 +1965,7 @@ private struct SettingsView: View {
     }
   }
 
-  private func performAccountAction(_ action: SettingsMockAction) {
+  private func performAccountAction(_ action: SettingsRow) {
     guard !isPerformingAccountAction else { return }
     isPerformingAccountAction = true
     Task {
@@ -2056,24 +1986,45 @@ private struct SettingsView: View {
   }
 }
 
-private struct ProviderManagementView: View {
+/// 29-5 계정 연결 (로그인 방식). 설정의 `로그인 방식 › 관리` 와 캡처 라우트가 같은 화면을 연다.
+struct ProviderManagementView: View {
   @Environment(\.dismiss) private var dismiss
   @ObservedObject var service: AuthProviderLinkService
+  /// 설정에서는 시트로 뜨고, 캡처 라우트(`account-providers`)에서는 밀어 넣는다.
+  /// 밀어 넣을 때 자체 `NavigationStack` 과 `presentationDetents` 를 그대로 두면 아무것도 그려지지 않는다.
+  var isPresentedAsSheet = true
   @State private var email = ""
   @State private var password = ""
   @State private var isEmailFormExpanded = false
 
   var body: some View {
-    NavigationStack {
+    if isPresentedAsSheet {
+      NavigationStack { content }
+        .presentationDetents([.large])
+        .accessibilityIdentifier("screen.providerManagement")
+    } else {
+      content
+        .accessibilityIdentifier("screen.providerManagement")
+    }
+  }
+
+  private var content: some View {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          Text("연결된 로그인 수단으로 같은 계정을 안전하게 이용할 수 있어요.")
+          // 29-5 안내 문구는 세 플랫폼이 글자 그대로 같다 (기획 `ScreenAccountProviders`).
+          Text("어느 방법으로든 같은 계정으로 들어와요. 하나를 더 연결해두면 한쪽을 못 쓰게 돼도 들어올 수 있어요.")
             .font(MoyeoTypography.cardBody)
             .foregroundStyle(MoyeoTheme.muted)
+            .fixedSize(horizontal: false, vertical: true)
 
           ForEach(AuthServiceProvider.connectionOrder) { provider in
             providerCard(provider)
           }
+
+          // 마지막 하나는 끊을 수 없다 — 끊으면 아무 방법으로도 못 들어온다.
+          // 서버에도 연결 해제 API 가 없다(POST /auth/providers 는 연결만 한다).
+          AttachNoteBox(lines: ["마지막 하나 남은 로그인 방식은 끊을 수 없어요. 계정을 아예 지우려면 설정에서 탈퇴해 주세요."])
+            .accessibilityIdentifier("providers.note")
 
           if let errorMessage = service.errorMessage {
             Text(errorMessage)
@@ -2088,14 +2039,13 @@ private struct ProviderManagementView: View {
       .navigationTitle("로그인 방식")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("완료") { dismiss() }
+        if isPresentedAsSheet {
+          ToolbarItem(placement: .confirmationAction) {
+            Button("완료") { dismiss() }
+          }
         }
       }
       .task { await service.load() }
-    }
-    .presentationDetents([.large])
-    .accessibilityIdentifier("screen.providerManagement")
   }
 
   @ViewBuilder
@@ -2370,10 +2320,10 @@ private struct SettingsToggleRow: View {
 }
 
 private struct SettingsValueRow: View {
-  let action: SettingsMockAction
+  let action: SettingsRow
   /// 사용자 설정에 따라 바뀌는 값(테마)은 화면에서 넣어준다
   var valueOverride: String?
-  let onTap: (SettingsMockAction) -> Void
+  let onTap: (SettingsRow) -> Void
 
   var body: some View {
     Button {
@@ -2407,8 +2357,8 @@ private struct SettingsValueRow: View {
 }
 
 private struct SettingsDangerRow: View {
-  let action: SettingsMockAction
-  let onTap: (SettingsMockAction) -> Void
+  let action: SettingsRow
+  let onTap: (SettingsRow) -> Void
 
   var body: some View {
     Button {
@@ -2452,11 +2402,14 @@ private struct SettingsRowDivider: View {
   }
 }
 
-private enum SettingsMockAction: Identifiable {
+/// 29 설정의 행 식별자. 목데이터가 아니라 "어느 행을 눌렀는지"를 가리키는 값이다.
+private enum SettingsRow: Identifiable {
   case notificationDetail
   case theme
   case language
   case loginMethod
+  /// 13-2 내 강퇴 이력. 13-1 은 알림 한 건을 여는 화면이라 알림이 사라지면 사유를 다시 볼 길이 없었다.
+  case kickHistory
   case blockedUsers
   case privacyPolicy
   case terms
@@ -2480,6 +2433,8 @@ private enum SettingsMockAction: Identifiable {
       return "language"
     case .loginMethod:
       return "loginMethod"
+    case .kickHistory:
+      return "kickHistory"
     case .blockedUsers:
       return "blockedUsers"
     case .privacyPolicy:
@@ -2511,6 +2466,8 @@ private enum SettingsMockAction: Identifiable {
       return "언어"
     case .loginMethod:
       return "로그인 방식"
+    case .kickHistory:
+      return "내보내진 기록"
     case .blockedUsers:
       return "차단한 사용자"
     case .privacyPolicy:
@@ -2565,6 +2522,8 @@ private enum SettingsMockAction: Identifiable {
       return "언어 설정"
     case .loginMethod:
       return "로그인 방식"
+    case .kickHistory:
+      return "내보내진 기록"
     case .blockedUsers:
       return "차단한 사용자"
     case .privacyPolicy:
@@ -2596,6 +2555,9 @@ private enum SettingsMockAction: Identifiable {
       return "한국어 기준으로 표시되고, 지역 안내 문구도 같은 언어 설정을 따라가요."
     case .loginMethod:
       return "카카오 계정으로 연결된 상태예요. 계정 연결 관리는 여기에서 이어져요."
+    case .kickHistory:
+      // 화면으로 이동하는 행이라 다이얼로그 본문이 필요 없다
+      return ""
     case .blockedUsers:
       return "차단 목록 2명을 확인하고 필요하면 차단을 해제할 수 있어요."
     case .privacyPolicy:
@@ -2694,54 +2656,6 @@ private enum MyTravelCardMetrics {
   static let metaFont = MoyeoTypography.font(size: 11.5, weight: .bold, relativeTo: .caption)
 }
 
-private struct PastTrip: Identifiable {
-  let id = UUID()
-  let courseID: String
-  let title: String
-  let date: String
-  let region: String
-  let summary: String
-  let mascot: String
-  let mood: CourseMood
-  let isPublished: Bool
-
-  var course: TravelCourse {
-    MockData.course(for: courseID) ?? MockData.courses[0]
-  }
-}
-
-private struct MyPastTripCard: View {
-  let trip: PastTrip
-
-  var body: some View {
-    MyTravelSummaryCard(
-      identifierPrefix: "my.pastTrip.\(trip.courseID)",
-      title: trip.title,
-      subtitle: trip.summary,
-      meta: "\(trip.date) · 여행 기록",
-      mascot: trip.mascot,
-      mood: trip.mood,
-      badge: trip.region
-    )
-  }
-}
-
-private struct MySavedCourseCard: View {
-  let course: TravelCourse
-
-  var body: some View {
-    MyTravelSummaryCard(
-      identifierPrefix: "my.savedCourse.\(course.id)",
-      title: course.title,
-      subtitle: course.subtitle,
-      meta: "\(course.duration) · \(course.distance)",
-      mascot: course.mascot,
-      mood: course.mood,
-      badge: course.region
-    )
-  }
-}
-
 private struct MyTravelSummaryCard: View {
   let identifierPrefix: String
   let title: String
@@ -2830,9 +2744,9 @@ extension TripRecruitment {
     }
   }
 
-  /// 화면기획 26 마이 — 진행중 카드는 대표 모집만 코스 이름으로 보여준다
+  /// 화면기획 26 마이 — 진행중 카드는 서버가 준 코스 이름이 있으면 그것을, 없으면 모집 이름을 쓴다
   fileprivate var myListTitle: String {
-    id == "trip-cheongsong-juwangsan" ? "주왕산 & 주산지 힐링 트레킹" : title
+    serverCourseTitle.flatMap { $0.isEmpty ? nil : $0 } ?? title
   }
 
   fileprivate var myDateText: String {
@@ -2854,55 +2768,6 @@ extension TripRecruitment {
 
   private var myParticipantCount: (joined: Int, capacity: Int) {
     (joined, capacity)
-  }
-}
-
-private struct DogamPanel: View {
-  let onOpenFriendDex: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      HStack {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("지금까지 만난 친구")
-            .font(.headline)
-            .foregroundStyle(MoyeoTheme.ink)
-          Text("\(MockData.dogamFriends.count)마리 · 최근 동행 순")
-            .font(.caption)
-            .foregroundStyle(MoyeoTheme.muted)
-        }
-        Spacer()
-        Pill(text: "친구에게만", tint: MoyeoTheme.forest)
-      }
-
-      ForEach(MockData.dogamFriends.prefix(4)) { friend in
-        Button(action: onOpenFriendDex) {
-          HStack(spacing: 10) {
-            MascotAvatar(mascot: friend.avatar, size: 44, background: MoyeoTheme.leaf)
-            VStack(alignment: .leading, spacing: 5) {
-              Text(friend.nickname)
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-              Text(friend.lastMetAt)
-                .font(.caption)
-                .foregroundStyle(MoyeoTheme.muted)
-            }
-            Spacer()
-            if friend.metCount > 1 {
-              Pill(text: "\(friend.metCount)x", tint: MoyeoTheme.coral)
-            }
-            Image(systemName: "chevron.right")
-              .font(.caption.bold())
-              .foregroundStyle(MoyeoTheme.text400)
-          }
-          .frame(height: 58)
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("profile.dogamPreview.\(friend.id)")
-      }
-    }
-    .moyeoCard()
   }
 }
 
@@ -2948,15 +2813,17 @@ private struct ProfileHeader: View {
   }
 }
 
+/// 서버 프로필 이미지가 우선이고, 없으면 **닉네임에서 계산한 동물**을 그린다 (NO-MOCK-CANON R5).
+/// 화면별 고정 이모지(`emojiOverride`)는 두지 않는다 — 서버 이미지까지 가려 버렸다.
 private struct AuthenticatedProfileAvatar: View {
   let profile: ProfileSummary
   let size: CGFloat
-  /// 화면기획 28처럼 공개 이름과 다른 캐릭터를 보여줘야 하는 화면에서만 쓴다
-  var emojiOverride: String?
+  /// 세션 프로필보다 최신인 서버 이미지. 있으면 이쪽을 쓴다.
+  var overrideImageURL: URL?
 
   var body: some View {
     Group {
-      if let url = profile.profileImageURL, emojiOverride == nil {
+      if let url = overrideImageURL ?? profile.profileImageURL {
         CachedRemoteImage(url: url) { image in
           image.resizable().scaledToFill()
         } placeholder: {
@@ -2973,41 +2840,59 @@ private struct AuthenticatedProfileAvatar: View {
   }
 
   private var fallback: some View {
-    Text(emojiOverride ?? profile.avatar)
+    Text(profile.avatar)
       .font(.system(size: size * 0.48))
       .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
-private struct MyTripRow: View {
-  let trip: TripRecruitment
+/// 화면기획 26 상단의 3칸 지표. 25 프로필 카드와 **같은 근거**(`GET /users/{userId}/profile`)다.
+/// 매너 점수는 소수 한 자리로 적는다 — 평균값이라 `4.7` 처럼 나온다(안드로이드가 정본).
+private struct MyProfileMetricStrip: View {
+  let profile: ServerPublicProfile
+
+  struct Metric: Identifiable {
+    let id: String
+    let value: String
+    let label: String
+  }
+
+  static func metrics(from profile: ServerPublicProfile) -> [Metric] {
+    var result: [Metric] = []
+    if let trips = profile.completedTripCount {
+      result.append(Metric(id: "여행", value: "\(trips)", label: "여행"))
+    }
+    if let manner = profile.mannerRating {
+      result.append(Metric(id: "매너", value: String(format: "%.1f", manner), label: "매너"))
+    }
+    if let feeds = profile.feedCount {
+      result.append(Metric(id: "피드", value: "\(feeds)", label: "피드"))
+    }
+    return result
+  }
 
   var body: some View {
-    HStack(spacing: 12) {
-      MascotAvatar(mascot: trip.coverMascot, size: 50, background: trip.status.tint.opacity(0.14))
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(spacing: 6) {
-          Pill(text: trip.status.rawValue, tint: trip.status.tint)
-          Text(trip.schedule)
-            .font(.caption.weight(.semibold))
+    HStack(spacing: 8) {
+      ForEach(Self.metrics(from: profile)) { metric in
+        VStack(spacing: 3) {
+          Text(metric.value)
+            .font(MoyeoTypography.font(size: 17, weight: .bold, relativeTo: .headline))
+            .monospacedDigit()
+            .foregroundStyle(MoyeoTheme.ink)
+          Text(metric.label)
+            .font(MoyeoTypography.tinyMeta)
             .foregroundStyle(MoyeoTheme.muted)
-            .lineLimit(1)
         }
-        Text(trip.title)
-          .font(.headline)
-          .foregroundStyle(MoyeoTheme.ink)
-          .lineLimit(1)
-        Text(trip.meetupPoint)
-          .font(.caption)
-          .foregroundStyle(MoyeoTheme.muted)
-          .lineLimit(1)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(MoyeoTheme.card)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(metric.label) \(metric.value)")
       }
-      Spacer()
-      Image(systemName: "chevron.right")
-        .font(.caption.bold())
-        .foregroundStyle(MoyeoTheme.muted.opacity(0.7))
     }
-    .moyeoCard()
+    .accessibilityIdentifier("my.profileMetrics")
   }
 }
 
@@ -3049,6 +2934,141 @@ private struct ProfileTagPanel: View {
   }
 }
 
+/// 28-1 에서 고칠 수 있는 줄. 자기소개는 공개, 생년월일·성별은 비공개 정보다.
+private enum ProfileEditField: String, Identifiable {
+  case introduction
+  case birthDate
+  case gender
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .introduction: return "자기소개"
+    case .birthDate: return "생년월일"
+    case .gender: return "성별"
+    }
+  }
+}
+
+/// 28-1 의 한 줄을 고치는 시트. 저장은 `PUT users/me/profile` 한 번으로 끝난다 —
+/// 항목별 API 는 없다.
+private struct ProfileEditFieldSheet: View {
+  let field: ProfileEditField
+  @Binding var introduction: String
+  @Binding var birthDate: String
+  @Binding var gender: String
+  let onSave: () -> Void
+  let onCancel: () -> Void
+
+  /// 서버 형식은 `yyyy-MM-dd` 다. 값이 없으면 오늘로 시작한다(저장 전까지 서버에 가지 않는다).
+  @State private var pickedDate = Date()
+
+  private static let serverFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter
+  }()
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Button("취소") { onCancel() }
+          .font(.subheadline.weight(.bold))
+          .foregroundStyle(MoyeoTheme.muted)
+        Spacer()
+        Text(field.title)
+          .font(.subheadline.weight(.heavy))
+          .foregroundStyle(MoyeoTheme.ink)
+        Spacer()
+        Button("저장") {
+          if field == .birthDate {
+            birthDate = Self.serverFormatter.string(from: pickedDate)
+          }
+          onSave()
+        }
+        .font(.subheadline.weight(.heavy))
+        .foregroundStyle(MoyeoTheme.forest)
+        .accessibilityIdentifier("profile.edit.field.save")
+      }
+      .padding(.horizontal, 20)
+      .frame(height: 56)
+      .overlay(alignment: .bottom) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
+
+      editor
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(20)
+    }
+    .background(MoyeoTheme.card)
+    .onAppear {
+      if let parsed = Self.serverFormatter.date(from: birthDate) { pickedDate = parsed }
+    }
+    .accessibilityIdentifier("profile.edit.field.\(field.rawValue)")
+  }
+
+  @ViewBuilder
+  private var editor: some View {
+    switch field {
+    case .introduction:
+      VStack(alignment: .leading, spacing: 8) {
+        TextEditor(text: $introduction)
+          .scrollContentBackground(.hidden)
+          .padding(10)
+          .frame(minHeight: 120)
+          .background(MoyeoTheme.subtleBackground)
+          .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
+          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+          .accessibilityIdentifier("profile.edit.introductionInput")
+        Text("\(introduction.count) / 200")
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.text400)
+          .monospacedDigit()
+          .frame(maxWidth: .infinity, alignment: .trailing)
+      }
+    case .birthDate:
+      DatePicker("", selection: $pickedDate, displayedComponents: .date)
+        .datePickerStyle(.wheel)
+        .labelsHidden()
+        // 17-2 날짜 시트와 같은 한국어 표기로 맞춘다 (기본값이면 월이 영어로 나온다).
+        .environment(\.locale, Locale(identifier: "ko_KR"))
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("profile.edit.birthDatePicker")
+    case .gender:
+      VStack(spacing: 8) {
+        ForEach(AuthGender.allCases) { option in
+          Button {
+            gender = option.apiValue
+          } label: {
+            HStack {
+              Text(option.title)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(MoyeoTheme.ink)
+              Spacer()
+              if gender == option.apiValue {
+                Image(systemName: "checkmark")
+                  .font(.system(size: 13, weight: .heavy))
+                  .foregroundStyle(MoyeoTheme.forest)
+              }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 50)
+            .contentShape(Rectangle())
+            .background(MoyeoTheme.subtleBackground)
+            .overlay(
+              RoundedRectangle(cornerRadius: 10)
+                .stroke(gender == option.apiValue ? MoyeoTheme.forest : MoyeoTheme.line)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("profile.edit.gender.\(option.rawValue)")
+        }
+      }
+    }
+  }
+}
+
 /// 프로필 수정의 그룹 제목. 공개/비공개 묶음을 구분한다.
 private struct ProfileEditGroupHeader: View {
   let title: String
@@ -3067,28 +3087,49 @@ private struct ProfileEditGroupHeader: View {
 }
 
 /// 라벨 좌측 · 값 우측의 한 줄 행. 카드로 감싸지 않는다 (화면기획).
+///
+/// 예전에는 `showsChevron` 이 화살표만 그렸고 **누르는 동작이 없었다** — 자기소개·생년월일·성별
+/// 세 줄이 눌릴 것처럼 보이면서 아무 일도 하지 않았다. 이제 `action` 이 있는 줄만 화살표를 그린다.
 private struct ProfileEditListRow: View {
   let label: String
   let value: String
-  var showsChevron = false
   var locked = false
+  var action: (() -> Void)?
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
-        Text(label).font(.subheadline.weight(.bold)).foregroundStyle(MoyeoTheme.ink)
-        Spacer(minLength: 8)
-        Text(value)
-          .font(.subheadline.weight(locked ? .regular : .bold))
-          .foregroundStyle(locked ? MoyeoTheme.muted : MoyeoTheme.ink)
-          .lineLimit(1)
-        Image(systemName: locked ? "checkmark" : "chevron.right")
+      if let action {
+        Button(action: action) { row }
+          .buttonStyle(.plain)
+          .accessibilityLabel("\(label) 수정")
+      } else {
+        row
+      }
+      Divider().overlay(MoyeoTheme.softLine)
+    }
+  }
+
+  private var row: some View {
+    HStack(spacing: 8) {
+      Text(label).font(.subheadline.weight(.bold)).foregroundStyle(MoyeoTheme.ink)
+      Spacer(minLength: 8)
+      Text(value)
+        .font(.subheadline.weight(locked ? .regular : .bold))
+        .foregroundStyle(locked ? MoyeoTheme.muted : MoyeoTheme.ink)
+        .lineLimit(1)
+      // 잠긴 줄은 체크, 누를 수 있는 줄만 화살표. 둘 다 아니면 아이콘을 그리지 않는다.
+      if locked {
+        Image(systemName: "checkmark")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MoyeoTheme.text400)
+      } else if action != nil {
+        Image(systemName: "chevron.right")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(MoyeoTheme.text400)
       }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 16)
-      Divider().overlay(MoyeoTheme.softLine)
     }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 16)
+    .contentShape(Rectangle())
   }
 }

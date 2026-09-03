@@ -304,16 +304,17 @@ enum TourismAPIResponseParser {
         return nil
     }
 
+    /// 관광 콘텐츠 이미지는 절대 URL 로 오지만, 상대 경로로 오는 값이 섞여도 한 곳에서 흡수한다.
     private static func url(_ object: [String: Any], keys: [String]) -> URL? {
         guard let value = string(object, keys: keys) else { return nil }
-        return URL(string: value)
+        return MoyeoImageURL.resolve(value)
     }
 
     private static func urls(_ object: [String: Any], keys: [String]) -> [URL] {
         for key in keys {
             guard let values = object[key] as? [Any] else { continue }
             return values.compactMap { value in
-                if let value = value as? String { return URL(string: value) }
+                if let value = value as? String { return MoyeoImageURL.resolve(value) }
                 guard let value = value as? [String: Any] else { return nil }
                 return url(value, keys: ["originalImageUrl", "url", "imageUrl", "originImageUrl", "originimgurl"])
             }

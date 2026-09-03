@@ -36,7 +36,7 @@ struct ServerTravelCourse: Decodable, Hashable, Identifiable {
     var id: Int64 { courseId }
 
     var thumbnailURL: URL? {
-        thumbnail.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(thumbnail)
     }
 }
 
@@ -47,6 +47,9 @@ struct ServerTravelCourseDetail: Decodable, Hashable, Identifiable {
     let title: String
     let description: String?
     let creatorNickname: String?
+    /// 작성자 프로필 이미지 (2026-09-02 서버 추가, 실서버 확인 — 코스 81·61·21 모두 URL 이 온다).
+    /// 작성자 비공개·탈퇴·이미지 없음이면 `null` 이다 — 그때만 닉네임 아바타로 떨어진다.
+    let creatorProfileImageUrl: String?
     let creatorTravelStartDate: String?
     let creatorTravelEndDate: String?
     let chatRoomCount: Int64
@@ -61,8 +64,30 @@ struct ServerTravelCourseDetail: Decodable, Hashable, Identifiable {
     var id: Int64 { courseId }
 
     var thumbnailURL: URL? {
-        thumbnail.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(thumbnail)
     }
+}
+
+/// 찜한 코스 (`travel-courses/me/favorites`) — 26 마이 `찜한 코스` 탭.
+/// 목록 응답보다 좁다: 소요 시간·거리·평점이 없다. 없는 값을 카드에 두지 않는다.
+struct ServerLikedCourse: Decodable, Hashable, Identifiable {
+    let courseId: Int64
+    let title: String
+    let description: String?
+    let thumbnail: String?
+    let tags: [ServerCourseTag]
+
+    var id: Int64 { courseId }
+
+    var thumbnailURL: URL? {
+        MoyeoImageURL.resolve(thumbnail)
+    }
+}
+
+/// `POST /travel-courses/{courseId}/publication` 응답.
+struct ServerCoursePublication: Decodable, Hashable {
+    let courseId: Int64
+    let publicationStatus: String
 }
 
 struct ServerRoomCourse: Decodable, Hashable {
@@ -102,6 +127,36 @@ final class TravelCourseAPIClient: @unchecked Sendable {
         try await api.get("/api/v1/travel-courses/public/popular")
     }
 
+    /// 27-3 코스 공개 — `POST /travel-courses/{courseId}/publication`.
+    /// **되돌릴 수 없다.** 호출부는 두 단계 확인을 거친 뒤에만 부른다.
+    /// 이 호출부가 없어서 27-3 이 서버를 부르지 않고 화면에만 "공개했어요" 를 띄우고 있었다
+    /// (`audit-api-coverage.mjs` 의 "아무 플랫폼도 쓰지 않음").
+    func publishCourse(
+        courseID: Int64,
+        title: String,
+        description: String,
+        showsCreatorNickname: Bool
+    ) async throws -> ServerCoursePublication {
+        struct PublishRequest: Encodable {
+            let title: String
+            let description: String
+            let showCreatorNickname: Bool
+        }
+        return try await api.send(
+            "/api/v1/travel-courses/\(courseID)/publication",
+            method: "POST",
+            body: PublishRequest(
+                title: title, description: description, showCreatorNickname: showsCreatorNickname
+            )
+        )
+    }
+
+    /// 26 마이 `찜한 코스` — 오래 "조회 API 가 없다"고 적혀 있었지만 실서버는 200 을 준다.
+    /// 응답(`LikedTravelCourseResponse`)은 목록 카드보다 좁다 — 소요 시간·거리·평점이 없다.
+    func likedCourses() async throws -> [ServerLikedCourse] {
+        try await api.get("/api/v1/travel-courses/me/favorites")
+    }
+
     func tags() async throws -> [ServerCourseTag] {
         try await api.get("/api/v1/travel-courses/tags")
     }
@@ -114,12 +169,58 @@ final class TravelCourseAPIClient: @unchecked Sendable {
     func roomCourse(roomID: Int64) async throws -> ServerRoomCourse {
         try await api.get("/api/v1/travel-courses/chat-rooms/\(roomID)")
     }
+
+    /// 12-1 검색 결과 — **제목에 포함되거나 태그명이 일치**하는 공개 코스를 준다.
+    /// 소개글(`description`)은 검색 대상이 아니다 (정본 `ATTACH-COMPOSER-CANON.md` R6).
+    func searchCourses(keyword: String) async throws -> [ServerTravelCourse] {
+        try await api.get(
+            "/api/v1/travel-courses/search",
+            query: [URLQueryItem(name: "keyword", value: keyword)]
+        )
+    }
+
+    /// 27-4 코스 평가 — `POST /travel-courses/chat-rooms/{roomId}/rating`.
+    /// 서버는 `score` 를 1~5 정수로만 받는다(`RateTravelCourseRequest`). 204 를 준다.
+    /// **확정된 여행이 끝난 채팅방 참가자만** 평가할 수 있다 — 그 밖에는 서버가 거절한다.
+    func rateCourse(roomID: Int64, score: Int) async throws {
+        struct RateRequest: Encodable {
+            let score: Int
+        }
+        try await api.sendVoid(
+            "/api/v1/travel-courses/chat-rooms/\(roomID)/rating",
+            method: "POST",
+            body: RateRequest(score: score)
+        )
+    }
+
+    /// 14 코스 상세 `모집 중인 모임 보기` — 모집 마감 전이고 아직 참가하지 않은 방만 온다.
+    /// 응답은 11 탐색 카드와 같은 `SearchChatRoomResponse` 다 (정본 §4).
+    func recruitingRooms(courseID: Int64) async throws -> [ServerChatRoomSummary] {
+        try await api.get("/api/v1/travel-courses/\(courseID)/chat-rooms")
+    }
 }
 
 // MARK: - 화면 모델 매핑
 
 enum ServerCourseMapper {
     static let serverCourseIDPrefix = "server-course-"
+
+    /// courseId 만 아는 진입점용 빈 껍데기 — 14 코스 상세가 서버 상세로 다시 채운다.
+    static func stubCourse(serverCourseID: Int64) -> TravelCourse {
+        TravelCourse(
+            id: "\(serverCourseIDPrefix)\(serverCourseID)",
+            title: "",
+            region: "",
+            subtitle: "",
+            duration: "",
+            distance: "",
+            mascot: "",
+            mood: .forest,
+            tags: [],
+            stops: [],
+            serverCourseID: serverCourseID
+        )
+    }
 
     /// 서버 코스 → 코스 상세 화면 모델.
     /// 서버가 주지 않는 값(지역·마스코트 등)은 비워 두고 화면에서 숨긴다.
@@ -147,7 +248,10 @@ enum ServerCourseMapper {
         if let nickname = detail.creatorNickname, !nickname.isEmpty {
             publishingInfo = CoursePublishingInfo(
                 travelerName: nickname,
-                travelerAvatar: "",
+                // 이미지가 없을 때만 쓰는 대체 표시. 표는 `MoyeoNicknameAnimal` 하나뿐이다 (NO-MOCK R5).
+                travelerAvatar: MoyeoNicknameAnimal.emoji(forNickname: nickname)
+                    ?? MoyeoNicknameAnimal.unknown,
+                travelerAvatarURL: MoyeoImageURL.resolve(detail.creatorProfileImageUrl),
                 publishedAt: travelPeriodText(
                     startDate: detail.creatorTravelStartDate,
                     endDate: detail.creatorTravelEndDate

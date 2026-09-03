@@ -4,8 +4,9 @@ import SwiftUI
 enum SupportRoute: Hashable, Identifiable {
   case authFlow
   case authPreview(AuthDirectScreen)
-  case authTerms
-  case applicationSheet
+  /// 16 신청 시트. 값은 신청할 모집의 roomId — 없으면 세션이 아는 첫 모집을 쓴다.
+  /// 예전에는 값을 아예 받지 않아 직접 진입(캡처)에서 세션이 빈 채로 "모집이 없어요"가 찍혔다.
+  case applicationSheet(String)
   case leaveConfirmation(String)
   case notifications
   case createRecruitment(String)
@@ -14,7 +15,9 @@ enum SupportRoute: Hashable, Identifiable {
   case customCourse
   case createSchedule
   case createMeeting
-  case createPeople
+  /// 17-4 · 17-4a · 17-4b — 3단계 인원. 값은 **최대 인원**이고, nil 이면 폼 기본값(5)이다.
+  /// 인원수별 멘트 3단계(4명 이하 · 5~8명 · 9명 이상)를 아트보드로 나눠 찍기 위한 통로다.
+  case createPeople(Int?)
   case createDetail
   case createSummary
   case createSummaryCustom
@@ -29,10 +32,19 @@ enum SupportRoute: Hashable, Identifiable {
   /// changeLog14 — 20-1b 내보내기 사유 입력 시트를 연 20-1 사이드 메뉴
   case chatMenuMemberRemove(String)
   case chatAttach(String)
-  case specialMessages
+  /// 20-2a~20-2f 첨부 작성 6종. 값은 방 id(`server-chat-22` 또는 방 번호)와 타일 종류다.
+  /// 20-2 시트에서 눌러 오는 것과 같은 화면이다 — 캡처 전용 화면을 따로 두지 않는다.
+  case attachComposer(String, ChatAttachmentMenuView.AttachmentKind)
+  /// 21 특수 메시지 카드 6종. 값은 카드를 뽑아 올 방의 roomId 다 —
+  /// 이 화면은 **카드 렌더링 견본**이라 실제 방의 실제 메시지로 그린다 (NO-MOCK-CANON R1).
+  case specialMessages(String)
   case friends
   case tripMessage
-  case report
+  /// 30-2 피드 신고 시트. **피드 전용이다** (정본 `REPORT-CANON.md` §1) —
+  /// 값은 23 상세와 같은 게시물 id(`server-feed-{feedId}`)다.
+  /// 멤버·채팅방 신고는 접수 API 가 없어 이 라우트로 오지 않는다 — 누른 자리에서
+  /// `ReportUnsupportedDialog` 로 안내한다.
+  case report(String)
   case blockedUsers
   case coursePublish
   case tripDay(String)
@@ -52,6 +64,26 @@ enum SupportRoute: Hashable, Identifiable {
   /// changeLog18 — 25 프로필 카드. 마이 탭 밖(피드 작성자 23 · 멤버 액션 20-1a · 친구 목록 27-2)에서
   /// 같은 화면으로 오기 위한 통로다. 화면은 `MyRoute.profile` 과 같은 `ProfileCardView` 하나뿐이다.
   case publicProfile(ProfileCardSubject)
+  /// 20-1c 이 모임 알림 (`GET/PUT /notifications/settings/chat-rooms/{roomId}`)
+  case roomNotification(String)
+  /// 26-1 찜한 모집 (`GET /chat-rooms/my/favorites`)
+  case favoriteRooms
+  /// 13-2 내 강퇴 이력 (`GET /chat-rooms/my-kick-histories`)
+  case kickHistory
+  /// 27-4 코스 평가. 값은 roomId — 없으면 가장 최근에 끝난 내 모임을 쓴다.
+  case courseRating(String)
+  /// 18-4 여행 확정 / 불발 (호스트). 값은 roomId.
+  case tripStatus(String)
+  /// 18-5 집합 정보 수정 (호스트). 값은 roomId.
+  case meetingEdit(String)
+  /// 29-5 계정 연결 (로그인 방식). `GET/POST /auth/providers`
+  case accountProviders
+  /// 20-3a 공지 수정 · 삭제. 값은 roomId — 화면이 그 방의 공지를 받아 첫 공지를 연다.
+  case noticeEdit(String)
+  /// 29-1a 차단 해제 확인 시트를 연 29-1
+  case unblockConfirm
+  /// 27-2a 친구 정리 시트를 연 27-2
+  case friendManage
 
   var id: String {
     switch self {
@@ -59,10 +91,8 @@ enum SupportRoute: Hashable, Identifiable {
       return "authFlow"
     case .authPreview(let screen):
       return "authPreview.\(screen.rawValue)"
-    case .authTerms:
-      return "authTerms"
-    case .applicationSheet:
-      return "applicationSheet"
+    case .applicationSheet(let roomID):
+      return "applicationSheet.\(roomID)"
     case .leaveConfirmation(let threadID):
       return "leaveConfirmation.\(threadID)"
     case .notifications:
@@ -79,8 +109,8 @@ enum SupportRoute: Hashable, Identifiable {
       return "createSchedule"
     case .createMeeting:
       return "createMeeting"
-    case .createPeople:
-      return "createPeople"
+    case .createPeople(let capacity):
+      return "createPeople.\(capacity.map(String.init) ?? "default")"
     case .createDetail:
       return "createDetail"
     case .createSummary:
@@ -101,10 +131,12 @@ enum SupportRoute: Hashable, Identifiable {
     case .chatMenuMemberActions(let threadID): return "chatMenuMemberActions.\(threadID)"
     case .chatMenuMemberRemove(let threadID): return "chatMenuMemberRemove.\(threadID)"
     case .chatAttach(let threadID): return "chatAttach.\(threadID)"
-    case .specialMessages: return "specialMessages"
+    case .attachComposer(let threadID, let kind):
+      return "attachComposer.\(threadID).\(kind.rawValue)"
+    case .specialMessages(let roomID): return "specialMessages.\(roomID)"
     case .friends: return "friends"
     case .tripMessage: return "tripMessage"
-    case .report: return "report"
+    case .report(let postID): return "report.\(postID)"
     case .blockedUsers: return "blockedUsers"
     case .coursePublish: return "coursePublish"
     case .tripDay(let threadID): return "tripDay.\(threadID)"
@@ -120,6 +152,16 @@ enum SupportRoute: Hashable, Identifiable {
     case .ossLicenses: return "ossLicenses"
     case .ossLicenseDetail(let name): return "ossLicenseDetail.\(name)"
     case .publicProfile(let subject): return "publicProfile.\(subject.routeKey)"
+    case .roomNotification(let threadID): return "roomNotification.\(threadID)"
+    case .favoriteRooms: return "favoriteRooms"
+    case .kickHistory: return "kickHistory"
+    case .courseRating(let roomID): return "courseRating.\(roomID)"
+    case .tripStatus(let roomID): return "tripStatus.\(roomID)"
+    case .meetingEdit(let roomID): return "meetingEdit.\(roomID)"
+    case .accountProviders: return "accountProviders"
+    case .noticeEdit(let roomID): return "noticeEdit.\(roomID)"
+    case .unblockConfirm: return "unblockConfirm"
+    case .friendManage: return "friendManage"
     }
   }
 }
@@ -132,7 +174,7 @@ struct SupportDestinationView: View {
 
   init(
     route: SupportRoute, tripContext: TripInteractionContext = TripInteractionContext(),
-    feedPosts: Binding<[FeedPost]> = .constant(MockData.feedPosts),
+    feedPosts: Binding<[FeedPost]> = .constant([]),
     onAuthCompleted: @escaping () -> Void = {}
   ) {
     self.route = route
@@ -147,14 +189,30 @@ struct SupportDestinationView: View {
       AuthFlowView(onComplete: onAuthCompleted)
     case .authPreview(let screen):
       AuthFlowView(directScreen: screen, onComplete: onAuthCompleted)
-    case .authTerms:
-      AuthTermsDirectLaunchView()
-    case .applicationSheet:
-      ApplicationSheetDirectLaunchView()
+    // 16 신청 시트는 실제 모집 상세 위에 열린 실제 시트다.
+    //
+    // 방 id 를 받으면 15 상세(`appendTrip`)와 **같은 방식**으로 껍데기를 넘겨
+    // 화면이 스스로 상세 API 로 채우게 한다. 예전에는 세션의 모집 목록 첫 건만 봐서
+    // 직접 진입(캡처 · 딥링크)에서는 목록이 비어 있어 늘 빈 상태가 찍혔다.
+    // 여기서 로딩 자리표시를 먼저 그리면 시트가 상세보다 먼저 떠서 **홈 목록 위에** 얹힌다.
+    case .applicationSheet(let roomID):
+      if let trip = applicationSubject(roomID) {
+        TripDetailView(
+          trip: trip,
+          onSendChatMessage: tripContext.onSendChatMessage,
+          startsWithApplicationSheet: true
+        )
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noRecruitments)
+      }
     // changeLog14 — 31 경고 팝업은 20-1 채팅방 사이드 메뉴 위에 뜬 것으로 그린다.
     // 직접 진입(UITEST `leave`)도 그 화면을 깔고 팝업을 연 상태로 시작한다.
     case .leaveConfirmation(let threadID):
-      ChatSideMenuView(thread: resolvedThread(threadID), startsWithLeaveConfirmation: true)
+      if let thread = resolvedThread(threadID) {
+        ChatSideMenuView(thread: thread, startsWithLeaveConfirmation: true)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noChatRooms)
+      }
     case .notifications:
       NotificationCenterView(tripContext: tripContext, feedPosts: $feedPosts)
     case .createRecruitment(let courseID):
@@ -166,81 +224,105 @@ struct SupportDestinationView: View {
         onRejectApplicant: tripContext.onRejectHostApplicant,
         onSetRecruitmentClosed: tripContext.onSetRecruitmentClosed
       )
+    // 18 모집 관리(호스트). 세션이 아는 모임이 아니면 방 id 로 서버 상세를 받아 그린다 —
+    // 예전에는 메모리의 모집 목록만 뒤져서 직접 진입에서 늘 빈 상태였다.
     case .hostManage(let tripID):
-      let trip =
-        tripContext.trips.first { $0.id == tripID } ?? MockData.trip(for: tripID)
-        ?? MockData.trips[0]
-      HostManageView(
-        trip: trip,
-        thread: tripContext.chatThreadProvider(trip),
-        onSendChatMessage: tripContext.onSendChatMessage,
-        onApproveApplicant: tripContext.onApproveHostApplicant,
-        onRejectApplicant: tripContext.onRejectHostApplicant,
-        onSetRecruitmentClosed: tripContext.onSetRecruitmentClosed
-      )
+      ServerTripDestination(tripID: tripID, tripContext: tripContext) { trip in
+        HostManageView(
+          trip: trip,
+          thread: tripContext.chatThreadProvider(trip),
+          onSendChatMessage: tripContext.onSendChatMessage,
+          onApproveApplicant: tripContext.onApproveHostApplicant,
+          onRejectApplicant: tripContext.onRejectHostApplicant,
+          onSetRecruitmentClosed: tripContext.onSetRecruitmentClosed
+        )
+      }
     case .search:
       SearchView(tripContext: tripContext)
     case .customCourse:
       CustomCourseEditorView()
+    // 17-2~17-7 은 별도 화면이 아니라 실제 모집 만들기 플로우의 단계다.
+    // 캡처 전용 래퍼를 두지 않고 실제 플로우를 해당 단계로 열어 찍는다.
     case .createSchedule:
-      RecruitmentSchedulePreviewView()
+      recruitmentFlow(step: 2)
     case .createMeeting:
-      RecruitmentMeetingPreviewView()
-    case .createPeople:
-      RecruitmentPeoplePreviewView()
+      recruitmentFlow(step: 2, atMeetingPoint: true)
+    case .createPeople(let capacity):
+      recruitmentFlow(step: 3, capacity: capacity)
     case .createDetail:
-      RecruitmentDetailPreviewView()
+      recruitmentFlow(step: 4)
     case .createSummary:
-      RecruitmentSummaryPreviewView(source: .linked)
+      recruitmentFlow(step: 5, source: .linked)
     case .createSummaryCustom:
-      RecruitmentSummaryPreviewView(source: .custom)
+      recruitmentFlow(step: 5, source: .custom)
     case .placeSearch:
       PlaceSearchView()
     case .placeDetail(let placeID):
+      // 번들 목록에 없는 ID 는 **서버 콘텐츠 ID** 다 — 빈 장소로 열어 상세 API 가 채우게 한다.
+      // 엉뚱한 목 장소로 떨어뜨리면 그 장소의 목 ID 로 서버를 불러 상세가 항상 실패한다.
       PlaceDetailView(
         place: TourismPlaceCatalog.places.first { $0.id == placeID }
-          ?? TourismPlaceCatalog.places[2]
+          ?? TourismPlace.pending(id: placeID)
       )
+    // 18-1 · 18-2 · 18-3 코스 수정. 18 과 같은 방식으로 방 id 를 직접 조회한다.
     case .courseEdit(let tripID, let state):
-      CourseRouteEditView(
-        trip: tripContext.trips.first { $0.id == tripID } ?? MockData.trips[0],
-        state: state,
-        onSaved: tripContext.onUpdateRoute
-      )
+      ServerTripDestination(tripID: tripID, tripContext: tripContext) { trip in
+        CourseRouteEditView(
+          trip: trip,
+          state: state,
+          onSaved: tripContext.onUpdateRoute
+        )
+      }
     case .noticeHistory(let threadID):
-      NoticeHistoryView(
-        thread: tripContext.chatThreads.first { $0.id == threadID }
-          ?? MockData.chatThreads[0],
-        onCreate: tripContext.onCreateNotice
-      )
+      // 서버 모임 id 로 들어오면 화면이 직접 서버에서 공지를 받는다.
+      if let thread = resolvedThread(threadID) {
+        NoticeHistoryView(thread: thread, onCreate: tripContext.onCreateNotice)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noNotices)
+      }
     case .tripConfirmed(let tripID):
-      let trip =
-        tripContext.trips.first { $0.id == tripID }
-        ?? MockData.trip(for: tripID)
-        ?? MockData.trips[0]
-      TripConfirmedView(
-        trip: trip,
-        thread: tripContext.chatThreadProvider(trip),
-        onSendChatMessage: tripContext.onSendChatMessage
+      // 20-4 는 **확정된 방**을 봐야 한다. 세션이 아는 모임이 없으면(직접 진입 · 캡처)
+      // 방 id 로 서버 상세를 받아 그린다 — 예전에는 메모리의 모집 목록만 뒤져 빈 화면이 됐다.
+      TripConfirmedDestination(
+        tripID: tripID,
+        serverRoomID: resolvedRoomID(tripID),
+        tripContext: tripContext
       )
     case .chatMenu(let threadID):
-      ChatSideMenuView(thread: resolvedThread(threadID))
+      chatSideMenu(threadID)
     // changeLog14 — 20-1a · 20-1b 는 20-1 위에 뜬 시트다. 직접 진입도 같은 구조로 연다.
     case .chatMenuMemberActions(let threadID):
-      ChatSideMenuView(thread: resolvedThread(threadID), startsWithMemberActions: true)
+      chatSideMenu(threadID, startsWithMemberActions: true)
     case .chatMenuMemberRemove(let threadID):
-      ChatSideMenuView(thread: resolvedThread(threadID), startsWithMemberRemoval: true)
+      chatSideMenu(threadID, startsWithMemberRemoval: true)
     case .chatAttach(let threadID):
-      // 서버 모임에서 열린 20-2는 그 방으로 실제 카드를 보낸다. 목데이터·캡처면 roomID가 nil이다.
-      ChatAttachmentMenuView(serverRoomID: resolvedThread(threadID).serverRoomID)
-    case .specialMessages:
-      SpecialMessageCardsView()
+      // 서버 모임에서 열린 20-2는 그 방으로 실제 카드를 보낸다.
+      ChatAttachmentMenuView(serverRoomID: resolvedThread(threadID)?.serverRoomID)
+    // 20-2a~20-2f — 20-2 타일이 여는 것과 같은 작성 화면이다.
+    // 방을 못 찾으면 보낼 곳이 없다 — 지어내지 않고 빈 상태를 그린다 (NO-MOCK-CANON R2).
+    case .attachComposer(let threadID, let kind):
+      if let roomID = resolvedRoomID(threadID) {
+        AttachComposerDestination(kind: kind, roomID: roomID, onSent: {})
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noChatRooms)
+      }
+    case .specialMessages(let roomID):
+      SpecialMessageCardsView(roomID: resolvedRoomID(roomID))
     case .friends:
       FriendsManagementView()
     case .tripMessage:
       TripMessageView()
-    case .report:
-      ReportView()
+    case .report(let postID):
+      // 30-2 는 피드 전용이다. 신고할 피드를 못 찾으면 보낼 대상이 없다 —
+      // 사유·대상을 지어내지 않고 빈 상태를 그린다 (NO-MOCK-CANON R1).
+      if let post = feedPosts.first(where: { $0.id == postID }), let view = ReportView(post: post) {
+        view
+      } else if let feedID = ServerFeedMapper.feedID(fromPostID: postID) {
+        // 피드 목록을 거치지 않고 바로 들어오면(캡처·딥링크) 시트가 피드를 직접 받는다.
+        ReportView(feedID: feedID)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noFeeds)
+      }
     case .blockedUsers:
       BlockedUsersView()
     case .publicProfile(let subject):
@@ -248,7 +330,11 @@ struct SupportDestinationView: View {
     case .coursePublish:
       CoursePublishView()
     case .tripDay(let threadID):
-      TripDayView(thread: resolvedThread(threadID))
+      if let thread = resolvedThread(threadID) {
+        TripDayView(thread: thread)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noChatRooms)
+      }
     case .notificationDetail:
       NotificationDetailView()
     case .removalReason:
@@ -262,7 +348,15 @@ struct SupportDestinationView: View {
     case .systemError:
       SystemNoticeView(mode: .error)
     case .feedComments(let postID):
-      FeedCommentsView(post: MockData.feedPost(for: postID, in: feedPosts) ?? feedPosts[0])
+      // 피드 목록을 거치지 않고 바로 들어오면 `feedPosts` 가 비어 있다 —
+      // 그때는 서버 피드 id 로 최소 게시물을 만들어 화면이 직접 댓글을 받게 한다.
+      if let post = feedPosts.first(where: { $0.id == postID })
+        ?? ServerFeedMapper.feedID(fromPostID: postID).map(ServerFeedMapper.stubPost(serverFeedID:))
+        ?? feedPosts.first {
+        FeedCommentsView(post: post)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noComments)
+      }
     case .legalDocument(let document):
       LegalDocumentDetailView(kind: document, entry: .settings)
     case .signupLegalDocument(let document):
@@ -276,13 +370,232 @@ struct SupportDestinationView: View {
       } else {
         OSSLicensesView()
       }
+    case .roomNotification(let threadID):
+      // 20-1c 는 방별 설정 화면이다 — 방을 모르면 열 것이 없다.
+      if let thread = resolvedThread(threadID), let roomID = thread.serverRoomID {
+        RoomNotificationView(
+          roomID: roomID,
+          roomTitle: thread.tripTitle,
+          roomSubtitle: thread.scheduleSummary
+        )
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noChatRooms)
+      }
+    case .favoriteRooms:
+      FavoriteRoomsView(tripContext: tripContext)
+    case .kickHistory:
+      KickHistoryView()
+    case .courseRating(let roomID):
+      CourseRatingView(roomID: Int64(roomID))
+    case .tripStatus(let roomID):
+      if let id = Int64(roomID) {
+        TripStatusView(roomID: id)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noRecruitments)
+      }
+    case .meetingEdit(let roomID):
+      if let id = Int64(roomID) {
+        MeetingInfoEditView(roomID: id)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noRecruitments)
+      }
+    case .accountProviders:
+      AccountProvidersRoute()
+    case .noticeEdit(let roomID):
+      // 캡처는 방 id 만 준다 — 화면이 그 방의 공지를 받아 첫 공지를 연다.
+      if let id = ServerTripMapper.roomID(fromThreadID: roomID) ?? Int64(roomID) {
+        NoticeEditLoaderView(roomID: id)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noNotices)
+      }
+    case .unblockConfirm:
+      BlockedUsersView(startsWithUnblockConfirmation: true)
+    case .friendManage:
+      FriendsManagementView(startsWithFriendManage: true)
     }
   }
 
-  private func resolvedThread(_ id: String) -> ChatThread {
+  /// 실제 모집 만들기 플로우를 지정 단계로 연다.
+  /// 코스는 진입부(탐색)와 같은 방식으로 고른다 — 캡처만의 별도 코스를 만들지 않는다.
+  private func recruitmentFlow(
+    step: Int,
+    atMeetingPoint: Bool = false,
+    source: CourseSource? = nil,
+    capacity: Int? = nil
+  ) -> some View {
+    RecruitmentCreationFlowView(
+      courseID: defaultCourseID,
+      initialStep: step,
+      startsAtMeetingPoint: atMeetingPoint,
+      initialSource: source,
+      initialCapacity: capacity,
+      onCreated: tripContext.onCreateRecruitment,
+      onSendChatMessage: tripContext.onSendChatMessage,
+      onApproveApplicant: tripContext.onApproveHostApplicant,
+      onRejectApplicant: tripContext.onRejectHostApplicant,
+      onSetRecruitmentClosed: tripContext.onSetRecruitmentClosed
+    )
+  }
+
+  /// 모집 만들기는 코스를 고르는 단계부터 시작한다 — 기본 코스를 지어내지 않는다.
+  private var defaultCourseID: String {
+    ""
+  }
+
+  private var defaultTrip: TripRecruitment? {
+    tripContext.trips.first
+  }
+
+  /// 16 이 신청 시트를 열 모집. 방 id 를 받았으면 그 방이고(세션이 아는 모임이면 그것을 쓴다),
+  /// 없으면 목록에서 눌러 들어온 흐름이므로 세션의 첫 모집이다.
+  private func applicationSubject(_ roomID: String) -> TripRecruitment? {
+    if let known = tripContext.trips.first(where: { $0.id == roomID }) { return known }
+    if let id = MoyeoRoomIDText.roomID(from: roomID) {
+      return ServerTripMapper.placeholderTrip(roomID: id)
+    }
+    return defaultTrip
+  }
+
+  /// 방 번호만 필요한 화면용. `server-chat-22` · `server-room-22` · `22` 세 형식을 모두 받는다.
+  private func resolvedRoomID(_ id: String) -> Int64? {
+    resolvedThread(id)?.serverRoomID ?? MoyeoRoomIDText.roomID(from: id)
+  }
+
+  /// 세션이 아는 방이면 그것을, 아니면 **방 id 만 실은 껍데기**를 준다 —
+  /// 화면이 스스로 그 방의 서버 응답을 받아 채운다.
+  ///
+  /// 예전에는 `server-chat-` 접두사가 붙은 id 만 껍데기로 만들어서, 캡처가 순수 숫자를
+  /// 넘기는 31 · 20-5 는 nil 로 떨어져 실제로 참여 중인 방인데도 빈 상태가 찍혔다.
+  private func resolvedThread(_ id: String) -> ChatThread? {
     tripContext.chatThreads.first { $0.id == id }
-      ?? MockData.chatThread(for: id)
-      ?? MockData.chatThreads[0]
+      ?? MoyeoRoomIDText.roomID(from: id).map(ServerTripMapper.stubThread(serverRoomID:))
+  }
+
+  @ViewBuilder
+  private func chatSideMenu(
+    _ threadID: String,
+    startsWithMemberActions: Bool = false,
+    startsWithMemberRemoval: Bool = false
+  ) -> some View {
+    if let thread = resolvedThread(threadID) {
+      ChatSideMenuView(
+        thread: thread,
+        startsWithMemberActions: startsWithMemberActions,
+        startsWithMemberRemoval: startsWithMemberRemoval
+      )
+    } else {
+      MoyeoEmptyStateView(message: MoyeoEmptyText.noChatRooms)
+    }
+  }
+}
+
+/// 방 id 만 아는 진입(캡처 · 딥링크 · 알림)에서 모집 모델을 세우는 공용 통로.
+///
+/// 16 신청 시트 · 18 모집 관리 · 18-1~18-3 코스 수정이 모두 `tripContext.trips` 안에서
+/// 모임을 찾다가 실패해 빈 상태를 그렸다. 그 목록은 **탐색 탭이 채우는 것**이라
+/// 화면을 직접 열면 늘 비어 있고, `GET /chat-rooms/search` 는 이미 참여 중인 방을
+/// 아예 제외하므로 내가 호스트인 방은 거기서 절대 나오지 않는다.
+///
+/// 그래서 세션이 아는 모임이면 그대로 쓰고, 아니면 `GET /chat-rooms/{roomId}` 로 받아 온다.
+/// 서버가 방을 주지 않으면 지어내지 않고 빈 상태를 그린다 (NO-MOCK-CANON R1).
+private struct ServerTripDestination<Content: View>: View {
+  let tripID: String
+  var tripContext: TripInteractionContext
+  /// 방 id 가 없는 진입에서만 쓰는 세션 기본값 (16 은 목록에서 눌러 들어오기도 한다)
+  var fallback: TripRecruitment?
+  @ViewBuilder var content: (TripRecruitment) -> Content
+
+  @State private var loadedTrip: TripRecruitment?
+  @State private var didLoad = false
+
+  private var trip: TripRecruitment? {
+    tripContext.trips.first { $0.id == tripID } ?? loadedTrip ?? fallback
+  }
+
+  var body: some View {
+    Group {
+      if let trip {
+        content(trip)
+      } else if didLoad {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noRecruitments)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.loading)
+      }
+    }
+    .task { await load() }
+  }
+
+  private func load() async {
+    guard !didLoad, tripContext.trips.first(where: { $0.id == tripID }) == nil else { return }
+    guard MoyeoServerSync.isEnabled, let roomID = MoyeoRoomIDText.roomID(from: tripID) else {
+      didLoad = true
+      return
+    }
+    let course = (try? await TravelCourseAPIClient.shared.roomCourse(roomID: roomID))?.course
+    if let detail = try? await ChatRoomAPIClient.shared.detail(roomID: roomID) {
+      loadedTrip = ServerTripMapper.trip(from: detail, course: course)
+    }
+    didLoad = true
+  }
+}
+
+/// 20-4 여행 확정 모먼트의 진입 해석.
+///
+/// 세션이 아는 모임이면 그대로 쓰고, 방 id 만 아는 진입(캡처 · 딥링크)에서는
+/// `GET /chat-rooms/{roomId}` 로 받아 온다. **확정된 방**이라야 볼 화면이므로
+/// 모집 목록에서 찾지 않는다. 서버가 방을 주지 않으면 지어내지 않고 빈 상태를 그린다 (R1).
+private struct TripConfirmedDestination: View {
+  let tripID: String
+  let serverRoomID: Int64?
+  var tripContext: TripInteractionContext
+
+  @State private var loadedTrip: TripRecruitment?
+  @State private var participants: [ServerChatRoomDetail.ServerParticipant] = []
+  @State private var nicknamesByUserID: [Int64: String] = [:]
+  @State private var didLoad = false
+
+  private var trip: TripRecruitment? {
+    tripContext.trips.first { $0.id == tripID } ?? loadedTrip
+  }
+
+  var body: some View {
+    Group {
+      if let trip {
+        TripConfirmedView(
+          trip: trip,
+          thread: tripContext.chatThreadProvider(trip),
+          onSendChatMessage: tripContext.onSendChatMessage,
+          participants: participants,
+          participantNicknamesByUserID: nicknamesByUserID
+        )
+      } else if didLoad {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noRecruitments)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.loading)
+      }
+    }
+    .task { await load() }
+  }
+
+  private func load() async {
+    guard trip == nil, !didLoad else { return }
+    guard MoyeoServerSync.isEnabled, let serverRoomID else {
+      didLoad = true
+      return
+    }
+    let course = (try? await TravelCourseAPIClient.shared.roomCourse(roomID: serverRoomID))?.course
+    if let detail = try? await ChatRoomAPIClient.shared.detail(roomID: serverRoomID) {
+      loadedTrip = ServerTripMapper.trip(from: detail, course: course)
+      participants = detail.participants
+      // 닉네임은 상세 응답에 없다 — 멤버 목록이 열리면 사람별 동물 이모지를 쓴다 (R5).
+      if let members = try? await ChatRoomContentAPIClient.shared.members(roomID: serverRoomID) {
+        nicknamesByUserID = Dictionary(
+          members.members.map { ($0.userId, $0.nickname) },
+          uniquingKeysWith: { first, _ in first }
+        )
+      }
+    }
+    didLoad = true
   }
 }
 
@@ -366,17 +679,11 @@ private struct NotificationCenterView: View {
       if serverNotifications != nil {
         // 실서버 알림 목록 — 서버가 준 알림만 그린다
         if visibleServerItems.isEmpty {
-          VStack(spacing: 6) {
-            Image(systemName: "bell")
-              .font(.title3.weight(.bold))
-              .foregroundStyle(MoyeoTheme.forest)
-            Text(showsUnreadOnly ? "안 읽은 알림이 없어요" : "아직 알림이 없어요")
-              .font(.subheadline.weight(.heavy))
-              .foregroundStyle(MoyeoTheme.ink)
-          }
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 44)
-          .accessibilityIdentifier("notifications.server.empty")
+          MoyeoEmptyStateView(
+            message: MoyeoEmptyText.noNotifications,
+            systemImage: "bell",
+            accessibilityIdentifier: "notifications.server.empty"
+          )
         } else {
           ForEach(groupedServerItems, id: \.group) { section in
             Text(section.group)
@@ -392,49 +699,12 @@ private struct NotificationCenterView: View {
           }
         }
       } else {
-      ForEach(groupedItems, id: \.group) { section in
-        Text(section.group)
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MoyeoTheme.muted)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.top, 8)
-          .padding(.bottom, 1)
-          .accessibilityIdentifier("notifications.group.\(section.group)")
-
-        ForEach(section.items) { item in
-        VStack(spacing: 0) {
-          Button {
-            open(item.target)
-          } label: {
-            HStack(alignment: .top, spacing: 11) {
-              SupportIconBubble(systemImage: item.icon, tint: item.tint, bubble: item.bubble)
-              VStack(alignment: .leading, spacing: 4) {
-                titleText(for: item)
-                  .foregroundStyle(MoyeoTheme.ink)
-                  .fixedSize(horizontal: false, vertical: true)
-                // 상대 시간은 보조 정보다 — 기획·웹·안드로이드와 같은 회색이다
-                Text(item.time)
-                  .font(.caption.weight(.bold))
-                  .foregroundStyle(MoyeoTheme.muted)
-                if item.showsFriendActions {
-                  friendActionButtons
-                    .padding(.top, 2)
-                }
-              }
-              Spacer()
-              Image(systemName: "chevron.right")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.text400)
-            }
-            // 화면기획·웹·안드로이드와 같은 행 밀도. 8행이 한 화면에 담겨야 한다.
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          Divider().overlay(MoyeoTheme.softLine)
-          }
-        }
-      }
+        // 서버 알림을 못 받았다 — 목 알림을 채우지 않고 §2 빈 상태를 그린다
+        MoyeoEmptyStateView(
+          message: MoyeoEmptyText.noNotifications,
+          systemImage: "bell",
+          accessibilityIdentifier: "notifications.empty"
+        )
       }
     })
     .task {
@@ -472,38 +742,6 @@ private struct NotificationCenterView: View {
       return Text(attributed).font(.subheadline)
     }
     return Text(item.title).font(.subheadline.weight(.heavy))
-  }
-
-  /// 친구 요청 행의 거절/수락 (13 기획). 목데이터라 동작은 두지 않는다.
-  private var friendActionButtons: some View {
-    HStack(spacing: 8) {
-      Button {} label: {
-        Text("거절")
-          .font(.footnote.weight(.bold))
-          .foregroundStyle(MoyeoTheme.ink)
-          .padding(.horizontal, 14)
-          .frame(height: 34)
-          .background(MoyeoTheme.card)
-          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-              .stroke(MoyeoTheme.line, lineWidth: 1)
-          }
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("notifications.friend.reject")
-      Button {} label: {
-        Text("수락")
-          .font(.footnote.weight(.bold))
-          .foregroundStyle(.white)
-          .padding(.horizontal, 14)
-          .frame(height: 34)
-          .background(MoyeoTheme.forest)
-          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("notifications.friend.accept")
-    }
   }
 
   // MARK: - 실서버 알림
@@ -558,9 +796,9 @@ private struct NotificationCenterView: View {
   private func open(_ target: SupportNotificationTarget) {
     switch target {
     case .trip(let tripID):
-      selectedTrip = tripContext.trips.first { $0.id == tripID } ?? MockData.trip(for: tripID)
+      selectedTrip = tripContext.trips.first { $0.id == tripID }
     case .post(let postID):
-      selectedPost = MockData.feedPost(for: postID, in: feedPosts)
+      selectedPost = feedPosts.first { $0.id == postID }
     case .friends:
       showsFriends = true
     case .removalReason:
@@ -573,287 +811,6 @@ private struct NotificationCenterView: View {
   private func incrementCommentCount(for postID: String) {
     guard let index = feedPosts.firstIndex(where: { $0.id == postID }) else { return }
     feedPosts[index].commentCount += 1
-  }
-}
-
-private struct CreateRecruitmentView: View {
-  let courseID: String
-  let onCreated: (TripRecruitment, ChatThread) -> Void
-  let onSendChatMessage: (ChatThread, ChatMessage) -> Void
-  let onApproveApplicant: (TripRecruitment, Participant) -> Void
-  let onRejectApplicant: (TripRecruitment, Participant) -> Void
-  let onSetRecruitmentClosed: (TripRecruitment, Bool) -> Void
-  @State private var createdTrip: TripRecruitment?
-  @State private var createdThread: ChatThread?
-  @State private var selectedThread: ChatThread?
-  @State private var selectedHostContext: HostManageContext?
-  @State private var scheduleDate = ""
-  @State private var scheduleTime = ""
-  @State private var meetingPoint = ""
-  @State private var capacityText = "5"
-  @State private var recruitmentNote = ""
-
-  private var course: TravelCourse {
-    MockData.course(for: courseID) ?? MockData.courses[0]
-  }
-
-  private var defaultSchedule: String {
-    MockData.trips.first { $0.courseID == course.id }?.schedule ?? "2026.06.06 (토) 08:00"
-  }
-
-  private var defaultScheduleDate: String {
-    let parts = defaultSchedule.split(separator: " ").map(String.init)
-    guard parts.count >= 2 else { return defaultSchedule }
-    return parts.prefix(2).joined(separator: " ")
-  }
-
-  private var defaultScheduleTime: String {
-    let parts = defaultSchedule.split(separator: " ").map(String.init)
-    guard parts.count > 2 else { return "08:00 - 18:00" }
-    return parts.dropFirst(2).joined(separator: " ")
-  }
-
-  private var defaultMeetingPoint: String {
-    MockData.trips.first { $0.courseID == course.id }?.meetupPoint ?? "\(course.region) 대표 터미널"
-  }
-
-  private var capacity: Int {
-    let parsed = Int(capacityText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 5
-    return min(max(parsed, 3), 12)
-  }
-
-  var body: some View {
-    SupportList(title: "모집 만들기") {
-      SupportCourseSummary(course: course)
-
-      SupportCard {
-        VStack(alignment: .leading, spacing: 16) {
-          Text("모집 정보")
-            .font(.headline.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.ink)
-          SupportEditableField(
-            title: "일정",
-            text: $scheduleDate,
-            identifier: "createRecruitment.date"
-          )
-          SupportEditableField(
-            title: "시간",
-            text: $scheduleTime,
-            identifier: "createRecruitment.time"
-          )
-          SupportEditableField(
-            title: "모이는 곳",
-            text: $meetingPoint,
-            identifier: "createRecruitment.place"
-          )
-          SupportEditableField(
-            title: "모집 정원",
-            text: Binding(
-              get: { capacityText },
-              set: { capacityText = String($0.filter(\.isNumber).prefix(2)) }
-            ),
-            helperText: "최소 3명, 최대 12명",
-            keyboardType: .numberPad,
-            identifier: "createRecruitment.capacity"
-          )
-          SupportField(
-            title: "참가비", value: course.duration == "2박 3일" ? "1인 189,000원" : "1인 42,000원")
-        }
-      }
-
-      SupportCard {
-        VStack(alignment: .leading, spacing: 12) {
-          Text("소개글")
-            .font(.headline.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.ink)
-          TextField("함께 갈 사람들에게 보여줄 안내", text: $recruitmentNote, axis: .vertical)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.ink)
-            .lineLimit(3...5)
-            .padding(14)
-            .background(MoyeoTheme.subtleBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .onChange(of: recruitmentNote) { _, value in
-              if value.count > 160 {
-                recruitmentNote = String(value.prefix(160))
-              }
-            }
-            .accessibilityIdentifier("createRecruitment.note")
-          HStack {
-            Text("\(recruitmentNote.count)/160자")
-            Spacer()
-            Text("\(safeScheduleDate) · \(safeMeetingPoint) · 1/\(capacity)명 모집")
-          }
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MoyeoTheme.muted)
-        }
-      }
-
-      if let createdTrip {
-        SupportCard {
-          VStack(alignment: .leading, spacing: 12) {
-            Label("모집이 준비됐어요", systemImage: "checkmark.seal.fill")
-              .font(.headline.weight(.heavy))
-              .foregroundStyle(MoyeoTheme.forest)
-            Text("\(createdTrip.title) 채팅방에서 참여자와 준비물을 나눌 수 있어요.")
-              .font(.subheadline)
-              .foregroundStyle(MoyeoTheme.muted)
-              .fixedSize(horizontal: false, vertical: true)
-            Button {
-              if let createdThread {
-                selectedHostContext = HostManageContext(trip: createdTrip, thread: createdThread)
-              }
-            } label: {
-              Label("모집 관리", systemImage: "person.2.badge.gearshape.fill")
-                .font(.subheadline.weight(.heavy))
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(MoyeoTheme.forest)
-            .accessibilityIdentifier("createRecruitment.openManage")
-
-            Button {
-              selectedThread = createdThread
-            } label: {
-              Label("채팅방 미리보기", systemImage: "bubble.left.and.bubble.right.fill")
-                .font(.subheadline.weight(.heavy))
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(MoyeoTheme.forest)
-          }
-        }
-      }
-
-      if createdTrip == nil {
-        Button {
-          createRecruitment()
-        } label: {
-          Label("모집 만들기", systemImage: "person.3.fill")
-            .font(.subheadline.weight(.heavy))
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(MoyeoTheme.forest)
-      }
-    }
-    .navigationDestination(item: $selectedThread) { thread in
-      ChatRoomView(thread: thread) { message in
-        onSendChatMessage(thread, message)
-      }
-    }
-    .navigationDestination(item: $selectedHostContext) { context in
-      HostManageView(
-        trip: context.trip,
-        thread: context.thread,
-        onSendChatMessage: onSendChatMessage,
-        onApproveApplicant: onApproveApplicant,
-        onRejectApplicant: onRejectApplicant,
-        onSetRecruitmentClosed: onSetRecruitmentClosed
-      )
-    }
-    .onAppear(perform: initializeFieldsIfNeeded)
-    .accessibilityIdentifier("screen.createRecruitment.\(courseID)")
-  }
-
-  private func createRecruitment() {
-    guard createdTrip == nil else { return }
-
-    let tripID = "session-trip-\(course.id)-\(UUID().uuidString)"
-    let threadID = "session-chat-\(tripID)"
-    let participants = Array(MockData.participants.prefix(1))
-    let trip = TripRecruitment(
-      id: tripID,
-      courseID: course.id,
-      title: course.title,
-      region: course.region,
-      coverMascot: course.mascot,
-      hostName: "다정한 곰 1001",
-      hostAvatar: "🐻",
-      schedule: "\(safeScheduleDate) \(safeScheduleTime)",
-      meetupPoint: safeMeetingPoint,
-      price: course.duration == "2박 3일" ? "1인 189,000원" : "1인 42,000원",
-      capacity: capacity,
-      joined: 1,
-      minimumParticipants: 3,
-      status: .open,
-      summary: safeRecruitmentNote,
-      vibe: "새로 만든 모임이라 동행자와 속도를 맞춰 천천히 준비해요.",
-      tags: course.tags,
-      route: course.stops,
-      participants: participants
-    )
-    let thread = ChatThread(
-      id: threadID,
-      tripTitle: trip.title,
-      region: trip.region,
-      mascot: trip.coverMascot,
-      lastMessage: "모집이 막 만들어졌어요. 함께 갈 사람을 기다려요.",
-      updatedAt: "방금",
-      unreadCount: 0,
-      statusSummary: "\(trip.joined)/\(trip.capacity)명 · 모집중",
-      statusDetail: "최소 \(trip.minimumParticipants)명까지 \(trip.needsMoreParticipants)명 남았어요.",
-      members: participants,
-      messages: [
-        ChatMessage(
-          id: "\(threadID)-welcome",
-          senderName: "모여트립",
-          avatar: "🐻",
-          body: "모집이 막 만들어졌어요. 함께 갈 사람을 기다려요.",
-          time: "방금",
-          isMine: false
-        ),
-        ChatMessage(
-          id: "\(threadID)-note",
-          senderName: "다정한 곰 1001",
-          avatar: "🐻",
-          body: safeRecruitmentNote,
-          time: "방금",
-          isMine: true
-        )
-      ],
-      isReadOnly: false
-    )
-
-    createdTrip = trip
-    createdThread = thread
-    onCreated(trip, thread)
-  }
-
-  private var safeScheduleDate: String {
-    scheduleDate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? defaultScheduleDate
-      : scheduleDate.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var safeScheduleTime: String {
-    scheduleTime.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? defaultScheduleTime
-      : scheduleTime.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var safeMeetingPoint: String {
-    meetingPoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? defaultMeetingPoint
-      : meetingPoint.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var safeRecruitmentNote: String {
-    let trimmed = recruitmentNote.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? course.subtitle : String(trimmed.prefix(160))
-  }
-
-  private func initializeFieldsIfNeeded() {
-    guard scheduleDate.isEmpty, scheduleTime.isEmpty, meetingPoint.isEmpty, recruitmentNote.isEmpty
-    else { return }
-    scheduleDate = defaultScheduleDate
-    scheduleTime = defaultScheduleTime
-    meetingPoint = defaultMeetingPoint
-    capacityText = "5"
-    recruitmentNote = course.subtitle
   }
 }
 
@@ -1009,7 +966,33 @@ private struct StatePreviewCard: View {
 /// 31 모임 종료 경고 팝업 (changeLog14).
 /// 오버레이는 이전 화면 위에 뜬 것으로 그린다 — 이 팝업은 스스로 배경을 그리지 않고
 /// 20-1 채팅방 사이드 메뉴 위에 딤과 함께 얹힌다.
+/// 31 나가기 확인의 역할. 호스트와 참가자는 **결과가 전혀 다르다** —
+/// 문구를 호스트 기준으로 고정해 두면 참가자가 보고 자기가 모임을 없애는 것으로 읽는다
+/// (정본 `ATTACH-COMPOSER-CANON.md` §6-5).
+enum LeaveConfirmationRole {
+  case host
+  case member
+
+  var title: String {
+    switch self {
+    case .host: "호스트가 나가면\n이 모임은 종료돼요"
+    case .member: "이 모임에서 나갈까요?"
+    }
+  }
+
+  var confirmTitle: String {
+    switch self {
+    case .host: "모임 종료"
+    case .member: "나가기"
+    }
+  }
+}
+
 struct LeaveConfirmationDialog: View {
+  /// 역할을 모르면(미로그인·목데이터 스레드) 기존과 같이 호스트 문구를 쓴다.
+  var role: LeaveConfirmationRole = .host
+  /// 호스트 문구의 "승인된 N명" — 서버가 준 인원일 때만 적는다.
+  var approvedCount: Int?
   var onCancel: () -> Void = {}
   var onConfirm: () -> Void = {}
 
@@ -1028,32 +1011,34 @@ struct LeaveConfirmationDialog: View {
           .background(MoyeoTheme.dangerRed.opacity(0.16))
           .clipShape(Circle())
 
-        Text("호스트가 나가면\n이 모임은 종료돼요")
+        Text(role.title)
           .font(.title3.weight(.heavy))
           .foregroundStyle(MoyeoTheme.ink)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 16)
 
-        Text("승인된 4명에게 알림이 가고, 채팅방은 14일 동안 읽기 전용으로 유지된 후 사라져요.")
+        Text(bodyText)
           .font(.subheadline)
           .foregroundStyle(MoyeoTheme.muted)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 10)
 
-        // 이유 입력은 본문에서 한 줄 띄워 별개 입력으로 읽히게 한다
-        VStack(alignment: .leading, spacing: 6) {
-          Text("나가는 이유 (필수)")
-            .font(.caption)
-            .foregroundStyle(MoyeoTheme.muted)
-          Text("일정 변동으로 어렵게 됐어요...")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.ink)
+        if role == .host {
+          // 이유 입력은 본문에서 한 줄 띄워 별개 입력으로 읽히게 한다
+          VStack(alignment: .leading, spacing: 6) {
+            Text("나가는 이유 (필수)")
+              .font(.caption)
+              .foregroundStyle(MoyeoTheme.muted)
+            Text("일정 변동으로 어렵게 됐어요...")
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(MoyeoTheme.ink)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(12)
+          .background(MoyeoTheme.subtleBackground)
+          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+          .padding(.top, 20)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(MoyeoTheme.subtleBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.top, 20)
 
         HStack(spacing: 8) {
           Button(action: onCancel) {
@@ -1067,7 +1052,7 @@ struct LeaveConfirmationDialog: View {
           .buttonStyle(.plain)
           .accessibilityIdentifier("leave.cancel")
           Button(action: onConfirm) {
-            Text("모임 종료")
+            Text(role.confirmTitle)
               .font(.subheadline.weight(.semibold))
               .foregroundStyle(.white)
               .frame(maxWidth: .infinity)
@@ -1088,7 +1073,20 @@ struct LeaveConfirmationDialog: View {
       .overlay(RoundedRectangle(cornerRadius: 20).stroke(MoyeoTheme.line))
       .shadow(color: Color.black.opacity(0.28), radius: 24, y: 10)
     }
-    .accessibilityIdentifier("screen.hostLeaveConfirmation")
+    .accessibilityIdentifier(
+      role == .host ? "screen.hostLeaveConfirmation" : "screen.memberLeaveConfirmation"
+    )
+  }
+
+  /// 읽기 전용 보존 기간 문구는 세 플랫폼이 글자 그대로 같다 (정본 §4-1 문구 통일 표).
+  private var bodyText: String {
+    switch role {
+    case .host:
+      // 인원수를 문구에 박지 않는다 — 값이 없을 때 문장이 갈리고, 세 플랫폼이 서로 달라진다.
+      return "승인된 동행자 모두에게 알림이 가고, 채팅방은 14일 동안 읽기 전용으로 유지된 후 사라져요."
+    case .member:
+      return "내 자리가 비면서 대기 중인 다음 신청자가 자동으로 합류해요. 다시 신청하면 맨 뒤부터예요."
+    }
   }
 }
 
@@ -1306,77 +1304,8 @@ enum ServerNotificationPresentation {
   }
 }
 
-// changeLog14 — 알림 목데이터는 13 기획 목록이 모든 플랫폼의 기준이다.
-// 오늘 5건 + 어제 3건, 안읽음 4. 이 목록에 없는 행을 추가로 두지 않는다.
-private let supportNotificationMockItems = [
-  SupportNotification(
-    title: "주왕산 & 주산지 여행이 확정됐어요 🎉",
-    time: "방금 전",
-    icon: "checkmark.seal.fill",
-    target: .trip("trip-cheongsong-juwangsan"),
-    isUnread: true
-  ),
-  SupportNotification(
-    title: "경주 단풍·야경 모임이 만들어졌어요 ✨",
-    time: "10분 전",
-    icon: "person.2.fill",
-    target: .trip("trip-gyeongju-night"),
-    isUnread: true
-  ),
-  SupportNotification(
-    title: "우직한 곰 7821님이 **메시지**를 보냈어요",
-    time: "1시간 전",
-    icon: "bubble.left.fill",
-    target: .unwired,
-    isUnread: true,
-    tint: MoyeoTheme.coral,
-    bubble: MoyeoTheme.coral.opacity(0.14)
-  ),
-  SupportNotification(
-    title: "여행 잘 마치셨죠? 함께 걸은 친구에게 **한 줄** 남겨볼까요?",
-    time: "2시간 전",
-    icon: "doc.text.fill",
-    target: .unwired
-  ),
-  SupportNotification(
-    title: "마감 **D-1** · 현재 4/8명이에요",
-    time: "3시간 전",
-    icon: "clock.fill",
-    target: .trip("trip-cheongsong-juwangsan"),
-    tint: MoyeoTheme.sunrise,
-    bubble: MoyeoTheme.sunrise.opacity(0.16)
-  ),
-  SupportNotification(
-    title: "엉뚱한 토끼 1457님이 **친구 요청**을 보냈어요",
-    time: "어제 오후 4시",
-    icon: "person.crop.circle.badge.plus",
-    target: .friends,
-    group: "어제",
-    isUnread: true,
-    tint: MoyeoTheme.river,
-    bubble: MoyeoTheme.river.opacity(0.13),
-    showsFriendActions: true
-  ),
-  // changeLog14 — 강퇴 통보는 알림 센터의 한 행이다. 안읽음 수(4)는 바꾸지 않는다.
-  SupportNotification(
-    title: "**감포 바다 일출 모임**에서 내보내졌어요 · 사유 확인",
-    time: "어제 오후 6시",
-    icon: "exclamationmark.triangle.fill",
-    target: .removalReason,
-    group: "어제",
-    tint: MoyeoTheme.coral,
-    bubble: MoyeoTheme.coral.opacity(0.14)
-  ),
-  SupportNotification(
-    title: "**3명**이 내 피드에 좋아요를 눌렀어요",
-    time: "어제 오전 11시",
-    icon: "heart.fill",
-    target: .post("feed-01"),
-    group: "어제",
-    tint: MoyeoTheme.blossom,
-    bubble: MoyeoTheme.blossom.opacity(0.16)
-  )
-]
+/// 13 알림은 서버 목록이 전부다 — 목 알림을 채우지 않는다 (NO-MOCK-CANON R1).
+private let supportNotificationMockItems: [SupportNotification] = []
 
 private enum SupportNotificationTarget {
   case trip(String)
@@ -1523,5 +1452,19 @@ private struct RemovalReasonView: View {
       .background(MoyeoTheme.background)
     }
     .accessibilityIdentifier("removal-reason-screen")
+  }
+}
+
+/// 29-5 계정 연결 캡처 라우트의 소유자.
+///
+/// `ProviderManagementView.service` 는 `@ObservedObject` 다. 여기서 `.current` 를 그대로 넘기면
+/// **본문이 다시 그려질 때마다 서비스가 새로 만들어져** `GET /auth/providers` 응답이 매번 버려진다
+/// (`isLoading = true` 가 곧바로 재생성을 부르는 되먹임이라 `연결됨` 이 영영 뜨지 않는다).
+/// 설정 시트 쪽과 같이 소유자가 `@StateObject` 로 한 번만 만들어 붙든다.
+private struct AccountProvidersRoute: View {
+  @StateObject private var service = AuthProviderLinkService()
+
+  var body: some View {
+    ProviderManagementView(service: service, isPresentedAsSheet: false)
   }
 }

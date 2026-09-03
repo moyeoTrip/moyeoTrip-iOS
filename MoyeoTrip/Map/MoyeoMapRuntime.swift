@@ -69,7 +69,12 @@ enum MoyeoMapRuntime {
 
     /// 실지도를 렌더할지. UITEST 캡처는 타일 로딩이 비결정적이라 항상 목업으로 남긴다.
     static var rendersLiveMap: Bool {
-        guard !UITestRuntime.isEnabled else { return false }
+        // 목데이터 캡처에서는 실지도를 끈다 — 타일 로딩이 비결정적이라 번호별 비교가 깨진다.
+        //
+        // **라이브 캡처(`UITEST_LIVE_DATA`)는 예외다.** 실데이터를 보려고 찍는 캡처에서
+        // 지도만 목업이면 "지도가 실제로 그려지는지"를 확인할 수 없다.
+        // 안드로이드의 `LocalMapCaptureMode` 와 같은 취급이다.
+        guard !UITestRuntime.isEnabled || UITestRuntime.usesLiveData else { return false }
         return initializeIfPossible()
     }
 }

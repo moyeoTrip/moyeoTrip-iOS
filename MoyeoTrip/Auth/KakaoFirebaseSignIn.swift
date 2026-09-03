@@ -22,7 +22,8 @@ struct KakaoFirebaseSignIn {
         try await withCheckedThrowingContinuation { continuation in
             let completion: (OAuthToken?, Error?) -> Void = { token, error in
                 if let error {
-                    continuation.resume(throwing: error)
+                    // 카카오 화면에서 뒤로 가기·취소한 것은 실패가 아니다 (AUTH-SILENT-CASES-CANON R1).
+                    continuation.resume(throwing: Self.mapped(error))
                 } else if let accessToken = token?.accessToken {
                     continuation.resume(returning: accessToken)
                 } else {
@@ -35,5 +36,13 @@ struct KakaoFirebaseSignIn {
                 UserApi.shared.loginWithKakaoAccount(completion: completion)
             }
         }
+    }
+
+    /// 카카오 SDK 취소만 별도 값으로 갈라낸다 — 나머지 오류는 그대로 둔다.
+    nonisolated private static func mapped(_ error: Error) -> Error {
+        if case SdkError.ClientFailed(let reason, _) = error, reason == .Cancelled {
+            return AuthIdentityError.canceledByUser
+        }
+        return error
     }
 }

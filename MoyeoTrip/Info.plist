@@ -36,6 +36,8 @@
 	</array>
 	<key>MOYEO_API_BASE_URL</key>
 	<string>https://moyeo-trip-api.jayden-bin.cc</string>
+	<key>MOYEO_CDN_BASE_URL</key>
+	<string>https://moyeo-trip-cdn.jayden-bin.cc</string>
 	<key>SENTRY_DSN</key>
 	<string>$(SENTRY_DSN)</string>
 	<key>SENTRY_ENVIRONMENT</key>

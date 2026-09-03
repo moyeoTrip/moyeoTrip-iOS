@@ -4,28 +4,46 @@ struct SearchView: View {
     var tripContext = TripInteractionContext()
     @Environment(\.dismiss) private var dismiss
     @State private var query: String
-    @State private var submittedQuery = ""
-    /// 최근 검색어 — 서버 API가 없어 `UserDefaults` 에 영구 저장한다 (캡처 모드는 기획 목데이터 고정)
+    @State private var submittedQuery: String
+    /// 최근 검색어 — 서버 API가 없어 `UserDefaults` 에 영구 저장한다.
+    /// **캡처도 같은 저장소를 쓴다** — 목록을 채우려면 실제로 검색을 실행해야 한다
+    /// (캡처 파이프라인이 12 앞에서 `search:<검색어>` 를 몇 번 돌린다).
+    /// 예전 주석이 "캡처 모드는 기획 목데이터 고정" 이라고 적혀 있었는데 코드와 반대였다.
     @StateObject private var recentSearchModel = RecentSearchModel.forCurrentRuntime()
     /// 실서버 검색 결과 — 로그인 세션이 있고 검색 API가 성공했을 때만 채워진다 (nil = 목데이터)
     @State private var serverResults: [ServerChatRoomSummary]?
+    /// 12-1 코스 결과 — `GET /travel-courses/search?keyword=` (정본 R6)
+    @State private var courseResults: [ServerTravelCourse]?
+    @State private var resultTab: SearchResultTab = .course
     /// 찜 토글 결과. 서버 응답(`favorite`)이 기준이고, 토글한 방만 여기서 덮어쓴다.
     @State private var serverFavoriteOverrides: [Int64: Bool] = [:]
     @State private var selectedServerTrip: TripRecruitment?
-
-    private let popularSearches = [
-        PopularSearch(rank: 1, keyword: "주왕산", isRising: true),
-        PopularSearch(rank: 2, keyword: "안동 한옥마을", isRising: true),
-        PopularSearch(rank: 3, keyword: "경주 야경", isRising: false),
-        PopularSearch(rank: 4, keyword: "포항 호미곶", isRising: true),
-        PopularSearch(rank: 5, keyword: "문경 새재", isRising: false)
-    ]
+    @State private var selectedCourse: TravelCourse?
+    /// 12 인기 검색어 — `GET /search/popular-keywords`. 0건이면 섹션을 그리지 않는다.
+    @State private var popularKeywords: [ServerPopularKeyword] = []
 
     init(tripContext: TripInteractionContext = TripInteractionContext()) {
         self.tripContext = tripContext
         let arguments = ProcessInfo.processInfo.arguments
-        let previewQuery = arguments.contains("UITEST_SCREEN=search") ? "경주 단풍" : ""
+        // 12 검색은 입력 상태, 12-1 은 **결과가 보이는** 상태를 찍어야 한다.
+        // 검색어를 안 채우면 결과 탭이 안 열려 빈 화면이 찍힌다.
+        // 12-1 의 검색어는 캡처가 준다 (`UITEST_SCREEN=search-results:주왕산`) — 앱이 짓지 않는다.
+        let resultsArgument = arguments.first { $0.hasPrefix("UITEST_SCREEN=search-results") }
+        let resultsKeyword = resultsArgument
+            .flatMap { $0.split(separator: ":", maxSplits: 1).dropFirst().first }
+            .map(String.init) ?? ""
+        // 12 입력 화면의 검색어도 **캡처가 준다** — 앱이 짓지 않는다(NO-MOCK R2).
+        // 예전에는 `"경주 단풍"` 이 여기 박혀 있어서, 12-1 은 캡처가 넘기는데 12 만 앱이 지어내는
+        // 앞뒤가 다른 상태였다. 인자 형식은 12-1 과 같다: `UITEST_SCREEN=search:경주 단풍`
+        let searchArgument = arguments.first { $0.hasPrefix("UITEST_SCREEN=search:") }
+        let searchKeyword = searchArgument
+            .flatMap { $0.split(separator: ":", maxSplits: 1).dropFirst().first }
+            .map(String.init) ?? ""
+        let previewQuery: String = resultsArgument != nil ? resultsKeyword : searchKeyword
         _query = State(initialValue: previewQuery)
+        // 입력칸만 채우면 12 입력 화면이 그대로 찍힌다 — 결과를 그리려면 **제출까지** 되어 있어야 한다.
+        // 12(`search`)는 입력 상태가 맞으므로 12-1 에서만 제출한다.
+        _submittedQuery = State(initialValue: resultsArgument == nil ? "" : resultsKeyword)
     }
 
     private var trimmedQuery: String {
@@ -40,15 +58,6 @@ struct SearchView: View {
         }
     }
 
-    private var results: [TravelCourse] {
-        guard !trimmedQuery.isEmpty else { return [] }
-        return MockData.courses.filter { course in
-            course.title.localizedCaseInsensitiveContains(trimmedQuery)
-                || course.region.localizedCaseInsensitiveContains(trimmedQuery)
-                || course.tags.contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
-        }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             searchHeader
@@ -58,22 +67,20 @@ struct SearchView: View {
                     if submittedQuery.isEmpty {
                         discoveryContent
                     } else if let serverResults {
-                        // 실서버 검색 결과 — 서버가 준 모임만 그린다
-                        if serverResults.isEmpty {
-                            SearchNoResultsView(query: trimmedQuery) {
-                                query = ""
-                                submittedQuery = ""
-                            }
-                        } else {
-                            serverSearchResults(serverResults)
-                        }
-                    } else if results.isEmpty {
-                        SearchNoResultsView(query: trimmedQuery) {
-                            query = ""
-                            submittedQuery = ""
-                        }
+                        // 12-1 — 코스(travel-courses/search)와 모집(chat-rooms/search)을 탭으로 나눈다
+                        SearchResultTabBar(
+                            selection: $resultTab,
+                            courseCount: courseResults?.count ?? 0,
+                            roomCount: serverResults.count
+                        )
+                        resultsForSelectedTab(serverResults)
                     } else {
-                        searchResults
+                        // 세션이 없으면 검색 자체가 불가능하다 (§2 미로그인 · 검색)
+                        MoyeoEmptyStateView(
+                            message: MoyeoEmptyText.signedOutSearch,
+                            systemImage: "person.crop.circle",
+                            accessibilityIdentifier: "search.signedOut"
+                        )
                     }
                 }
                 .padding(.horizontal, 20)
@@ -84,6 +91,9 @@ struct SearchView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: TravelCourse.self) { course in
+            CourseDetailView(course: course, tripContext: tripContext)
+        }
+        .navigationDestination(item: $selectedCourse) { course in
             CourseDetailView(course: course, tripContext: tripContext)
         }
         .navigationDestination(item: $selectedServerTrip) { trip in
@@ -98,15 +108,54 @@ struct SearchView: View {
         .task(id: submittedQuery) {
             await loadServerResults()
         }
+        .task { await loadPopularKeywords() }
         .accessibilityIdentifier("screen.search")
     }
 
     private func loadServerResults() async {
         guard MoyeoServerSync.isEnabled, !trimmedQuery.isEmpty else {
             serverResults = nil
+            courseResults = nil
             return
         }
-        serverResults = try? await ChatRoomAPIClient.shared.search(keyword: trimmedQuery)
+        // 두 목록은 서로 다른 API 다 — 하나가 실패해도 나머지는 실제 값으로 그린다
+        async let rooms = try? await ChatRoomAPIClient.shared.search(keyword: trimmedQuery)
+        async let courses = try? await TravelCourseAPIClient.shared.searchCourses(keyword: trimmedQuery)
+        let (loadedRooms, loadedCourses) = await (rooms, courses)
+        serverResults = loadedRooms
+        courseResults = loadedCourses
+    }
+
+    /// 고른 탭의 결과. 결과가 0건이면 정본 문구를 그대로 쓴다 (R9 · NO-MOCK §2).
+    @ViewBuilder
+    private func resultsForSelectedTab(_ rooms: [ServerChatRoomSummary]) -> some View {
+        switch resultTab {
+        case .course:
+            if let courseResults, !courseResults.isEmpty {
+                ForEach(courseResults) { course in
+                    SearchCourseResultRow(
+                        course: course,
+                        // 14 코스 상세로 간다 — 이미 있는 `TravelCourse` 목적지를 그대로 쓴다
+                        onOpen: { selectedCourse = ServerCourseMapper.course(from: course) }
+                    )
+                    .moyeoCard()
+                }
+            } else {
+                SearchNoResultsView(query: trimmedQuery) {
+                    query = ""
+                    submittedQuery = ""
+                }
+            }
+        case .room:
+            if rooms.isEmpty {
+                SearchNoResultsView(query: trimmedQuery) {
+                    query = ""
+                    submittedQuery = ""
+                }
+            } else {
+                serverSearchResults(rooms)
+            }
+        }
     }
 
     private func serverSearchResults(_ rooms: [ServerChatRoomSummary]) -> some View {
@@ -175,8 +224,22 @@ struct SearchView: View {
 
     @ViewBuilder
     private var discoveryContent: some View {
-        // 비어 있으면 섹션 전체(제목 · 전체 삭제 · 칩)를 숨긴다 — 기획에 빈 상태 문구가 없다
-        if !recentSearchModel.searches.isEmpty {
+        recentSearchSection
+        // 인기 검색어. 0건이면 이 블록이 통째로 사라진다 — 빈 상태 문구를 두지 않는다.
+        if !popularKeywords.isEmpty {
+            SearchPopularKeywordSection(rows: popularKeywords, onSelect: runSearch)
+        }
+    }
+
+    @ViewBuilder
+    private var recentSearchSection: some View {
+        if recentSearchModel.searches.isEmpty {
+            MoyeoEmptyStateView(
+                message: MoyeoEmptyText.noRecentSearches,
+                systemImage: "clock.arrow.circlepath",
+                accessibilityIdentifier: "search.recent.empty"
+            )
+        } else {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("최근 검색어")
@@ -200,48 +263,13 @@ struct SearchView: View {
             }
             .accessibilityIdentifier("search.recent.section")
         }
-
-        VStack(alignment: .leading, spacing: 4) {
-            Text("인기 검색어")
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-                .padding(.bottom, 6)
-
-            ForEach(popularSearches) { item in
-                Button {
-                    runSearch(item.keyword)
-                } label: {
-                    HStack(spacing: 16) {
-                        Text("\(item.rank)")
-                            .font(.subheadline.weight(.heavy))
-                            .foregroundStyle(item.rank <= 3 ? MoyeoTheme.forest : MoyeoTheme.muted)
-                            .frame(width: 18, alignment: .leading)
-                        Text(item.keyword)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(MoyeoTheme.ink)
-                        Spacer()
-                        Text(item.isRising ? "▲" : "−")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(item.isRising ? MoyeoTheme.coral : MoyeoTheme.text400)
-                    }
-                    .frame(height: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-
-        // 추천 검색 결과 섹션은 화면기획에 없다 — 최근 검색어와 인기 검색어까지만 보여준다
     }
 
-    private var searchResults: some View {
-        ForEach(results) { course in
-            NavigationLink(value: course) {
-                SupportCourseSummary(course: course, compact: true)
-                    .moyeoCard()
-            }
-            .buttonStyle(.plain)
-        }
+    /// 인기 검색어를 받아둔다. 인증이 필요한 집계라 세션이 없으면 부르지 않는다.
+    /// 실패·0건 모두 빈 배열이고, 그러면 섹션 자체가 사라진다 — 오류로 다루지 않는다.
+    private func loadPopularKeywords() async {
+        guard MoyeoServerSync.isEnabled else { return }
+        popularKeywords = (try? await SearchAPIClient.shared.popularKeywords(limit: 10)) ?? []
     }
 
     private func recentSearchRow(_ searches: [String]) -> some View {
@@ -291,24 +319,31 @@ struct SearchView: View {
 
 /// 실서버 검색 결과 행 — 서버가 내려준 값만 그린다.
 /// 상태 배지·찜 하트는 10 탐색 카드와 같은 표기를 쓴다(서버 `status`·`favorite` 근거).
-private struct ServerRoomSearchResultRow: View {
+/// 14 코스 상세의 `모집 중인 모임 보기`(`CourseRecruitmentsView`)도 같은 응답이라 이 행을 그대로 쓴다.
+struct ServerRoomSearchResultRow: View {
     let room: ServerChatRoomSummary
     let isFavorite: Bool
     let onOpen: () -> Void
     let onToggleFavorite: () -> Void
 
     private var scheduleLine: String {
-        let schedule = ServerTripMapper.scheduleText(startDate: room.startDate, endDate: room.endDate)
+        // 검색 응답에는 일정이 없다(2026-08-26 응답 축소) — 없으면 그 줄을 비운다.
+        let schedule = room.startDate.map {
+            ServerTripMapper.scheduleText(startDate: $0, endDate: room.endDate)
+        } ?? ""
         // 당일 여행이면 시간까지, 숙박이면 서버가 시간을 null로 주므로 그 부분을 숨긴다.
-        let dayTrip = room.dayTripTimeText.map { " · \($0)" } ?? ""
-        return "\(schedule)\(dayTrip) · \(room.participantCount)/\(room.maxParticipants)명"
+        // 일정이 통째로 없으면(태그 검색·찜 목록 응답) 앞에 빈 구분점을 남기지 않는다.
+        let dayTrip = room.dayTripTimeText ?? ""
+        return [schedule, dayTrip, "\(room.participantCount)/\(room.maxParticipants)명"]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
     }
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onOpen) {
                 HStack(spacing: 12) {
-                    CachedRemoteImage(url: room.thumbnailURL) { image in
+                    CachedRemoteImage(url: room.thumbnailURL, fallbackShape: .square) { image in
                         image
                             .resizable()
                             .scaledToFill()
@@ -334,7 +369,7 @@ private struct ServerRoomSearchResultRow: View {
                             .foregroundStyle(MoyeoTheme.ink)
                             .lineLimit(1)
                         Text(
-                            ([room.courseTitle] + room.tagNames.prefix(2))
+                            ([room.courseTitle].compactMap { $0 } + room.tagNames.prefix(2))
                                 .filter { !$0.isEmpty }
                                 .joined(separator: " · ")
                         )
@@ -366,14 +401,6 @@ private struct ServerRoomSearchResultRow: View {
             .accessibilityIdentifier("search.serverRoom.favorite.\(room.roomId)")
         }
     }
-}
-
-private struct PopularSearch: Identifiable {
-    let rank: Int
-    let keyword: String
-    let isRising: Bool
-
-    var id: Int { rank }
 }
 
 private struct SearchNoResultsView: View {

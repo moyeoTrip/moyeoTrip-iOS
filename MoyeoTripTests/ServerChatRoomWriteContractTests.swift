@@ -249,10 +249,10 @@ struct ServerTripCompanionContractTests {
     /// 매너 두 필드(`mannerRating` · `mannerScore`)는 아직 둘 다 null 이다.
     private static let companionsJSON = #"""
     [
-      {"companionRecordId":44,"userId":61,"nickname":"따스한 사슴 3492",
+      {"userId":61,"nickname":"따스한 사슴 3492",
        "profileImageUrl":null,"mannerRating":null,"mannerScore":null,
        "oneLineReview":null,"reviewed":false},
-      {"companionRecordId":45,"userId":63,"nickname":"우직한 곰 7821",
+      {"userId":63,"nickname":"우직한 곰 7821",
        "profileImageUrl":"https://cdn.moyeotrip.example/profile/63.png",
        "mannerRating":4.8,"mannerScore":5,
        "oneLineReview":"핑크뮬리 사진 잘 찍어주셔서 고마워요!","reviewed":true}
@@ -264,13 +264,13 @@ struct ServerTripCompanionContractTests {
             .decode([ServerTripCompanion].self, from: Data(Self.companionsJSON.utf8))
         #expect(companions.count == 2)
 
-        let unreviewed = try #require(companions.first { $0.companionRecordId == 44 })
+        let unreviewed = try #require(companions.first { $0.userId == 61 })
         #expect(!unreviewed.reviewed)
         #expect(unreviewed.mannerRating == nil)
         #expect(unreviewed.mannerScore == nil)
         #expect(unreviewed.oneLineReview == nil)
 
-        let reviewed = try #require(companions.first { $0.companionRecordId == 45 })
+        let reviewed = try #require(companions.first { $0.userId == 63 })
         #expect(reviewed.reviewed)
         #expect(reviewed.mannerScore == 5)
         #expect(reviewed.profileImageURL != nil)
@@ -572,11 +572,11 @@ struct ServerCompanionsGateTests {
         let companions = try JSONDecoder().decode(
             [ServerTripCompanion].self,
             from: Data(#"""
-            [{"companionRecordId":44,"userId":61,"nickname":"따스한 사슴 3492","profileImageUrl":null,
+            [{"userId":61,"nickname":"따스한 사슴 3492","profileImageUrl":null,
               "mannerRating":null,"mannerScore":null,"oneLineReview":null,"reviewed":false}]
             """#.utf8)
         )
         #expect(ServerCompanionsResult.companions(companions) != .notCompleted)
-        #expect(companions[0].companionRecordId == 44)
+        #expect(companions[0].userId == 61)
     }
 }

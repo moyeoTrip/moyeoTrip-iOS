@@ -72,7 +72,7 @@ struct ServerKickMemberRequest: Encodable {
     let reason: String
 }
 
-/// `PUT /chat-rooms/{id}/companions/{companionRecordId}/review`
+/// `PUT /chat-rooms/{id}/companions/{companionUserId}/review`
 struct ServerCompanionReviewRequest: Encodable {
     let mannerScore: Int
     let oneLineReview: String?
@@ -114,7 +114,7 @@ struct ServerApplicantProfile: Decodable, Hashable {
     let completedTripCount: Int
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 }
 
@@ -140,7 +140,8 @@ struct ServerLeaveChatRoomResult: Decodable, Hashable {
 /// `GET /chat-rooms/{id}/companions` — **완료된 여행 전용**.
 /// 아직 끝나지 않은 여행에 부르면 `409 40915` 가 온다(권한 오류가 아니다).
 struct ServerTripCompanion: Decodable, Identifiable, Hashable {
-    let companionRecordId: Int64
+    // 2026-08-26 BE 변경: companionRecordId 가 응답에서 제거됐다(평가 경로 변수도 companionUserId 로 바뀜).
+    // 식별자는 userId 하나다 — 필수로 디코딩하면 동행자 목록 파싱이 실패한다.
     let userId: Int64
     let nickname: String
     let profileImageUrl: String?
@@ -151,10 +152,10 @@ struct ServerTripCompanion: Decodable, Identifiable, Hashable {
     let oneLineReview: String?
     let reviewed: Bool
 
-    var id: Int64 { companionRecordId }
+    var id: Int64 { userId }
 
     var profileImageURL: URL? {
-        profileImageUrl.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(profileImageUrl)
     }
 }
 
@@ -304,6 +305,24 @@ final class ChatRoomWriteAPIClient: @unchecked Sendable {
         )
     }
 
+    /// 20-3a 공지 수정 — 내용과 고정을 함께 보낸다. 204 를 준다.
+    /// **둘 다 null 이면 서버가 공지를 지운다** — 그래서 내용은 항상 채워서 보낸다.
+    func updateNotice(roomID: Int64, noticeID: Int64, notice: String, pinned: Bool) async throws {
+        try await api.sendVoid(
+            "/api/v1/chat-rooms/\(roomID)/notices/\(noticeID)",
+            method: "PUT",
+            body: ServerUpdateNoticeRequest(notice: notice, pinned: pinned)
+        )
+    }
+
+    /// 20-3a 공지 삭제 — **되돌릴 수 없다.** 호출부는 확인 단계를 거친 뒤에만 부른다. 204 를 준다.
+    func deleteNotice(roomID: Int64, noticeID: Int64) async throws {
+        try await api.sendVoid(
+            "/api/v1/chat-rooms/\(roomID)/notices/\(noticeID)",
+            method: "DELETE"
+        )
+    }
+
     // MARK: 17-3 집합 정보 수정 (호스트)
 
     /// 204 를 준다. `meetingDateTime` 은 `yyyy-MM-dd'T'HH:mm:ss` 로 보낸다.
@@ -424,62 +443,4 @@ enum ServerChatShareLimits {
 enum ServerChatRoomTargetStatus: String {
     case confirmed = "CONFIRMED"
     case cancelled = "CANCELLED"
-}
-
-// MARK: - 화면 모델 매핑
-
-extension ServerTripMapper {
-    /// 18 모집 관리 승인 대기 카드. 서버가 주지 않는 값(성별·나이·매너)은 표기를 뺀다.
-    /// `mannerRating` 은 실서버에서 항상 null 이라 "매너 4.9" 를 지어내지 않는다.
-    static func hostApplicant(from application: ServerJoinApplication) -> HostApplicant {
-        let profile = application.applicant
-        var metaParts: [String] = []
-        if let age = profile.age {
-            metaParts.append("\(age)세")
-        }
-        if let genderText = applicantGenderText(profile.gender) {
-            metaParts.append(genderText)
-        }
-        if let manner = profile.mannerRating {
-            metaParts.append("매너 \(String(format: "%.1f", manner))")
-        }
-        metaParts.append("여행 \(profile.completedTripCount)회")
-
-        return HostApplicant(
-            id: "server-application-\(application.applicationId)",
-            name: profile.nickname,
-            avatar: "",
-            meta: metaParts.joined(separator: " · "),
-            note: application.applicationMessage ?? "",
-            serverApplicationID: application.applicationId,
-            serverUserID: profile.userId,
-            profileImageURL: profile.profileImageURL
-        )
-    }
-
-    /// 서버 성별 코드 → 화면 표기. 미입력(null)이면 표기를 숨긴다.
-    static func applicantGenderText(_ gender: String?) -> String? {
-        switch gender {
-        case "M":
-            return "남성"
-        case "F":
-            return "여성"
-        default:
-            return nil
-        }
-    }
-
-    /// 20-1 동행자 줄의 부제 — "매너 4.8 · 여행 8회".
-    /// 매너 점수는 완료 여행의 `companions` 응답에만 있고 값이 null 이면 빼고 그린다.
-    static func memberDetailText(completedTripCount: Int, mannerRating: Double?) -> String {
-        let trips = "여행 \(completedTripCount)회"
-        guard let mannerRating else { return trips }
-        return "매너 \(String(format: "%.1f", mannerRating)) · \(trips)"
-    }
-
-    /// `PUT /chat-rooms/{id}/meeting-info` 본문의 `meetingDateTime` 형식.
-    static func meetingDateTimeText(date: String, time: String) -> String {
-        let normalizedTime = time.split(separator: ":").count == 2 ? "\(time):00" : time
-        return "\(date)T\(normalizedTime)"
-    }
 }

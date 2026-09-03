@@ -408,9 +408,16 @@ struct AuthTermButton: View {
             HStack(spacing: 0) {
                 Button(action: action) {
                     HStack(spacing: 8) {
+                        // 체크 표시는 즉시 바뀌어야 한다.
+                        //
+                        // iOS 17+ 는 SF Symbol 이름이 바뀌면 자동으로 콘텐츠 전환을 넣는다.
+                        // "모두 동의"는 여러 항목을 한 번에 켜는 동안 그 전환이 눈에 띄게 늦어져서,
+                        // 다른 항목은 다 켜졌는데 "모두 동의"만 잠깐 꺼져 보인다.
                         Image(systemName: isSelected ? "checkmark.square.fill" : "square")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(isSelected ? MoyeoTheme.forest : MoyeoTheme.text400)
+                            .contentTransition(.identity)
+                            .animation(nil, value: isSelected)
 
                         Text(title)
                             .font(.subheadline.weight(.heavy))
@@ -527,15 +534,23 @@ struct AuthSelectedNicknameCard: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(candidate?.animalEmoji ?? "🦌")
+            // 아바타는 고른 후보의 동물이고, 후보를 모르면 닉네임에서 계산한다 (R5).
+            Text(
+                candidate?.animalEmoji
+                    ?? nickname.flatMap(MoyeoNicknameAnimal.emoji(forNickname:))
+                    ?? MoyeoNicknameAnimal.unknown
+            )
                 .font(.system(size: 26))
                 .frame(width: 48, height: 48)
                 .background((candidate?.swatchColor ?? MoyeoTheme.forest).opacity(0.18))
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
-                Text(nickname ?? "따스한 사슴 3492")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(MoyeoTheme.ink)
+                // 닉네임이 없으면 그 줄을 그리지 않는다 — 목 이름을 대신 세우지 않는다 (R1).
+                if let nickname, !nickname.isEmpty {
+                    Text(nickname)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.ink)
+                }
                 Text("새 친구가 옆에 앉았어요")
                     .font(.caption)
                     .foregroundStyle(MoyeoTheme.muted)
@@ -575,5 +590,22 @@ struct AuthAgeBandNote: View {
         let remainder = age % 10
         let phase = remainder <= 3 ? "초반" : (remainder <= 6 ? "중반" : "후반")
         return "\(decade)대 \(phase)"
+    }
+}
+
+/// 목록을 서버에서 받아오는 동안 자리를 지키는 한 줄.
+/// 빈 화면을 두면 "약관이 없다"로 읽힌다.
+struct AuthLoadingRow: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(message)
+                .font(MoyeoTypography.font(size: 14, weight: .medium))
+                .foregroundStyle(MoyeoTheme.muted)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .accessibilityIdentifier("auth.loadingRow")
     }
 }

@@ -13,20 +13,15 @@ enum AppVersionInfo {
         value(for: "CFBundleVersion")
     }
 
-    /// 설정 행에 쓰는 값. 캡처 모드에서는 화면기획 값을 그대로 유지한다.
+    /// 설정 행에 쓰는 값. **캡처에서도 실제 설치된 빌드 버전을 그대로 보여준다** —
+    /// 화면기획 값(1.0.4)을 덮어씌우면 스크린샷이 있지도 않은 버전을 말하게 된다.
     static var rowValue: String {
-        if UITestPlanningMockData.isActive {
-            return UITestPlanningMockData.versionRowValue
-        }
-        return displayText(shortVersion: shortVersion, buildNumber: buildNumber)
+        displayText(shortVersion: shortVersion, buildNumber: buildNumber)
     }
 
-    /// 버전 다이얼로그 본문. 캡처 모드에서는 화면기획 문구를 그대로 유지한다.
+    /// 버전 다이얼로그 본문.
     static var dialogBody: String {
-        if UITestPlanningMockData.isActive {
-            return UITestPlanningMockData.versionDialogBody
-        }
-        return "현재 설치된 버전은 \(rowValue)이에요."
+        "현재 설치된 버전은 \(rowValue)이에요."
     }
 
     /// `1.0 (1)` 형식. 빌드 번호가 없으면 버전만 보여준다.

@@ -11,8 +11,8 @@ struct Changelog01PolicyTests {
     }
 
     @Test func customRouteRequiresTwoThroughTwentyStops() {
-        let one = Array(RecruitmentDraft.previewStops.prefix(1))
-        let two = Array(RecruitmentDraft.previewStops.prefix(2))
+        let one = (0..<1).map(makeStop)
+        let two = (0..<2).map(makeStop)
         let twenty = (0..<20).map(makeStop)
         let twentyOne = (0..<21).map(makeStop)
 
@@ -25,10 +25,10 @@ struct Changelog01PolicyTests {
     }
 
     @Test func normalizationRebuildsStableStopOrder() {
-        let reversed = RecruitmentDraft.previewStops.reversed()
-        let normalized = RoutePolicy.normalized(Array(reversed))
+        let reversed: [ItineraryStop] = (0..<3).map(makeStop).reversed()
+        let normalized = RoutePolicy.normalized(reversed)
         #expect(normalized.map(\.order) == [1, 2, 3])
-        #expect(normalized.first?.name == "주산지")
+        #expect(normalized.first?.name == "방문지 2")
     }
 
     @Test func scheduleRequiresModeSpecificFields() {
@@ -50,11 +50,12 @@ struct Changelog01PolicyTests {
         #expect(RecruitmentSchedulePolicy.isComplete(completeOvernight))
     }
 
-    @Test func pinnedNoticesAreCappedAtThree() {
+    /// 상단 고정은 하나뿐이다 (정본 ATTACH-COMPOSER-CANON.md R5-1).
+    @Test func pinnedNoticesAreCappedAtOne() {
         let notices = (0..<5).map { index in
-            TripNotice(id: "notice-\(index)", title: "공지 \(index)", body: "내용", createdAt: "지금", isPinned: true)
+            TripNotice(id: "notice-\(index)", body: "공지 \(index)", createdAt: "지금", isPinned: true)
         }
-        #expect(RoutePolicy.pinnedNotices(from: notices).count == 3)
+        #expect(RoutePolicy.pinnedNotices(from: notices).count == 1)
     }
 
     @Test func nicknameLimitIsTenCharacters() {

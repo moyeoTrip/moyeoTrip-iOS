@@ -11,44 +11,49 @@ import Foundation
 
 /// 검색 결과 항목 (`GET /chat-rooms/search`).
 ///
-/// 2026-08-24 서버 패치로 `dayTripStartTime`·`dayTripEndTime`·`recruitmentDDay`·`status`·`favorite`·
-/// `meetingLatitude`·`meetingLongitude`·`meetingDetails`·`meetingDateTime` 9필드가 추가됐다.
-/// 그래서 카드 배지·찜 하트를 그리려고 항목마다 상세를 부를 필요가 없다.
+/// 목록·지도 응답의 공통 요약.
+///
+/// **필수 필드는 두 응답 모두가 주는 것만이다.** 2026-08-26 검색 응답 축소로 `tripType`·`startDate`·
+/// `recruitmentDeadlineDate`·`meetingDateTime`·`hostId`·`courseTitle` 등이 빠졌고, 지도 응답
+/// (`GET /chat-rooms/map`)도 좌표 관련 필드만 더 줄 뿐 나머지는 주지 않는다.
+/// 필수로 두면 **디코딩이 통째로 실패해 화면이 조용히 목데이터로 떨어진다** — 실제로 그렇게 됐었다.
+/// 없는 값은 옵셔널로 받고, 화면은 값이 있을 때만 그 줄을 그린다.
 struct ServerChatRoomSummary: Decodable, Identifiable, Hashable {
     let roomId: Int64
     let title: String
     let description: String?
     let thumbnail: String?
-    let tripType: String
-    let startDate: String
+    let tripType: String?
+    let startDate: String?
     let endDate: String?
     /// 당일 여행 시간. 숙박이면 둘 다 null이라 표기를 숨긴다.
     /// 문서엔 `HH:mm` 인데 실제 응답은 `HH:mm:ss` 다 — 양쪽 모두 파싱한다.
     let dayTripStartTime: String?
     let dayTripEndTime: String?
-    let recruitmentDeadlineDate: String
+    let recruitmentDeadlineDate: String?
     let recruitmentDDay: Int64?
     /// `RECRUITING` · `CONFIRMED` · `CANCELLED`
     let status: String
     /// 로그인 사용자의 찜 여부
     let favorite: Bool
     /// 집합 장소 좌표. 미정이면 null이고, **둘 다 있을 때만** 지도 마커를 찍는다.
+    /// 검색 응답에는 아예 없다 — 좌표가 오는 것은 지도 응답뿐이다.
     let meetingLatitude: Double?
     let meetingLongitude: Double?
     /// 집합 장소 안내. 미정이면 null — "미정" 같은 문구를 지어내지 않고 표기를 숨긴다.
     let meetingDetails: String?
-    let meetingDateTime: String
+    let meetingDateTime: String?
 
-    let hostId: Int64
+    let hostId: Int64?
     let participantCount: Int
     let maxParticipants: Int
-    let courseTitle: String
+    let courseTitle: String?
     let tags: [ServerCourseTag]
 
     var id: Int64 { roomId }
 
     var thumbnailURL: URL? {
-        thumbnail.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(thumbnail)
     }
 
     var tagNames: [String] {
@@ -92,15 +97,19 @@ struct ServerChatRoomDetail: Decodable, Hashable {
     let hostId: Int64
     let hostProfileImageUrl: String?
     let participantCount: Int
+    /// 여행 확정에 필요한 호스트 포함 최소 출발 인원. 18-4 확정 CTA 의 잠금 근거다.
+    /// 서버는 늘 주지만(실서버 확인), 예전 응답을 캐시로 읽는 경우가 있어 옵셔널로 둔다.
+    let minimumParticipants: Int?
     let maxParticipants: Int
     let status: String
     let favorite: Bool
     let latestPinnedNotice: ServerChatRoomNotice?
     let participants: [ServerParticipant]
-}
-
-struct ServerJoinEligibility: Decodable, Hashable {
-    let canApply: Bool
+    // 2026-08-26 BE 변경: 검색 응답이 카드용으로 축소되면서 코스 제목·태그가 상세로 옮겨졌다.
+    // canApply 는 삭제된 join-eligibility 를 대체한다.
+    let courseTitle: String?
+    let tags: [ServerCourseTag]?
+    let canApply: Bool?
 }
 
 enum ServerJoinResult: String, Decodable {
@@ -158,7 +167,7 @@ struct ServerMyChatRoom: Decodable, Identifiable, Hashable {
     var id: Int64 { roomId }
 
     var thumbnailURL: URL? {
-        thumbnail.flatMap(URL.init(string:))
+        MoyeoImageURL.resolve(thumbnail)
     }
 }
 
@@ -212,10 +221,6 @@ final class ChatRoomAPIClient: @unchecked Sendable {
         try await api.get("/api/v1/chat-rooms/\(roomID)")
     }
 
-    func joinEligibility(roomID: Int64) async throws -> ServerJoinEligibility {
-        try await api.get("/api/v1/chat-rooms/\(roomID)/join-eligibility")
-    }
-
     func apply(roomID: Int64, message: String?) async throws -> ServerJoinResponse {
         struct JoinRequest: Encodable {
             let applicationMessage: String?
@@ -254,242 +259,10 @@ final class ChatRoomAPIClient: @unchecked Sendable {
     func myKickHistories() async throws -> [ServerKickHistory] {
         try await api.get("/api/v1/chat-rooms/my-kick-histories")
     }
-}
 
-// MARK: - 화면 모델 매핑
-
-enum ServerTripMapper {
-    static let serverTripIDPrefix = "server-room-"
-
-    static func roomID(fromTripID tripID: String) -> Int64? {
-        guard tripID.hasPrefix(serverTripIDPrefix) else { return nil }
-        return Int64(tripID.dropFirst(serverTripIDPrefix.count))
-    }
-
-    /// roomId만 아는 진입점(알림 등)용 빈 껍데기 — 상세 화면이 서버 상세로 다시 채운다
-    static func placeholderTrip(roomID: Int64, title: String = "") -> TripRecruitment {
-        TripRecruitment(
-            id: "\(serverTripIDPrefix)\(roomID)",
-            courseID: "",
-            title: title,
-            region: "",
-            coverMascot: "",
-            hostName: "",
-            hostAvatar: "",
-            schedule: "",
-            meetupPoint: "",
-            price: "",
-            capacity: 0,
-            joined: 0,
-            minimumParticipants: 0,
-            status: .open,
-            summary: "",
-            vibe: "",
-            tags: [],
-            route: [],
-            participants: [],
-            recruitmentDeadline: "",
-            minimumAge: 0,
-            maximumAge: 0,
-            genderRestriction: "",
-            serverRoomID: roomID
-        )
-    }
-
-    /// 검색 결과 요약 → 모집 상세 진입용 최소 TripRecruitment.
-    /// 서버가 주지 않는 값은 비워 두고, 화면은 서버 상세 응답으로 다시 채운다.
-    static func trip(from summary: ServerChatRoomSummary) -> TripRecruitment {
-        var meeting: MeetingPointDetails?
-        if let coordinate = summary.meetingCoordinate {
-            meeting = MeetingPointDetails(
-                name: summary.meetingDetails ?? "",
-                address: "",
-                detail: "",
-                latitude: coordinate.latitude,
-                longitude: coordinate.longitude,
-                meetingTime: timeText(fromDateTime: summary.meetingDateTime)
-            )
-        }
-        // `map(displayDate)` 처럼 함수 참조로 넘기면 main-actor 격리가 벗겨져 Swift 6 경고가 난다.
-        // 호출을 이 컨텍스트 안에 둔다.
-        var endDateText: String?
-        if let endDate = summary.endDate {
-            endDateText = displayDate(endDate)
-        }
-
-        return TripRecruitment(
-            id: "\(serverTripIDPrefix)\(summary.roomId)",
-            courseID: "",
-            title: summary.title,
-            region: "",
-            coverMascot: "",
-            hostName: "",
-            hostAvatar: "",
-            schedule: scheduleText(startDate: summary.startDate, endDate: summary.endDate),
-            meetupPoint: summary.meetingDetails ?? "",
-            price: "",
-            capacity: summary.maxParticipants,
-            joined: summary.participantCount,
-            minimumParticipants: 0,
-            status: status(from: summary.status),
-            summary: summary.description ?? "",
-            vibe: "",
-            tags: summary.tagNames,
-            route: [],
-            participants: [],
-            scheduleDetails: TripScheduleDetails(
-                kind: summary.tripType == "OVERNIGHT" ? .overnight : .dayTrip,
-                startDate: displayDate(summary.startDate),
-                endDate: endDateText,
-                startTime: shortTime(summary.dayTripStartTime),
-                endTime: shortTime(summary.dayTripEndTime)
-            ),
-            meetingDetails: meeting,
-            recruitmentDeadline: deadlineText(
-                deadlineDate: summary.recruitmentDeadlineDate,
-                dDay: summary.recruitmentDDay
-            ),
-            minimumAge: 0,
-            maximumAge: 0,
-            genderRestriction: "",
-            serverRoomID: summary.roomId,
-            heroImageURL: summary.thumbnailURL,
-            serverCourseTitle: summary.courseTitle
-        )
-    }
-
-    /// 채팅방 상세 응답 → 모집 상세 화면 모델
-    static func trip(from detail: ServerChatRoomDetail, course: ServerTravelCourse?) -> TripRecruitment {
-        let kind: TripScheduleKind = detail.tripType == "OVERNIGHT" ? .overnight : .dayTrip
-        let meetingTime = timeText(fromDateTime: detail.meetingDateTime)
-
-        var meeting: MeetingPointDetails?
-        if let latitude = detail.meetingLatitude, let longitude = detail.meetingLongitude {
-            meeting = MeetingPointDetails(
-                name: detail.meetingDetails ?? "",
-                address: "",
-                detail: "",
-                latitude: latitude,
-                longitude: longitude,
-                meetingTime: meetingTime
-            )
-        }
-
-        return TripRecruitment(
-            id: "\(serverTripIDPrefix)\(detail.roomId)",
-            courseID: "",
-            title: detail.title,
-            region: "",
-            coverMascot: "",
-            hostName: "",
-            hostAvatar: "",
-            schedule: scheduleText(startDate: detail.startDate, endDate: detail.endDate),
-            meetupPoint: detail.meetingDetails ?? "",
-            price: detail.participationFee.map { "1인 \(decimalText($0))원" } ?? "무료 · 미정",
-            capacity: detail.maxParticipants,
-            joined: detail.participantCount,
-            minimumParticipants: 0,
-            status: status(from: detail.status),
-            summary: detail.description ?? "",
-            vibe: "",
-            tags: course?.tags.map(\.name) ?? [],
-            route: course?.places
-                .sorted { ($0.dayNumber, $0.sequence) < ($1.dayNumber, $1.sequence) }
-                .map(\.title) ?? [],
-            participants: [],
-            courseSource: course?.type == "CUSTOM" ? .custom : .linked,
-            scheduleDetails: TripScheduleDetails(
-                kind: kind,
-                startDate: displayDate(detail.startDate),
-                // 함수 참조로 넘기면 main-actor 격리가 벗겨져 Swift 6 에서 경고가 난다.
-                endDate: detail.endDate.map { displayDate($0) },
-                startTime: shortTime(detail.dayTripStartTime),
-                endTime: shortTime(detail.dayTripEndTime)
-            ),
-            meetingDetails: meeting,
-            recruitmentDeadline: deadlineText(
-                deadlineDate: detail.recruitmentDeadlineDate,
-                dDay: detail.recruitmentDDay
-            ),
-            minimumAge: detail.minimumAge ?? 0,
-            maximumAge: detail.maximumAge ?? 0,
-            genderRestriction: genderText(detail.genderRestriction),
-            serverRoomID: detail.roomId,
-            heroImageURL: detail.thumbnail.flatMap(URL.init(string:)),
-            hostProfileImageURL: detail.hostProfileImageUrl.flatMap(URL.init(string:)),
-            serverCourseTitle: course?.title
-        )
-    }
-
-    static func status(from serverStatus: String) -> RecruitmentStatus {
-        switch serverStatus {
-        case "CONFIRMED":
-            return .confirmed
-        case "CANCELLED":
-            return .cancelled
-        default:
-            return .open
-        }
-    }
-
-    static func genderText(_ restriction: String) -> String {
-        switch restriction {
-        case "FEMALE_ONLY":
-            return "여성만"
-        case "MALE_ONLY":
-            return "남성만"
-        default:
-            return "성별 무관"
-        }
-    }
-
-    /// "2026-09-12" → "2026.09.12 (토)"
-    static func displayDate(_ isoDate: String) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: isoDate) else { return isoDate }
-        formatter.dateFormat = "yyyy.MM.dd (E)"
-        return formatter.string(from: date)
-    }
-
-    /// "2026-09-12" + 종료일 → "2026.09.12 (토)" 또는 "2026.09.12 (토) ~ 2026.09.13 (일)"
-    static func scheduleText(startDate: String, endDate: String?) -> String {
-        guard let endDate, !endDate.isEmpty else { return displayDate(startDate) }
-        return "\(displayDate(startDate)) ~ \(displayDate(endDate))"
-    }
-
-    /// 서버 시각 → 화면 표기 `HH:mm`.
-    /// 문서는 `HH:mm`, 실제 응답은 `HH:mm:ss` 라 **양쪽 모두** 받는다.
-    static func shortTime(_ time: String?) -> String? {
-        guard let time, !time.isEmpty else { return nil }
-        let parts = time.split(separator: ":")
-        guard parts.count >= 2 else { return nil }
-        return "\(parts[0]):\(parts[1])"
-    }
-
-    /// "2026-09-12T08:30:00" → "08:30"
-    static func timeText(fromDateTime dateTime: String) -> String {
-        guard let timePart = dateTime.split(separator: "T").last else { return "" }
-        return String(timePart.prefix(5))
-    }
-
-    /// 마감일 → "D-17 · 9/9" (기존 목데이터 표기와 같은 형태)
-    static func deadlineText(deadlineDate: String, dDay: Int64?) -> String {
-        let parts = deadlineDate.split(separator: "-")
-        let shortDate: String
-        if parts.count == 3, let month = Int(parts[1]), let day = Int(parts[2]) {
-            shortDate = "\(month)/\(day)"
-        } else {
-            shortDate = deadlineDate
-        }
-        guard let dDay else { return shortDate }
-        return dDay <= 0 ? "D-Day · \(shortDate)" : "D-\(dDay) · \(shortDate)"
-    }
-
-    static func decimalText(_ value: Int64) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    /// 26-1 찜한 모집 — 응답은 11 탐색 카드와 같은 `SearchChatRoomResponse` 다.
+    /// 찜한 모집이 마감되거나 여행이 끝나도 목록에는 그대로 남는다(서버가 거르지 않는다).
+    func favoriteRooms() async throws -> [ServerChatRoomSummary] {
+        try await api.get("/api/v1/chat-rooms/my/favorites")
     }
 }

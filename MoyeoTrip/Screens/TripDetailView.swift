@@ -11,20 +11,29 @@ import SwiftUI
 struct TripDetailView: View {
     let trip: TripRecruitment
     var isApplied = false
-    var threadProvider: (TripRecruitment) -> ChatThread? = { MockData.chatThread(forTripID: $0.id) }
+    var threadProvider: (TripRecruitment) -> ChatThread? = { _ in nil }
     var onApplied: (TripRecruitment) -> Void = { _ in }
     var onSendChatMessage: (ChatThread, ChatMessage) -> Void = { _, _ in }
+    /// 신청 시트를 열린 상태로 시작한다(캡처가 실제 상세 화면 위의 실제 시트를 찍게 한다).
+    var startsWithApplicationSheet = false
     @Environment(\.dismiss) private var dismiss
     @State private var isApplicationPresented = false
     @State private var selectedThread: ChatThread?
     @State private var isFavorite = false
     @State private var didApplyInSession = false
     @State private var feedbackMessage: String?
-    @State private var isReportPresented = false
+    /// 15 상세 히어로의 깃발 버튼. 모집·채팅방 신고는 접수 API 가 없다 —
+    /// 접수되는 것처럼 보이는 30-2 시트를 열지 않고 그 자리에서 안내한다 (정본 `REPORT-CANON.md` §3).
+    @State private var showsReportUnsupported = false
     // 실서버 연동 상태 — 서버 모임(serverRoomID)일 때만 채워진다
     @State private var serverTrip: TripRecruitment?
     @State private var serverCourse: TravelCourse?
     @State private var serverCanApply: Bool?
+    /// 15 참가자 아바타 줄의 근거. `GET /chat-rooms/{roomId}` 의 `participants` 다.
+    @State private var serverParticipants: [ServerChatRoomDetail.ServerParticipant] = []
+    /// userId → 닉네임. 상세 응답에는 닉네임이 없어 `GET /chat-rooms/{roomId}/members` 로 채운다.
+    /// 그 목록이 열리지 않으면 비어 있고, 그때는 사람별 동물 대신 `🐾` 를 쓴다.
+    @State private var participantNicknamesByUserID: [Int64: String] = [:]
     @State private var serverJoinResult: ServerJoinResult?
 
     private var appliedState: Bool {
@@ -48,7 +57,7 @@ struct TripDetailView: View {
                                     dismiss()
                                 },
                                 onReport: {
-                                    isReportPresented = true
+                                    showsReportUnsupported = true
                                 }
                             )
                             if let feedbackMessage {
@@ -56,7 +65,12 @@ struct TripDetailView: View {
                                     .padding(.horizontal, 16)
                                     .padding(.top, 12)
                             }
-                            TripDetailPanel(trip: displayTrip, serverCourse: serverCourse)
+                            TripDetailPanel(
+                                trip: displayTrip,
+                                serverCourse: serverCourse,
+                                participants: serverParticipants,
+                                participantNicknamesByUserID: participantNicknamesByUserID
+                            )
                                 .padding(.top, feedbackMessage == nil ? -28 : 12)
                         }
                         .frame(width: proxy.size.width)
@@ -119,10 +133,13 @@ struct TripDetailView: View {
                 onSendChatMessage(thread, message)
             }
         }
-        .fullScreenCover(isPresented: $isReportPresented) {
-            ReportView()
+        .overlay {
+            if showsReportUnsupported {
+                ReportUnsupportedDialog { showsReportUnsupported = false }
+            }
         }
         .task {
+            if startsWithApplicationSheet { isApplicationPresented = true }
             await loadServerDetail()
         }
     }
@@ -186,9 +203,24 @@ struct TripDetailView: View {
         if let detail = try? await ChatRoomAPIClient.shared.detail(roomID: roomID) {
             serverTrip = ServerTripMapper.trip(from: detail, course: course)
             isFavorite = detail.favorite
+            // 참가 가능 여부는 상세 응답의 canApply 다. 예전 /join-eligibility 는 서버에서 삭제됐다.
+            serverCanApply = detail.canApply
+            // 아바타 줄은 서버가 준 참가자만 그린다 — 0건이면 줄 자체가 없다 (NO-MOCK R1).
+            serverParticipants = detail.participants
         }
         serverCourse = course.map(ServerCourseMapper.course(from:))
-        serverCanApply = (try? await ChatRoomAPIClient.shared.joinEligibility(roomID: roomID))?.canApply
+        await loadParticipantNicknames(roomID: roomID)
+    }
+
+    /// 닉네임 동물 이모지 폴백(R5)에 쓸 닉네임만 받아 온다.
+    /// 멤버 목록은 방에 속한 사람에게만 열리므로 실패해도 조용히 넘긴다 — 아바타 줄은 그대로 그린다.
+    private func loadParticipantNicknames(roomID: Int64) async {
+        guard !serverParticipants.isEmpty else { return }
+        guard let list = try? await ChatRoomContentAPIClient.shared.members(roomID: roomID) else { return }
+        participantNicknamesByUserID = Dictionary(
+            list.members.map { ($0.userId, $0.nickname) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 }
 
@@ -252,20 +284,16 @@ struct TripDetailHeroImage: View {
 
     var body: some View {
         if let heroImageURL = trip.heroImageURL {
-            CachedRemoteImage(url: heroImageURL) { image in
+            CachedRemoteImage(url: heroImageURL, fallbackShape: .landscape) { image in
                 image
                     .resizable()
                     .scaledToFill()
             } placeholder: {
                 MoyeoTheme.leaf
             }
-        } else if trip.isServerBacked {
-            // 서버가 썸네일을 내려주지 않은 모임 — 빈 배경만 둔다
-            MoyeoTheme.leaf
         } else {
-            Image(trip.heroImageAssetName)
-                .resizable()
-                .scaledToFill()
+            // 서버가 썸네일을 내려주지 않은 모임 — 히어로는 이미지가 필수인 자리다
+            MoyeoPlaceholderImageView(shape: .landscape)
         }
     }
 }
@@ -289,9 +317,78 @@ private struct HeroIconButton: View {
     }
 }
 
+/// 15 모집 상세 · 20-4 확정 모먼트의 참가자 아바타 줄. 겹친 원을 늘어놓고 넘치는 인원은 `+N` 배지로 접는다.
+///
+/// 치수는 세 플랫폼·기획이 같다 — 바깥 지름 32(사진 28 + 링 2), 겹침 -8.
+/// (웹 `screens-refined.jsx` `ScreenGroupDetail`, 안드로이드 `TripDetailScreen.kt` 아바타 Row,
+///  기획 `모여트립 in 경북/screens-refined.jsx` `MemberStack`.)
+///
+/// 근거 API 는 `GET /api/v1/chat-rooms/{roomId}` 의 `participants[].profileImageUrl` 다.
+/// 사진이 없으면 닉네임 동물 이모지(R5)를 쓰고, 닉네임까지 없으면 `🐾` 다.
+/// **아바타를 지어내지 않는다** — 참가자 목록이 비면 부르는 쪽에서 줄을 그리지 않는다 (R1).
+struct TripDetailParticipantStack: View {
+    let participants: [ServerChatRoomDetail.ServerParticipant]
+    var nicknamesByUserID: [Int64: String] = [:]
+
+    /// 바깥 지름. 링 2 를 뺀 30 - 2 = 28 이 사진 지름이다.
+    private let diameter: CGFloat = 32
+    private let ringWidth: CGFloat = 2
+    private let overlap: CGFloat = -8
+    /// 기획 15 가 얼굴 3개 + `+2` 이므로 넘치는 인원은 배지로 접는다.
+    /// 웹 · 안드로이드가 접지 않고 5명까지 그리므로, 그 범위에서는 세 쪽이 같게 보인다.
+    private let visibleLimit = 4
+
+    var body: some View {
+        let shown = Array(participants.prefix(visibleLimit))
+        let hidden = participants.count - shown.count
+        HStack(spacing: overlap) {
+            ForEach(shown, id: \.userId) { participant in
+                avatar(participant)
+            }
+            if hidden > 0 {
+                Text("+\(hidden)")
+                    .font(.system(size: 11, weight: .heavy))
+                    .monospacedDigit()
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .frame(width: diameter, height: diameter)
+                    .background(MoyeoTheme.subtleBackground)
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(MoyeoTheme.card, lineWidth: ringWidth))
+                    .accessibilityIdentifier("trip.detail.participants.more")
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityIdentifier("trip.detail.participants")
+    }
+
+    private func avatar(_ participant: ServerChatRoomDetail.ServerParticipant) -> some View {
+        let url = MoyeoImageURL.resolve(participant.profileImageUrl)
+        let nickname = nicknamesByUserID[participant.userId]
+        let mascot = MoyeoNicknameAnimal.emoji(forNickname: nickname ?? "") ?? MoyeoNicknameAnimal.unknown
+        return ZStack {
+            if url != nil {
+                CachedRemoteImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    MascotAvatar(mascot: mascot, size: diameter - ringWidth * 2)
+                }
+            } else {
+                MascotAvatar(mascot: mascot, size: diameter - ringWidth * 2)
+            }
+        }
+        .frame(width: diameter - ringWidth * 2, height: diameter - ringWidth * 2)
+        .clipShape(Circle())
+        .padding(ringWidth)
+        .background(Circle().fill(MoyeoTheme.card))
+        .accessibilityIdentifier("trip.detail.participant.\(participant.userId)")
+    }
+}
+
 private struct TripDetailPanel: View {
     let trip: TripRecruitment
     var serverCourse: TravelCourse?
+    var participants: [ServerChatRoomDetail.ServerParticipant] = []
+    var participantNicknamesByUserID: [Int64: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -307,7 +404,7 @@ private struct TripDetailPanel: View {
                     .foregroundStyle(MoyeoTheme.ink)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if let course = serverCourse ?? MockData.course(for: trip.courseID) {
+                if let course = serverCourse {
                     NavigationLink {
                         CourseDetailView(course: course)
                     } label: {
@@ -339,15 +436,12 @@ private struct TripDetailPanel: View {
                     .foregroundStyle(MoyeoTheme.muted)
             }
 
-            // 서버 모임은 참가자 닉네임·최소 인원을 내려주지 않는다 — 그 줄은 숨긴다
-            if !trip.isServerBacked {
-                HStack(alignment: .center) {
-                    ParticipantStack(participants: trip.participants, limit: 3, size: 32)
-                    Spacer()
-                    Text("최소 \(trip.minimumParticipants)명 이상")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(MoyeoTheme.muted)
-                }
+            // 화면기획 15 · 웹 · 안드로이드와 같은 자리 — 코스 카드·태그 줄 아래, `n / m명` 위다.
+            if !participants.isEmpty {
+                TripDetailParticipantStack(
+                    participants: participants,
+                    nicknamesByUserID: participantNicknamesByUserID
+                )
             }
 
             VStack(alignment: .leading, spacing: 7) {
@@ -387,9 +481,13 @@ private struct TripDetailPanel: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(MoyeoTheme.muted)
                             .frame(width: 16)
-                        Text(String(format: "%.6f, %.6f", meeting.latitude, meeting.longitude))
+                        // 좌표는 길 찾기 링크의 입력값이지 사용자에게 보일 값이 아니다 —
+                        // 기획에도 없고, 웹은 이 자리에 집합 장소 이름을 둔다.
+                        // 예전에는 `36.410800, 129.057500` 이 그대로 보였다.
+                        Text(meetingPlaceLabel(for: meeting))
                             .font(.caption2)
                             .foregroundStyle(MoyeoTheme.muted)
+                            .lineLimit(1)
                         Spacer(minLength: 8)
                         Link(destination: directionsURL(for: meeting)) {
                             Text("길 찾기")
@@ -462,11 +560,7 @@ private struct TripDetailPanel: View {
                             .font(.subheadline.weight(.heavy))
                             .foregroundStyle(MoyeoTheme.ink)
                     }
-                    if !trip.isServerBacked {
-                        Text("매너 점수 \(trip.hostScoreText)")
-                            .font(.caption)
-                            .foregroundStyle(MoyeoTheme.muted)
-                    }
+                    // 매너 점수는 서버가 주지 않는다 — 지어내지 않고 줄을 만들지 않는다 (§4 BE 요청)
                 }
                 Spacer()
             }
@@ -483,8 +577,9 @@ private struct TripDetailPanel: View {
                 }
             }
 
-            if !trip.route.isEmpty {
-                TripRoutePreview(stops: trip.route)
+            // 코스 미리보기는 실지도다 — 방문지 좌표가 없으면 섹션째 그리지 않는다
+            if !trip.itinerary.isEmpty {
+                TripRoutePreview(stops: trip.itinerary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -498,6 +593,15 @@ private struct TripDetailPanel: View {
                 .stroke(MoyeoTheme.softLine, lineWidth: 1)
         }
         .padding(.horizontal, 16)
+    }
+
+    /// 집합 장소 표기. 웹 15 상세와 같은 순서·대체 문구를 쓴다.
+    private func meetingPlaceLabel(for meeting: MeetingPointDetails) -> String {
+        for candidate in [meeting.name, meeting.detail, meeting.address] {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return "집합 위치"
     }
 
     private func directionsURL(for meeting: MeetingPointDetails) -> URL {
@@ -562,36 +666,44 @@ private struct TripScheduleRow: View {
     }
 }
 
+/// 15 코스 미리보기 — 번호 원 나열이 아니라 실제 카카오 지도다 (NO-MOCK-CANON R4).
+/// 좌표가 빠진 방문지가 하나라도 있으면 지도를 그리지 않는다.
 private struct TripRoutePreview: View {
-    let stops: [String]
+    let stops: [ItineraryStop]
+
+    private var routeMarkers: [MoyeoMapMarker] {
+        stops.compactMap { stop in
+            guard let coordinate = MoyeoMapCoordinate(latitude: stop.latitude, longitude: stop.longitude) else {
+                return nil
+            }
+            return MoyeoMapMarker(id: stop.id, coordinate: coordinate, order: stop.order)
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("코스 미리보기")
-                .font(.headline)
-                .foregroundStyle(MoyeoTheme.ink)
+        let markers = routeMarkers
+        if markers.count == stops.count, let first = markers.first {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("코스 미리보기")
+                    .font(.headline)
+                    .foregroundStyle(MoyeoTheme.ink)
 
-            HStack(spacing: 8) {
-                ForEach(Array(stops.prefix(4).enumerated()), id: \.offset) { index, stop in
-                    VStack(spacing: 6) {
-                        Text("\(index + 1)")
-                            .font(.caption2.weight(.heavy))
-                            .foregroundStyle(.white)
-                            .frame(width: 24, height: 24)
-                            .background(index == 0 ? MoyeoTheme.coral : MoyeoTheme.forest)
-                            .clipShape(Circle())
-                        Text(stop)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(MoyeoTheme.muted)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
+                MoyeoMapView(
+                    content: MoyeoMapContent(
+                        center: first.coordinate,
+                        level: 11,
+                        markers: markers,
+                        polyline: markers.map(\.coordinate)
+                    ),
+                    isInteractive: false,
+                    fallback: { MoyeoTheme.mapGreen }
+                )
+                .frame(height: 160)
+                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("코스 경로 지도, 방문지 \(stops.count)곳")
+                .accessibilityIdentifier("trip.route.preview")
             }
-            .padding(12)
-            .background(MoyeoTheme.subtleBackground)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
         }
     }
 }
@@ -647,28 +759,6 @@ private struct TripDetailBottomBar: View {
 }
 
 extension TripRecruitment {
-    var heroImageAssetName: String {
-        switch id {
-        case "trip-cheongsong-juwangsan":
-            return "weather_fog_seokguram"
-        case "trip-andong-hahoe":
-            return "weather_rain_hahoe"
-        case "trip-gyeongju-history":
-            return "weather_sunny_cheomseongdae"
-        case "trip-pohang-drive",
-             "trip-ulleung-island":
-            return "weather_wind_homigot"
-        case "trip-mungyeong-saejae":
-            return "weather_cloudy_bulguksa"
-        case "trip-yeongju-buseoksa":
-            return "weather_snow_buseoksa"
-        case "trip-andong-dosan":
-            return "weather_heatwave_dosan"
-        default:
-            return "weather_sunny_cheomseongdae"
-        }
-    }
-
     var detailMetaText: String {
         ([region] + tags.prefix(2))
             .filter { !$0.isEmpty }
@@ -726,18 +816,6 @@ extension TripRecruitment {
 
     var detailTimeText: String {
         parsedSchedule.timeText
-    }
-
-    var hostScoreText: String {
-        switch id {
-        case "trip-cheongsong-juwangsan":
-            return "4.8점"
-        case "trip-andong-hahoe",
-             "trip-gyeongju-history":
-            return "4.7점"
-        default:
-            return "4.6점"
-        }
     }
 
     private var parsedSchedule: (dateText: String, timeText: String) {

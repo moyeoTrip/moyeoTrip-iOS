@@ -40,19 +40,12 @@ struct AuthNicknameCandidate: Equatable, Identifiable {
     }
 
     var animalEmoji: String {
-        Self.animalEmojis[animal] ?? "🐾"
+        MoyeoNicknameAnimal.emoji(forAnimal: animal)
     }
 
     var colorLabel: String {
         Self.colorLabels[color] ?? color
     }
-
-    private static let animalEmojis = [
-        "사슴": "🦌", "거북이": "🐢", "토끼": "🐰", "여우": "🦊", "수달": "🦦",
-        "다람쥐": "🐿️", "고양이": "🐱", "강아지": "🐶", "판다": "🐼", "펭귄": "🐧",
-        "돌고래": "🐬", "부엉이": "🦉", "참새": "🐦", "알파카": "🦙", "코알라": "🐨",
-        "두루미": "🪽", "해달": "🦦", "고슴도치": "🦔", "너구리": "🦝", "기린": "🦒"
-    ]
 
     private static let colorLabels = [
         "RED": "빨강", "ORANGE": "주황", "YELLOW": "노랑", "GREEN": "초록", "BLUE": "파랑",
@@ -70,54 +63,11 @@ protocol AuthNicknameCandidateProviding {
     func fetchCandidates() async throws -> AuthNicknameCandidatesResponse
 }
 
-final class MockAuthNicknameCandidateProvider: AuthNicknameCandidateProviding {
-    private let batches: [[String]]
-    private let delayNanoseconds: UInt64
-    private let shouldFail: Bool
-    private var nextBatchIndex = 0
-
-    init(
-        batches: [[String]]? = nil,
-        delayNanoseconds: UInt64? = nil,
-        shouldFail: Bool? = nil
-    ) {
-        self.batches = batches ?? Self.defaultBatches
-        let arguments = ProcessInfo.processInfo.arguments
-        self.delayNanoseconds = delayNanoseconds
-            ?? (arguments.contains("UITEST_MODE") ? UITestRuntime.mockNicknameDelayNanoseconds : 550_000_000)
-        self.shouldFail = shouldFail ?? arguments.contains("UITEST_NICKNAME_REFRESH_FAIL")
-    }
-
+/// 서버 후보를 아직 못 받은 상태. 지어낸 후보를 끼워 넣으면 사용자가 고를 수 없는 이름이 뜬다.
+struct AuthNicknameUnavailableProvider: AuthNicknameCandidateProviding {
     func fetchCandidates() async throws -> AuthNicknameCandidatesResponse {
-        try await Task.sleep(nanoseconds: delayNanoseconds)
-        if shouldFail {
-            throw AuthNicknameCandidateError.unavailable
-        }
-
-        let batchIndex = min(nextBatchIndex, batches.count - 1)
-        let nicknames = batches[batchIndex]
-        nextBatchIndex += 1
-
-        return AuthNicknameCandidatesResponse(
-            selectionToken: "mock-selection-\(batchIndex + 2)",
-            candidates: nicknames.enumerated().map { index, nickname in
-                AuthNicknameCandidate(
-                    id: "batch-\(batchIndex + 2)-\(index)",
-                    nickname: nickname,
-                    color: Self.mockColors[(batchIndex * 3 + index) % Self.mockColors.count]
-                )
-            }
-        )
+        throw AuthNicknameCandidateError.unavailable
     }
-
-    static let defaultBatches = [
-        ["포근한 두루미 4186", "느긋한 수달 7351", "용감한 토끼 2640"],
-        ["다정한 여우 5814", "반짝이는 고라니 3072", "차분한 부엉이 9465"],
-        ["싱그러운 곰 6248", "활기찬 다람쥐 1537", "고요한 학 8094"],
-        ["따뜻한 삵 2719", "명랑한 오소리 6843", "든든한 산양 5026"]
-    ]
-
-    private static let mockColors = ["RED", "ORANGE", "YELLOW", "GREEN", "BLUE", "NAVY", "PURPLE", "PINK", "SKY_BLUE", "MINT"]
 }
 
 @MainActor
@@ -145,7 +95,7 @@ final class AuthNicknameViewModel: ObservableObject {
 
     convenience init(selectedNickname: String = "") {
         self.init(
-            provider: MockAuthNicknameCandidateProvider(),
+            provider: AuthNicknameUnavailableProvider(),
             selectedNickname: selectedNickname
         )
     }
@@ -183,14 +133,8 @@ final class AuthNicknameViewModel: ObservableObject {
         }
     }
 
-    static let initialResponse = AuthNicknameCandidatesResponse(
-        selectionToken: "mock-selection-1",
-        candidates: [
-            AuthNicknameCandidate(id: "deer", nickname: "따스한 사슴 3492", color: "RED"),
-            AuthNicknameCandidate(id: "turtle", nickname: "잔잔한 거북이 1108", color: "BLUE"),
-            AuthNicknameCandidate(id: "raccoon", nickname: "호기심 많은 너구리 9027", color: "MINT")
-        ]
-    )
+    /// 서버 후보가 오기 전의 자리. 비어 있어야 화면이 스켈레톤(로딩)을 그린다 (NO-MOCK-CANON R1).
+    static let initialResponse = AuthNicknameCandidatesResponse(selectionToken: "", candidates: [])
 }
 
 enum AuthNicknameCandidateError: Error {

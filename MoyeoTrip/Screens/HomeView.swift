@@ -8,32 +8,31 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(\.moyeoIsOffline) private var isOffline
+    /// 날씨·코스는 화면 밖 보관소에 있다 — 탭을 다녀와도 이미 받은 값을 즉시 그린다
+    /// (TAB-STATE-CANON R1). 홈은 그 값을 보여주면서 뒤에서 갱신한다 (R3).
+    @ObservedObject var tabData: MoyeoTabDataStore
     @Binding var isBottomNavigationSuppressed: Bool
     @Binding var feedPosts: [FeedPost]
     var tripContext = TripInteractionContext()
     var onAuthCompleted: () -> Void = {}
     var onOpenCourseList: () -> Void = {}
     @State private var supportRoute: SupportRoute?
-    /// 실서버 공개 코스 — 로그인 세션이 있고 코스 API가 성공했을 때만 채워진다 (nil = 목데이터)
-    @State private var serverCourses: [TravelCourse]?
     private let bottomScrollClearance: CGFloat = 86
-    /// 09 히어로의 날씨. 로그인 상태면 서버가 정하고(GET /weather/gyeongbuk),
-    /// 아니면 목데이터로 떨어진다. 사용자가 고르는 값이 아니다.
-    @State private var serverWeather: ServerGyeongbukWeather?
 
-    private var weatherCondition: WeatherCondition {
-        serverWeather?.heroCondition ?? MockData.currentWeatherCondition
+    /// 히어로 날씨. 서버 응답이 오기 전에는 날씨를 지어내지 않는다 — 히어로 카드는 값이 온 뒤에 그린다.
+    private var weatherCondition: WeatherCondition? {
+        tabData.homeWeather?.heroCondition
     }
 
+    /// 추천 코스는 서버 공개 코스뿐이다. 못 받으면 빈 목록이고 §2 빈 상태를 그린다.
     private var recommendedCourses: [TravelCourse] {
-        if let serverCourses {
-            return Array(serverCourses.prefix(6))
-        }
-        return Array(
-            WeatherCoursePolicy
-                .recommendedCourses(for: weatherCondition, courses: MockData.courses)
-                .prefix(6)
-        )
+        Array((tabData.homeCourses ?? []).prefix(6))
+    }
+
+    /// 캐시가 없고 처음 받아오는 중일 때만 로딩 문구를 띄운다 (R2).
+    /// 이미 코스를 받아 뒀으면 갱신 중이라도 그 목록을 계속 보여준다 (R3).
+    private var isLoadingCoursesWithoutCache: Bool {
+        tabData.homeCourses == nil && tabData.isLoadingHomeCourses
     }
 
     var body: some View {
@@ -54,11 +53,11 @@ struct HomeView: View {
                         VStack(spacing: 18) {
                             if isOffline {
                                 OfflineHomeHeroCard()
-                            } else {
+                            } else if let weatherCondition {
                                 HomeHeroCard(
                                     content: WeatherHeroPolicy.content(for: weatherCondition),
                                     // 시안에 박힌 랜드마크 대신 실제 예보 지점을 보여준다.
-                                    place: serverWeather?.locationName
+                                    place: tabData.homeWeather?.locationName
                                 )
                             }
 
@@ -86,8 +85,16 @@ struct HomeView: View {
                                     }
                                     .padding(.horizontal, 18)
 
-                                    if let serverCourses, serverCourses.isEmpty {
-                                        // 실서버에 공개된 코스가 아직 없다 — 서버 상태 그대로 보여준다
+                                    if isLoadingCoursesWithoutCache {
+                                        Text(MoyeoEmptyText.loading)
+                                            .font(MoyeoTypography.cardMeta)
+                                            .foregroundStyle(MoyeoTheme.muted)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 18)
+                                            .padding(.vertical, 12)
+                                            .accessibilityIdentifier("home.serverCourses.loading")
+                                    } else if recommendedCourses.isEmpty {
+                                        // 서버가 준 코스만 그린다 — 없으면 그 상태를 그대로 보여준다
                                         Text("아직 공개된 코스가 없어요.")
                                             .font(MoyeoTypography.cardMeta)
                                             .foregroundStyle(MoyeoTheme.muted)
@@ -98,13 +105,10 @@ struct HomeView: View {
                                     } else {
                                         ScrollView(.horizontal, showsIndicators: false) {
                                             HStack(spacing: 14) {
-                                                ForEach(Array(recommendedCourses.enumerated()), id: \.element.id) { index, course in
+                                                ForEach(recommendedCourses) { course in
                                                     NavigationLink(value: course) {
-                                                        CourseCard(
-                                                            course: course,
-                                                            showsStatus: index == 0 && !course.isServerBacked
-                                                        )
-                                                        .frame(width: 136)
+                                                        CourseCard(course: course)
+                                                            .frame(width: 136)
                                                     }
                                                     .buttonStyle(.plain)
                                                     .accessibilityIdentifier("course.card.\(course.id)")
@@ -117,8 +121,11 @@ struct HomeView: View {
                                 }
                                 .id("home.middle")
 
-                                PopularCourseRanking()
-                                    .padding(.horizontal, 18)
+                                PopularCourseRanking(
+                                    courses: tabData.homePopularCourses,
+                                    isLoading: tabData.isLoadingHomePopularCourses
+                                )
+                                .padding(.horizontal, 18)
                             }
 
                             Color.clear
@@ -158,7 +165,7 @@ struct HomeView: View {
                 }
 
                 Button {
-                    supportRoute = .createRecruitment(recommendedCourses.first?.id ?? MockData.courses[0].id)
+                    supportRoute = .createRecruitment(recommendedCourses.first?.id ?? "")
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 22, weight: .bold))
@@ -215,20 +222,10 @@ struct HomeView: View {
                 onAuthCompleted: onAuthCompleted
             )
         }
-        .task {
-            guard MoyeoServerSync.isEnabled, serverWeather == nil else { return }
-            // 날씨는 실패해도 목데이터 히어로가 그대로 뜬다 — 화면을 비우지 않는다.
-            serverWeather = try? await WeatherAPIClient.shared.gyeongbuk()
-        }
-        .task {
-            guard MoyeoServerSync.isEnabled, serverCourses == nil else { return }
-            // 인기 코스를 먼저, 비어 있으면 공개 코스 전체를 쓴다
-            if let popular = try? await TravelCourseAPIClient.shared.popularCourses(), !popular.isEmpty {
-                serverCourses = popular.map(ServerCourseMapper.course(from:))
-            } else if let publicCourses = try? await TravelCourseAPIClient.shared.publicCourses() {
-                serverCourses = publicCourses.map(ServerCourseMapper.course(from:))
-            }
-        }
+        // 홈은 재진입할 때마다 뒤에서 갱신한다 — 가진 값은 그대로 그린 채다 (R3).
+        .task { await tabData.refreshHomeWeather() }
+        .task { await tabData.refreshHomeCourses() }
+        .task { await tabData.refreshHomePopularCourses() }
         .onAppear {
             isBottomNavigationSuppressed = supportRoute != nil
         }
@@ -255,13 +252,12 @@ struct HomeView: View {
 
 private struct CourseCard: View {
     let course: TravelCourse
-    let showsStatus: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let thumbnailURL = course.thumbnailURL {
-                    CachedRemoteImage(url: thumbnailURL) { image in
+                    CachedRemoteImage(url: thumbnailURL, fallbackShape: .landscape) { image in
                         image
                             .resizable()
                             .scaledToFill()
@@ -270,23 +266,10 @@ private struct CourseCard: View {
                     }
                     .frame(height: 86)
                     .clipped()
-                } else if course.isServerBacked {
-                    MoyeoTheme.leaf
-                        .frame(height: 86)
                 } else {
-                    MoyeoPhotoTile(
-                        mascot: course.mascot,
-                        mood: course.mood,
-                        height: 86,
-                        cornerRadius: 0
-                    )
-                }
-            }
-            .overlay(alignment: .topLeading) {
-                if showsStatus {
-                    Pill(text: "진행중", tint: .white)
-                        .background(Capsule().fill(MoyeoTheme.forest))
-                        .padding(7)
+                    // 서버가 썸네일을 주지 않은 코스 — 빈 판 대신 공용 플레이스홀더를 쓴다
+                    MoyeoPlaceholderImageView(shape: .landscape)
+                        .frame(height: 86)
                 }
             }
 
@@ -318,85 +301,10 @@ private struct CourseCard: View {
 }
 
 extension TravelCourse {
+    /// 서버 코스는 지역명을 내려주지 않는다 — 이동 거리를 대신 보여준다.
+    /// 코스별 모집 인원은 서버가 주지 않아 지어내지 않는다.
     var peopleText: String {
-        switch id {
-        case "course-cheongsong-juwangsan":
-            return "2/5명"
-        case "course-andong-hahoe":
-            return "3/6명"
-        case "course-gyeongju-history":
-            return "4/6명"
-        case "course-ulleung-island":
-            return "1/5명"
-        default:
-            // 서버 코스는 지역명을 내려주지 않는다 — 이동 거리를 대신 보여준다
-            return region.isEmpty ? distance : region
-        }
-    }
-}
-
-struct TripRecruitmentCard: View {
-    let trip: TripRecruitment
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                MascotAvatar(
-                    mascot: trip.coverMascot,
-                    size: 56,
-                    background: trip.status.tint.opacity(0.14)
-                )
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Pill(text: trip.status.rawValue, tint: trip.status.tint)
-                        Pill(text: trip.region, tint: MoyeoTheme.forest)
-                    }
-                    Text(trip.title)
-                        .font(.headline)
-                        .foregroundStyle(MoyeoTheme.ink)
-                        .lineLimit(2)
-                    if let course = MockData.course(for: trip.courseID) {
-                        Label(course.title, systemImage: "map.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(MoyeoTheme.text400)
-                            .lineLimit(1)
-                    }
-                    Text(trip.summary)
-                        .font(.subheadline)
-                        .foregroundStyle(MoyeoTheme.muted)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
-                    .font(.caption.bold())
-                    .foregroundStyle(MoyeoTheme.muted.opacity(0.7))
-                    .padding(.top, 6)
-            }
-
-            HStack(spacing: 8) {
-                MetricChip(icon: "calendar", text: trip.schedule)
-                MetricChip(icon: "mappin.and.ellipse", text: trip.meetupPoint)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    ParticipantStack(participants: trip.participants)
-                    Spacer()
-                    Text("\(trip.joined)/\(trip.capacity)명 · 최소 \(trip.minimumParticipants)명")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(MoyeoTheme.muted)
-                }
-                ProgressBar(value: trip.progress, tint: trip.status.tint, marker: trip.minimumProgress)
-                if !trip.hasMetMinimumParticipants {
-                    Text("출발 확정까지 \(trip.needsMoreParticipants)명 남았어요")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(MoyeoTheme.coral)
-                }
-            }
-        }
-        .moyeoCard()
+        region.isEmpty ? distance : region
     }
 }
 

@@ -206,11 +206,7 @@ final class AuthAPIClient: AuthAPIClientProtocol {
             throw AuthClientError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let backendError = try? decoder.decode(AuthBackendErrorResponse.self, from: data)
-            throw AuthClientError.server(
-                statusCode: httpResponse.statusCode,
-                message: backendError?.errorMessage ?? "요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
-            )
+            throw Self.failure(statusCode: httpResponse.statusCode, data: data, decoder: decoder)
         }
     }
 
@@ -263,17 +259,34 @@ final class AuthAPIClient: AuthAPIClientProtocol {
             throw AuthClientError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let backendError = try? decoder.decode(AuthBackendErrorResponse.self, from: data)
-            throw AuthClientError.server(
-                statusCode: httpResponse.statusCode,
-                message: backendError?.errorMessage ?? "요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
-            )
+            throw Self.failure(statusCode: httpResponse.statusCode, data: data, decoder: decoder)
         }
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
             throw AuthClientError.invalidResponse
         }
+    }
+
+    /// 오류 본문의 업무 코드까지 실어 오류를 만든다.
+    ///
+    /// 가입 게이트(409 `40902`·`40918`)면 루트에 알린다 — `/auth/providers` 처럼
+    /// 가입 절차가 아닌 보호 API 도 프로필 완성 검사를 받기 때문에 이 경로로도 온다.
+    /// **재발급은 하지 않는다**(정본 R1). 재발급해도 서버는 같은 409 를 준다.
+    private static func failure(
+        statusCode: Int,
+        data: Data,
+        decoder: JSONDecoder
+    ) -> AuthClientError {
+        let backendError = try? decoder.decode(AuthBackendErrorResponse.self, from: data)
+        if let step = MoyeoSignupGate.step(statusCode: statusCode, code: backendError?.code) {
+            MoyeoSignupGate.announce(step)
+        }
+        return AuthClientError.server(
+            statusCode: statusCode,
+            code: backendError?.code,
+            message: backendError?.errorMessage ?? "요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
+        )
     }
 }
 

@@ -22,6 +22,13 @@ struct MoyeoTripApp: App {
     @UIApplicationDelegateAdaptor(MoyeoAppDelegate.self) private var appDelegate
 
     init() {
+        // Firebase 를 가장 먼저 구성한다.
+        //
+        // SwiftUI 앱은 App.init() 이 앱 델리게이트의 didFinishLaunching 보다 먼저 돈다.
+        // 델리게이트에서만 configure 하면, 그 사이에 Firebase 를 건드리는 코드(FirebaseMessaging 의
+        // 알림 프록시 등)가 "The default Firebase app has not yet been configured" 경고를 남긴다.
+        // 여기서 구성해 두면 그 창이 사라진다. 델리게이트 쪽 호출은 그대로 두되 이미 구성됐으면 건너뛴다.
+        MoyeoFirebaseBootstrap.configureIfPossible()
         SentryBootstrap.startIfConfigured()
         #if canImport(KakaoSDKCommon)
         if let nativeAppKey = Bundle.main.object(forInfoDictionaryKey: "KAKAO_NATIVE_APP_KEY") as? String,
