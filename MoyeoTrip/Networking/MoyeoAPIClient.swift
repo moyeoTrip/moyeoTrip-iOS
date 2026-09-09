@@ -196,6 +196,43 @@ final class MoyeoAPIClient: @unchecked Sendable {
         return try decode(data)
     }
 
+    /// JSON 파트 하나 + **파일 여러 개**를 `multipart/form-data` 로 보낸다.
+    /// `POST /feeds` 가 `request`(JSON) 와 `images`(1~10장)를 요구한다.
+    func sendMultipart<Body: Encodable, Response: Decodable>(
+        _ path: String,
+        method: String,
+        jsonPartName: String,
+        jsonPart: Body,
+        files: [MoyeoMultipartFile]
+    ) async throws -> Response {
+        let boundary = "moyeo.\(UUID().uuidString)"
+        var body = Data()
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"\(jsonPartName)\"\r\n".utf8))
+        body.append(Data("Content-Type: application/json\r\n\r\n".utf8))
+        body.append(try encoder.encode(jsonPart))
+        body.append(Data("\r\n".utf8))
+        for file in files {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data(
+                "Content-Disposition: form-data; name=\"\(file.partName)\"; filename=\"\(file.fileName)\"\r\n".utf8
+            ))
+            body.append(Data("Content-Type: \(file.mimeType)\r\n\r\n".utf8))
+            body.append(file.data)
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+
+        let data = try await request(
+            path: path,
+            method: method,
+            query: [],
+            bodyData: body,
+            contentType: "multipart/form-data; boundary=\(boundary)"
+        )
+        return try decode(data)
+    }
+
     /// 파일 한 개(+선택 텍스트 파트)를 `multipart/form-data` 로 보낸다.
     /// `POST /chat-rooms/{id}/messages/images` 가 `image` 파일 파트와 선택 `caption` 텍스트 파트를 요구한다.
     func sendMultipart<Response: Decodable>(

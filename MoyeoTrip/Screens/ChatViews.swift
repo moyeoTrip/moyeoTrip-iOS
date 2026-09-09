@@ -254,9 +254,10 @@ struct ChatRoomBody: View {
     VStack(spacing: 0) {
       ChatRoomStatusHeader(thread: displayThread)
 
-      if isOffline {
-        OfflineChatBanner()
-      }
+      // 오프라인 안내는 **앱 전역 배너 하나로만** 낸다 (`MoyeoOfflineBanner`, ContentView).
+      // 예전에는 여기서 채팅 전용 배너를 하나 더 그려 「연결이 끊겼어요」가 한 화면에
+      // 두 번 나왔다 (사용자 지적, 2026-09-06 · 37 캡처).
+      // 대기 중인 메시지라는 사실은 말풍선의 「전송 대기」 배지가 이미 말해 준다.
 
       if let roadmap = serverContent?.roadmap, roadmap.active {
         // 여행 당일에만 서버가 로드맵을 활성으로 준다
@@ -532,26 +533,6 @@ private struct ServerRoadmapBar: View {
       parts.append(current.title)
     }
     return parts.joined(separator: " · ")
-  }
-}
-
-private struct OfflineChatBanner: View {
-  var body: some View {
-    HStack(alignment: .top, spacing: 8) {
-      Circle()
-        .fill(MoyeoTheme.warningText)
-        .frame(width: 6, height: 6)
-        .padding(.top, 5)
-      Text("연결이 끊겼어요. **보낸 메시지는 연결되면 자동으로 전송**돼요.")
-        .font(MoyeoTypography.font(size: 11.5, relativeTo: .caption))
-        .foregroundStyle(MoyeoTheme.warningText)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 9)
-    .background(MoyeoTheme.warningBackground)
-    .accessibilityElement(children: .combine)
-    .accessibilityIdentifier("offline.chat.banner")
   }
 }
 

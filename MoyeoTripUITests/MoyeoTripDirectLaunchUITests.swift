@@ -133,7 +133,8 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
     func testOfflineChatQueuesMessageWithoutDisablingComposer() {
         launch(screen: "chat:chat-cheongsong-juwangsan", arguments: ["UITEST_OFFLINE_CHAT"])
 
-        XCTAssertTrue(element("offline.chat.banner").waitForExistence(timeout: 4))
+        // 오프라인 안내는 앱 전역 배너 하나뿐이다 — 채팅 전용 배너는 지웠다(문구가 두 번 나왔다)
+        XCTAssertTrue(element("offline.banner").waitForExistence(timeout: 4))
         XCTAssertFalse(element("chat.attachment").isEnabled)
         let composer = app.textFields["메시지 입력"]
         XCTAssertTrue(composer.isHittable)
@@ -230,7 +231,8 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
     @MainActor
     func testOfflineChatDirectCaptureIncludesDeterministicPendingMessage() {
         launch(screen: "chat:chat-cheongsong-juwangsan", arguments: ["UITEST_OFFLINE_CHAT"])
-        XCTAssertTrue(element("offline.chat.banner").waitForExistence(timeout: 4))
+        // 오프라인 안내는 앱 전역 배너 하나뿐이다 — 채팅 전용 배너는 지웠다(문구가 두 번 나왔다)
+        XCTAssertTrue(element("offline.banner").waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["연결되면 보내주세요"].exists)
         XCTAssertTrue(app.staticTexts["전송 대기"].exists)
     }

@@ -72,7 +72,7 @@ struct AuthOnboardingView: View {
                         .font(.subheadline.weight(.heavy))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
+                        .frame(height: MoyeoTheme.ctaHeight)
                         .background(MoyeoTheme.forest)
                         .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
                 }
@@ -377,7 +377,7 @@ struct AuthBasicsView: View {
                             .font(.subheadline.weight(.heavy))
                             .foregroundStyle(MoyeoTheme.ink)
                             .frame(width: 92)
-                            .frame(height: 52)
+                            .frame(height: MoyeoTheme.ctaHeight)
                             .background(MoyeoTheme.card)
                             .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
                             .overlay {

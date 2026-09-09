@@ -12,7 +12,7 @@ enum SupportRoute: Hashable, Identifiable {
   case createRecruitment(String)
   case hostManage(String)
   case search
-  case customCourse
+  case customCourse(String?)
   case createSchedule
   case createMeeting
   /// 17-4 · 17-4a · 17-4b — 3단계 인원. 값은 **최대 인원**이고, nil 이면 폼 기본값(5)이다.
@@ -80,6 +80,26 @@ enum SupportRoute: Hashable, Identifiable {
   case accountProviders
   /// 20-3a 공지 수정 · 삭제. 값은 roomId — 화면이 그 방의 공지를 받아 첫 공지를 연다.
   case noticeEdit(String)
+  // 내가 만든 것을 되돌리는 화면들 (2026-09-04 BE 회신으로 API 가 열렸다).
+  // 정본 `docs/api/BACKEND_REQUEST_CHANGES_2026-09-04.md`.
+  /// 23-2 내 피드 액션 시트 — 인자는 피드 id.
+  case feedActions(String)
+  /// 23-3 피드 삭제 확인.
+  case feedDelete(String)
+  /// 24-6 피드 수정 (본문만).
+  case feedEdit(String)
+  /// 23-1a 내 댓글 수정 · 삭제 — 인자는 피드 id.
+  case commentEdit(String)
+  /// 18-6 모집 내용 수정 (호스트) — 인자는 방 id.
+  case recruitEdit(String)
+  /// 18-7 코스 이름 · 소개 수정 — 인자는 방 id.
+  case courseTitleEdit(String)
+  /// 15 모집 상세 — 인자는 모집 id(`server-room-{roomId}`). 20-1 의 「모집 상세」가 여기로 온다.
+  case tripDetail(String)
+  /// 24 피드 글쓰기 — 27-1 여행 마무리의 「피드에 오늘의 여행 기록 남기기」가 여기로 온다.
+  case feedWrite
+  /// 20-6 내 채팅 메시지 삭제 — 인자는 방 id.
+  case messageDelete(String)
   /// 29-1a 차단 해제 확인 시트를 연 29-1
   case unblockConfirm
   /// 27-2a 친구 정리 시트를 연 27-2
@@ -103,8 +123,8 @@ enum SupportRoute: Hashable, Identifiable {
       return "hostManage.\(tripID)"
     case .search:
       return "search"
-    case .customCourse:
-      return "customCourse"
+    case .customCourse(let courseID):
+      return "customCourse-\(courseID ?? "")"
     case .createSchedule:
       return "createSchedule"
     case .createMeeting:
@@ -160,6 +180,15 @@ enum SupportRoute: Hashable, Identifiable {
     case .meetingEdit(let roomID): return "meetingEdit.\(roomID)"
     case .accountProviders: return "accountProviders"
     case .noticeEdit(let roomID): return "noticeEdit.\(roomID)"
+    case .feedActions(let feedID): return "feedActions.\(feedID)"
+    case .feedDelete(let feedID): return "feedDelete.\(feedID)"
+    case .feedEdit(let feedID): return "feedEdit.\(feedID)"
+    case .commentEdit(let feedID): return "commentEdit.\(feedID)"
+    case .recruitEdit(let roomID): return "recruitEdit.\(roomID)"
+    case .courseTitleEdit(let roomID): return "courseTitleEdit.\(roomID)"
+    case .tripDetail(let tripID): return "tripDetail.\(tripID)"
+    case .feedWrite: return "feedWrite"
+    case .messageDelete(let roomID): return "messageDelete.\(roomID)"
     case .unblockConfirm: return "unblockConfirm"
     case .friendManage: return "friendManage"
     }
@@ -230,7 +259,10 @@ struct SupportDestinationView: View {
       ServerTripDestination(tripID: tripID, tripContext: tripContext) { trip in
         HostManageView(
           trip: trip,
-          thread: tripContext.chatThreadProvider(trip),
+          // 세션이 그 방의 스레드를 아직 모르면 **방 id 로 만들어 준다**.
+          // 예전에는 nil 이라 하단 「채팅방 들어가기」가 회색으로 잠겼다 (18, 2026-09-09).
+          thread: tripContext.chatThreadProvider(trip)
+            ?? ServerTripMapper.roomID(fromTripID: trip.id).map(ServerTripMapper.stubThread(serverRoomID:)),
           onSendChatMessage: tripContext.onSendChatMessage,
           onApproveApplicant: tripContext.onApproveHostApplicant,
           onRejectApplicant: tripContext.onRejectHostApplicant,
@@ -239,8 +271,9 @@ struct SupportDestinationView: View {
       }
     case .search:
       SearchView(tripContext: tripContext)
-    case .customCourse:
-      CustomCourseEditorView()
+    case .customCourse(let courseID):
+      // 17-1. 코스 id 를 들고 들어오면 **그 등록 코스를 불러온 상태**로 연다 (딥링크·QA 진입).
+      CustomCourseStartView(startingCourseID: courseID.flatMap(Int64.init))
     // 17-2~17-7 은 별도 화면이 아니라 실제 모집 만들기 플로우의 단계다.
     // 캡처 전용 래퍼를 두지 않고 실제 플로우를 해당 단계로 열어 찍는다.
     case .createSchedule:
@@ -265,6 +298,14 @@ struct SupportDestinationView: View {
           ?? TourismPlace.pending(id: placeID)
       )
     // 18-1 · 18-2 · 18-3 코스 수정. 18 과 같은 방식으로 방 id 를 직접 조회한다.
+    case .tripDetail(let tripID):
+      // 15 모집 상세. 방 id 만 아는 진입이라 같은 통로로 모집을 세운다.
+      ServerTripDestination(tripID: tripID, tripContext: tripContext) { trip in
+        TripDetailView(trip: trip)
+      }
+    case .feedWrite:
+      // 24 피드 글쓰기. 27-1 에서 권할 때 실제로 열려야 한다 — 예전에는 빈 버튼이었다.
+      FeedWriteView()
     case .courseEdit(let tripID, let state):
       ServerTripDestination(tripID: tripID, tripContext: tripContext) { trip in
         CourseRouteEditView(
@@ -408,6 +449,10 @@ struct SupportDestinationView: View {
       } else {
         MoyeoEmptyStateView(message: MoyeoEmptyText.noNotices)
       }
+    case .feedActions, .feedDelete, .feedEdit, .commentEdit,
+         .recruitEdit, .courseTitleEdit, .messageDelete:
+      // 화면 연결은 `SupportEditRoutes.swift` 에 있다 — 이 구조체가 300줄 제한에 걸렸다.
+      editRoute(route)
     case .unblockConfirm:
       BlockedUsersView(startsWithUnblockConfirmation: true)
     case .friendManage:
@@ -563,7 +608,12 @@ private struct TripConfirmedDestination: View {
       if let trip {
         TripConfirmedView(
           trip: trip,
-          thread: tripContext.chatThreadProvider(trip),
+          // 세션이 그 방의 스레드를 아직 모르면 **방 id 로 만들어 준다**.
+          // 예전에는 nil 을 그대로 넘겨 하단 「채팅방으로 가기」가 회색으로 잠겼다 —
+          // 방 id 만 아는 진입(캡처·딥링크)에서는 늘 그랬다 (20-4, 사용자 지적 2026-09-09).
+          // 채팅방 화면이 열리면 스스로 내용을 받아 채운다(498줄과 같은 방식).
+          thread: tripContext.chatThreadProvider(trip)
+            ?? serverRoomID.map(ServerTripMapper.stubThread(serverRoomID:)),
           onSendChatMessage: tripContext.onSendChatMessage,
           participants: participants,
           participantNicknamesByUserID: nicknamesByUserID
@@ -1023,22 +1073,12 @@ struct LeaveConfirmationDialog: View {
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 10)
 
-        if role == .host {
-          // 이유 입력은 본문에서 한 줄 띄워 별개 입력으로 읽히게 한다
-          VStack(alignment: .leading, spacing: 6) {
-            Text("나가는 이유 (필수)")
-              .font(.caption)
-              .foregroundStyle(MoyeoTheme.muted)
-            Text("일정 변동으로 어렵게 됐어요...")
-              .font(.subheadline.weight(.semibold))
-              .foregroundStyle(MoyeoTheme.ink)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(12)
-          .background(MoyeoTheme.subtleBackground)
-          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-          .padding(.top, 20)
-        }
+        // 「나가는 이유」 칸을 두지 않는다.
+        // `DELETE /chat-rooms/{id}/members/me` 는 **본문을 무시한다** — 사유를 실어 보내도
+        // 200 만 오고 어디에도 남지 않는다(2026-09-09 실서버로 방 244 를 실제로 나가 확인).
+        // 예전에는 이 자리에 「일정 변동으로 어렵게 됐어요...」라는 **고정 글자**가 있어서
+        // 입력처럼 보이는데 눌러도 아무 일이 없었다 (31, 사용자 지적).
+        // 받아 주는 API 가 생기면 입력으로 만든다 — 요청은 `BE-요청사항-2026-09-04.md` §8-4.
 
         HStack(spacing: 8) {
           Button(action: onCancel) {
@@ -1289,18 +1329,15 @@ enum ServerNotificationPresentation {
     return "이전"
   }
 
+  /// 알림 한 줄의 시각 — **상대 시각**이다 (`3시간 전`).
+  ///
+  /// 웹이 `formatRelative` 로 그렇게 쓰고 있었는데 앱 둘만 `오후 3:19` · `9월 1일 오후 3:19`
+  /// 처럼 절대 시각이었다 (사용자 지적, 2026-09-09). 알림은 "언제 왔나"가 아니라
+  /// "얼마나 됐나"가 궁금한 목록이라 상대 시각이 맞다.
+  /// 규칙·경계값은 피드·댓글과 **같은 부품**(`ServerFeedMapper.createdAtText`)을 쓴다 —
+  /// 화면마다 다른 반올림을 두면 같은 시각이 「59분 전」과 「1시간 전」으로 갈린다.
   static func timeText(for createdAt: String) -> String {
-    guard let date = date(from: createdAt) else { return createdAt }
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "ko_KR")
-    if Calendar.current.isDateInToday(date) {
-      formatter.dateFormat = "a h:mm"
-    } else if Calendar.current.isDateInYesterday(date) {
-      formatter.dateFormat = "'어제' a h:mm"
-    } else {
-      formatter.dateFormat = "M월 d일 a h:mm"
-    }
-    return formatter.string(from: date)
+    ServerFeedMapper.createdAtText(createdAt)
   }
 }
 
@@ -1324,17 +1361,37 @@ private enum SupportNotificationTarget {
 private struct RemovalReasonView: View {
   /// 실서버 강퇴 이력 — 알림 13-1에서 서버 알림으로 진입하면 채워진다
   var serverHistory: ServerKickHistory?
+  /// 알림 없이(딥링크·캡처) 열렸을 때 직접 읽어 온 이력.
+  @State private var loadedHistory: ServerKickHistory?
   @Environment(\.dismiss) private var dismiss
 
+  /// 넘겨받은 것이 있으면 그것을, 없으면 직접 읽은 것을 쓴다.
+  private var history: ServerKickHistory? { serverHistory ?? loadedHistory }
+
+  /// 알림 없이(딥링크·캡처) 열렸을 때 **내 가장 최근 강퇴 알림**의 이력을 읽는다.
+  ///
+  /// 예전에는 그럴 때 목데이터(「감포 바다 일출 모임」 등)를 그렸다 — R1 위반이었다.
+  /// 지어내는 대신 실제 이력을 읽고, 없으면 없다고 적는다.
+  private func loadLatestKickHistory() async {
+    guard serverHistory == nil, loadedHistory == nil else { return }
+    guard let page = try? await NotificationAPIClient.shared.notifications(size: 50) else { return }
+    guard let kicked = page.notifications.first(where: { $0.type == "CHAT_ROOM_KICKED" }) else { return }
+    loadedHistory = try? await NotificationAPIClient.shared.kickHistory(notificationID: kicked.notificationId)
+  }
+
+  // **지어내지 않는다.** 예전에는 서버 이력이 없으면 「감포 바다 일출 모임」·
+  // 「2026.08.22 (토) 오후 6:02」·가짜 사유를 그렸다 — 목데이터다 (NO-MOCK-CANON R1 위반).
+  // 안드로이드는 값이 없으면 이름 없이 사실만 남기고 있었고 그쪽이 맞다
+  // (2026-09-09 사용자가 「안드만 일시가 없다」고 짚어 확인하다 드러났다).
   private var titleText: String {
-    guard let serverHistory else { return "감포 바다 일출 모임에서\n내보내졌어요" }
-    return "\(serverHistory.roomTitle)에서\n내보내졌어요"
+    guard let history else { return "모임에서 내보내졌어요" }
+    return "\(history.roomTitle)에서\n내보내졌어요"
   }
 
   private var metaText: String {
-    guard let serverHistory else { return "2026.08.22 (토) 오후 6:02 · 호스트 결정" }
-    guard let date = ServerNotificationPresentation.date(from: serverHistory.kickedAt) else {
-      return serverHistory.kickedAt
+    guard let history else { return "호스트 결정" }
+    guard let date = ServerNotificationPresentation.date(from: history.kickedAt) else {
+      return history.kickedAt
     }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "ko_KR")
@@ -1342,11 +1399,9 @@ private struct RemovalReasonView: View {
     return "\(formatter.string(from: date)) · 호스트 결정"
   }
 
-  private var reasonText: String {
-    guard let serverHistory else {
-      return "“모임 컨셉과 맞지 않는 대화가 반복되어, 남은 멤버들을 위해 함께하기 어렵다고 판단했어요.”"
-    }
-    return "“\(serverHistory.reason)”"
+  private var reasonText: String? {
+    guard let history else { return nil }
+    return "“\(history.reason)”"
   }
 
   private let aftermath = [
@@ -1385,9 +1440,10 @@ private struct RemovalReasonView: View {
         Text("호스트가 남긴 사유")
           .font(.subheadline.weight(.heavy))
           .foregroundStyle(MoyeoTheme.ink)
-        Text(reasonText)
+        // 사유가 없으면 그 사실을 적는다 — 안드로이드와 같은 문구다.
+        Text(reasonText ?? "호스트가 남긴 사유가 없어요.")
           .font(.subheadline)
-          .foregroundStyle(MoyeoTheme.text700)
+          .foregroundStyle(reasonText == nil ? MoyeoTheme.muted : MoyeoTheme.text700)
           .fixedSize(horizontal: false, vertical: true)
           .padding(12)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -1440,7 +1496,7 @@ private struct RemovalReasonView: View {
           .font(.subheadline.weight(.heavy))
           .foregroundStyle(.white)
           .frame(maxWidth: .infinity)
-          .frame(height: 52)
+          .frame(height: MoyeoTheme.ctaHeight)
           .background(MoyeoTheme.forest)
           .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
       }
@@ -1451,6 +1507,7 @@ private struct RemovalReasonView: View {
       .padding(.bottom, 12)
       .background(MoyeoTheme.background)
     }
+    .task { await loadLatestKickHistory() }
     .accessibilityIdentifier("removal-reason-screen")
   }
 }

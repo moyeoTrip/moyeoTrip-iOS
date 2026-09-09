@@ -200,7 +200,9 @@ struct SearchView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("뒤로")
 
-            SearchField(text: $query, placeholder: "지역, 테마, 코스 검색")
+            // 안내 문구는 네 표면이 같아야 한다 — 11 탐색의 진입 칸과도 같은 말이다
+            // (예전에는 iOS 「지역, 테마, 코스 검색」 · 안드 「지역, 테마, 모임 검색」 로 셋이 달랐다).
+            SearchField(text: $query, placeholder: "어디로 떠나고 싶나요?")
                 .frame(height: 44)
                 .onChange(of: query) { _, newValue in
                     if newValue.isEmpty {

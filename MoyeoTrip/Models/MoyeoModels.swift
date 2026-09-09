@@ -287,7 +287,9 @@ struct Participant: Identifiable, Hashable {
 
 struct ChatThread: Identifiable, Hashable {
     let id: String
-    let tripTitle: String
+    /// 방 id 로만 들어오는 진입에서는 처음에 비어 있고, 상세 응답이 오면 채워진다 —
+    /// 그래서 `let` 이 아니라 `var` 다 (`isReadOnly` 와 같은 이유, 20-1 2026-09-09).
+    var tripTitle: String
     let region: String
     let mascot: String
     let lastMessage: String
@@ -297,7 +299,9 @@ struct ChatThread: Identifiable, Hashable {
     let statusDetail: String
     var members: [Participant]
     var messages: [ChatMessage]
-    let isReadOnly: Bool
+    /// 서버 응답을 얹을 때 다시 정해진다 — `let` 이면 라우트 진입용 자리끼우개의
+    /// `true` 가 그대로 남아 모집 중인 방까지 「종료」로 그려진다 (2026-09-08 결함).
+    var isReadOnly: Bool
     var closureReason: String?
     var archiveNotice: String?
     var archiveStatus: String?
@@ -411,4 +415,18 @@ struct ProfileSummary: Hashable {
         points: 0,
         favoriteRegions: []
     )
+}
+
+extension FeedPost {
+  /// 신고할 수 있는 피드인가. 서버 피드가 아니면(목 id·미로그인) 보낼 대상이 없고,
+  /// 내가 쓴 피드는 서버가 받지 않는다 — 자기 피드를 신고하면 400 `40039`
+  /// (`본인이 작성한 피드는 신고할 수 없습니다`)다 (2026-09-03 실서버 확인).
+  ///
+  /// **목록 카드와 상세가 같은 규칙을 써야 한다.** 예전에는 상세에만 이 판정이 있고
+  /// 목록의 `...` 는 `Button` 조차 아니어서 눌러도 아무 일도 없었다.
+  var canReport: Bool {
+    guard serverFeedID != nil else { return false }
+    guard let authorID = serverAuthorID, let myID = MoyeoCurrentUser.id else { return true }
+    return authorID != myID
+  }
 }

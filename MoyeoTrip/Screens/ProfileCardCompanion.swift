@@ -116,14 +116,6 @@ extension ProfileCardCompanion {
     switch subject {
     case .unavailable:
       self.init(nickname: "")
-    case .me(let nickname, let profileImageURL, let introduction, let travelStyles):
-      self.init(
-        nickname: nickname,
-        mascot: profileImageURL == nil ? Self.mascotEmoji(forNickname: nickname) : nil,
-        profileImageURL: profileImageURL,
-        introduction: introduction,
-        travelStyles: travelStyles
-      )
     case .serverCompanion(let companion):
       self.init(companion: companion)
     case .serverUser(let reference):
@@ -133,6 +125,9 @@ extension ProfileCardCompanion {
         profileImageURL: MoyeoImageURL.resolve(reference.profileImageUrl),
         introduction: reference.introduction
       )
+      // 진입점이 색을 알고 있으면 먼저 칠한다 — 공개 프로필을 기다리며 기본색으로
+      // 그렸다가 바뀌면 "한 박자 늦게 색이 변한다"로 보인다.
+      if let color = reference.nicknameColor { nicknameColor = color }
     }
     applyServerValues(profile: profile, reviews: reviews)
   }

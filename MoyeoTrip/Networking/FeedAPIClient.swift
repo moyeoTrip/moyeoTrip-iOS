@@ -137,6 +137,32 @@ final class FeedAPIClient: @unchecked Sendable {
 
     /// 피드 신고. 성공은 204 다.
     ///
+    /// 24 피드 글쓰기 — `POST /api/v1/feeds` (multipart: `request` JSON + `images` 1~10장).
+    ///
+    /// **예전에는 이 호출이 없었다.** iOS 의 「게시하기」는 화면 안 목록에만 글을 끼워 넣고
+    /// 서버에는 아무것도 올리지 않았다 — 앱을 다시 켜면 사라지고, 웹·안드로이드에서도 안 보였다
+    /// (웹 `createFeed` · 안드 `FeedRepository.createFeed` 는 둘 다 이 엔드포인트를 부른다,
+    /// 2026-09-09 발견). 제목 칸은 서버가 받지 않는다 — `content` 하나뿐이다(BE 요청 §8-7).
+    func createFeed(
+        chatRoomID: Int64,
+        content: String,
+        visibility: String,
+        images: [MoyeoMultipartFile]
+    ) async throws -> ServerFeed {
+        struct CreateRequest: Encodable {
+            let chatRoomId: Int64
+            let content: String
+            let visibility: String
+        }
+        return try await api.sendMultipart(
+            "/api/v1/feeds",
+            method: "POST",
+            jsonPartName: "request",
+            jsonPart: CreateRequest(chatRoomId: chatRoomID, content: content, visibility: visibility),
+            files: images
+        )
+    }
+
     /// `details` 는 선택이고 서버 상한이 300자다. 서로 다른 이용자의 신고 3건이 모이면
     /// 서버가 `visibility=PRIVATE` · `hiddenByReports=true` 로 바꾼다.
     /// 오류: 본인 피드 400 · 권한 없음 403 · 없는 피드 404 · 중복 신고 409 `40917`(실서버 확인).
@@ -182,6 +208,56 @@ final class FeedAPIClient: @unchecked Sendable {
             "/api/v1/feeds/\(feedID)/comments",
             method: "POST",
             body: CommentRequest(content: content, parentCommentId: parentCommentID)
+        )
+    }
+
+    // MARK: - 수정 · 삭제 (2026-09-04 BE 회신으로 열렸다)
+    //
+    // 정본 `docs/api/BACKEND_REQUEST_CHANGES_2026-09-04.md` · 2026-09-07 실서버로 확인.
+
+    /// 피드 수정 — **본문만** 받는다.
+    ///
+    /// 사진은 이 API 로 교체하지 않고 기존 첨부가 그대로 유지된다. 공개 범위도 못 바꾼다 —
+    /// 댓글 쓴 사람이 갑자기 피드를 못 보게 되는 것을 막으려는 정책이다.
+    /// 그래서 24-6 화면에는 사진·공개범위 편집 UI 를 두지 않는다(두면 죽은 버튼이 된다).
+    /// 작성자 본인만 된다. 없는 피드는 404 `40417`.
+    func updateFeed(feedID: Int64, content: String) async throws {
+        struct UpdateRequest: Encodable { let content: String }
+        try await api.sendVoid(
+            "/api/v1/feeds/\(feedID)",
+            method: "PUT",
+            body: UpdateRequest(content: content)
+        )
+    }
+
+    /// 피드 삭제 — 204 No Content.
+    ///
+    /// 사진·댓글·좋아요·신고 관계가 함께 정리되고, 커밋 뒤 이미지 파일도 지워진다.
+    /// **되돌릴 수 없다** — 23-3 확인 단계를 거친 뒤에만 부른다.
+    func deleteFeed(feedID: Int64) async throws {
+        try await api.sendVoid("/api/v1/feeds/\(feedID)", method: "DELETE")
+    }
+
+    /// 댓글 수정 — 공백 불가 · **최대 500자**다.
+    ///
+    /// 신고 `details` 의 300자와 다르다 — 헷갈리기 쉬우니 화면에서도 500 으로 자른다.
+    /// 작성자 본인만 된다. 남의 댓글은 403, 없는 댓글은 404 `40422`.
+    func updateComment(feedID: Int64, commentID: Int64, content: String) async throws {
+        struct UpdateRequest: Encodable { let content: String }
+        try await api.sendVoid(
+            "/api/v1/feeds/\(feedID)/comments/\(commentID)",
+            method: "PUT",
+            body: UpdateRequest(content: content)
+        )
+    }
+
+    /// 댓글 삭제 — 최상위 댓글을 지우면 **달린 답글도 함께** 사라진다.
+    ///
+    /// 화면이 그 사실을 먼저 알려야 한다.
+    func deleteComment(feedID: Int64, commentID: Int64) async throws {
+        try await api.sendVoid(
+            "/api/v1/feeds/\(feedID)/comments/\(commentID)",
+            method: "DELETE"
         )
     }
 }
@@ -272,9 +348,46 @@ enum ServerFeedMapper {
         }
     }
 
-    /// "2026-09-15T19:30:00" → "2026.09.15"
+    /// 피드·댓글의 작성 시각 표기.
+    ///
+    /// **상대 시각이다** — 기획(`screens-additions3.jsx` 의 `2시간 전`)과 웹
+    /// (`moyeo-api.js` 의 `formatRelative`)이 그렇게 쓴다. 예전에는 iOS·안드로이드만
+    /// `2026.09.07` 처럼 절대 날짜를 써서 4열 비교에서 두 앱만 달라 보였다
+    /// (2026-09-08 사용자 지적). 규칙과 경계값은 웹 `formatRelative` 를 그대로 옮겼다:
+    /// 1분 미만 `방금 전` · 60분 미만 `N분 전` · 24시간 미만 `N시간 전` ·
+    /// 1일 `어제` · 7일 미만 `N일 전` · 그 이상은 `YYYY.MM.DD`.
     static func createdAtText(_ dateTime: String) -> String {
-        guard let datePart = dateTime.split(separator: "T").first else { return dateTime }
-        return datePart.replacingOccurrences(of: "-", with: ".")
+        guard let then = Self.serverDate(dateTime) else {
+            // 파싱 실패는 지어내지 않고 날짜 부분만 보여준다.
+            guard let datePart = dateTime.split(separator: "T").first else { return dateTime }
+            return datePart.replacingOccurrences(of: "-", with: ".")
+        }
+        let minutes = Int(Date().timeIntervalSince(then) / 60)
+        if minutes < 1 { return "방금 전" }
+        if minutes < 60 { return "\(minutes)분 전" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)시간 전" }
+        let days = hours / 24
+        if days == 1 { return "어제" }
+        if days < 7 { return "\(days)일 전" }
+        return Self.absoluteFormatter.string(from: then)
     }
+
+    /// 서버는 타임존 없는 `yyyy-MM-dd'T'HH:mm:ss[.SSSSSS]` 를 준다 — 기기 시간대로 읽는다.
+    private static func serverDate(_ dateTime: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: dateTime) { return date }
+        }
+        return nil
+    }
+
+    private static let absoluteFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy.MM.dd"
+        return formatter
+    }()
 }

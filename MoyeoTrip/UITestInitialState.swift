@@ -234,7 +234,8 @@ struct UITestInitialState {
     }
     if screen.matches("custom-course", "customcourse") {
       selectedTab = .home
-      homePath.append(SupportRoute.customCourse)
+      // 지정이 없으면 빈 에디터, 코스 id 를 주면 그 코스를 불러온 상태로 연다
+      homePath.append(SupportRoute.customCourse(screen.identifier))
       return true
     }
     if screen.matches("create-schedule", "createschedule") {
@@ -488,6 +489,44 @@ struct UITestInitialState {
     if screen.matches("notice-edit", "noticeedit") {
       selectedTab = .home
       homePath.append(SupportRoute.noticeEdit(screen.identifier ?? ""))
+      return true
+    }
+    // 내가 만든 것을 되돌리는 화면들 (2026-09-04 BE 회신으로 API 가 열렸다).
+    // 캡처 라우트 이름은 기획·웹과 **글자 그대로 같게** 맞춘다 — 세 표면이 같은 화면을 찍어야 한다.
+    if screen.matches("feed-actions", "feedactions") {
+      // 피드 탭에는 NavigationPath 가 없다 — 기존 `notice-edit` 과 같이 홈 경로로 띄운다.
+      selectedTab = .home
+      homePath.append(SupportRoute.feedActions(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("feed-delete", "feeddelete") {
+      selectedTab = .home
+      homePath.append(SupportRoute.feedDelete(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("feed-edit", "feededit") {
+      selectedTab = .home
+      homePath.append(SupportRoute.feedEdit(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("comment-edit", "commentedit") {
+      selectedTab = .home
+      homePath.append(SupportRoute.commentEdit(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("recruit-edit", "recruitedit") {
+      selectedTab = .home
+      homePath.append(SupportRoute.recruitEdit(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("course-title-edit", "coursetitleedit") {
+      selectedTab = .home
+      homePath.append(SupportRoute.courseTitleEdit(screen.identifier ?? ""))
+      return true
+    }
+    if screen.matches("message-delete", "messagedelete") {
+      selectedTab = .home
+      homePath.append(SupportRoute.messageDelete(screen.identifier ?? ""))
       return true
     }
     if screen.matches("favorite-rooms", "favoriterooms") {

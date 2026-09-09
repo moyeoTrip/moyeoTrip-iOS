@@ -21,6 +21,9 @@ struct AttachPhotoComposerView: View {
     @State private var photoData: Data?
     @State private var pickedImage: Image?
     @State private var pixelSizeText = ""
+    /// 사진과 함께 보내는 한 줄. 서버가 `caption` 파트로 받는다(선택) — 웹·기획에는 있는데
+    /// 앱 둘에만 입력이 없어서 같은 화면이 플랫폼마다 달랐다 (2026-09-09 전수 확인).
+    @State private var caption = ""
 
     /// 20MB 를 넘으면 보내지 않는다 — 기획 문구("최대 20MB · 1장씩 전송")와 같은 한도다.
     private var isOversize: Bool {
@@ -40,21 +43,62 @@ struct AttachPhotoComposerView: View {
             identifier: "attachPhoto",
             onSend: send
         ) {
-            preview
-            PhotosPicker(selection: $photoItem, matching: .images) {
-                Label(
-                    photoData == nil ? "사진 고르기" : "다른 사진 고르기",
-                    systemImage: "photo.on.rectangle"
-                )
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.forest)
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.forest))
+            // 아직 고르지 않았으면 **고르는 자리 자체가 점선 박스**다 (기획·웹·안드로이드와 같은 구조).
+            // 예전에는 빈 상태 안내 + 아래에 작은 초록 테두리 버튼이어서 iOS 만 생김새가 달랐다.
+            if photoData == nil {
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    VStack(spacing: 6) {
+                        Image(systemName: "camera")
+                            .font(.system(size: 26))
+                            .foregroundStyle(MoyeoTheme.forest)
+                        Text("사진 고르기")
+                            .font(.subheadline.weight(.heavy))
+                            .foregroundStyle(MoyeoTheme.ink)
+                        Text("기기에 저장된 사진에서 1장을 골라주세요.")
+                            .font(MoyeoTypography.tinyMeta)
+                            .foregroundStyle(MoyeoTheme.muted)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 188)
+                    .background(MoyeoTheme.subtleBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(MoyeoTheme.line, style: StrokeStyle(lineWidth: 1, dash: [4]))
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("attachPhoto.pick")
+            } else {
+                preview
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Text("다른 사진 고르기")
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.forest)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
+                .accessibilityIdentifier("attachPhoto.pick")
             }
-            .buttonStyle(.plain)
-            .padding(.top, 12)
-            .accessibilityIdentifier("attachPhoto.pick")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("같이 보낼 한 줄 (선택)")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                TextField("사진 설명을 적어주세요", text: $caption)
+                    .textFieldStyle(.plain)
+                    .font(MoyeoTypography.cardBody)
+                    .padding(.horizontal, 13)
+                    .frame(height: 46)
+                    .background(MoyeoTheme.card)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .accessibilityIdentifier("attachPhoto.caption")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 16)
 
             if isOversize {
                 Text("사진은 최대 20MB까지 보낼 수 있어요.")
@@ -100,13 +144,9 @@ struct AttachPhotoComposerView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
                 .accessibilityIdentifier("attachPhoto.preview")
-        } else {
-            MoyeoEmptyStateView(
-                message: "보낼 사진을 골라주세요.",
-                systemImage: "photo",
-                accessibilityIdentifier: "attachPhoto.preview.empty"
-            )
         }
+        // 아직 고르지 않은 상태는 위의 **점선 고르기 박스**가 대신한다 —
+        // 빈 상태 안내를 따로 두면 「고를 자리」가 두 군데로 보인다.
     }
 
     /// 파일 크기와 픽셀 크기 — 둘 다 고른 사진에서 실제로 읽은 값이다.
@@ -139,7 +179,11 @@ struct AttachPhotoComposerView: View {
     private func send() {
         guard let photoData else { return }
         sendState.send(fallbackMessage: "사진을 공유하지 못했어요.") {
-            _ = try await ChatRoomWriteAPIClient.shared.shareImage(roomID: roomID, imageData: photoData)
+            _ = try await ChatRoomWriteAPIClient.shared.shareImage(
+                roomID: roomID,
+                imageData: photoData,
+                caption: caption.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         } onSuccess: { onSent() }
     }
 }

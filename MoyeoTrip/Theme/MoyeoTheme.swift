@@ -37,6 +37,9 @@ enum MoyeoTheme {
     static let dangerRed = Color(hex: "#E85547")
     static let mint = Color(hex: "#BFE9D2")
     static let river = Color(hex: "#3E9BCF")
+    /// 12 인기 검색어의 **순위 하락**. 상승은 coral 이다.
+    /// 웹 `tokens.jsx` 의 `info` 와 **같은 값**이어야 한다 — 표면끼리 색이 달라지면 안 된다.
+    static let rankDown = Color(hex: "#4A90E2")
     static let blossom = Color(hex: "#F2A7B8")
     static let sunrise = Color(hex: "#F8B84E")
     static let ink = Color(uiColor: UIColor { trait in
@@ -94,6 +97,13 @@ enum MoyeoTheme {
     })
 
     static let cardRadius: CGFloat = 9
+
+    /// 하단 주 버튼(초록 CTA)의 **정본 크기**. 네 표면이 같은 값을 쓴다 —
+    /// 기획 `Btn`(height 48 · radius 12) · 웹 같은 값 · 안드 `MoyeoCtaHeight`.
+    /// 값을 주지 않으면 프레임워크 기본값이 쓰여 표면마다 최대 6pt 씩 갈렸다
+    /// (측정표: `docs/ui-comparison/BUTTON-GEOMETRY.md`, 사용자 요청 「버튼 색·크기 전수조사」).
+    static let ctaHeight: CGFloat = 48
+    static let ctaRadius: CGFloat = 12
 }
 
 enum MoyeoTypography {

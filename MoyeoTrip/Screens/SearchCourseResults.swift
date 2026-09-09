@@ -115,13 +115,17 @@ struct SearchCourseResultRow: View {
 
     /// 태그 칩은 **표시 전용**이다 — "태그로 모임 찾기" 는 없는 기능이다(2026-08-31 사용자 확인).
     private func tagChip(_ tag: ServerCourseTag) -> some View {
+        // 기획은 **외곽선 칩**이다 (`screens-attach.jsx`). 채운 배경이라 iOS 만 무게가 달라
+        // 보였고 칩이 22pt 라 카드도 그만큼 높았다 (사용자 지적, 2026-09-09).
+        // 안드로이드도 같은 모양으로 맞췄다 — 그쪽은 `#해시태그` 글자였다.
         Text(tag.name)
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(MoyeoTheme.text700)
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .background(MoyeoTheme.subtleBackground)
-            .clipShape(Capsule())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(MoyeoTheme.ink)
+            .padding(.horizontal, 9)
+            .frame(height: 20)
+            .background(
+                Capsule().stroke(MoyeoTheme.softLine, lineWidth: 1)
+            )
     }
 
     /// 서버가 주는 소요 시간 · 거리 · 방문지 수만 적는다.

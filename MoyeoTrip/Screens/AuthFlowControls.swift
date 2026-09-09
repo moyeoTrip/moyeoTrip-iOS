@@ -65,13 +65,19 @@ struct AuthProviderButton: View {
     var showsMark = true
     var titleOverride: String?
     var accessibilityIdentifierOverride: String?
+    /// 29-5 계정 연결처럼 **줄 오른쪽에 작게** 놓는 자리에서 켠다.
+    /// 로그인(01)은 화면 폭을 꽉 채우는 큰 버튼이고, 계정 연결은 목록 줄의 부속 버튼이다 —
+    /// 같은 부품이 두 크기를 갖는 것이 색·글꼴을 두 번 정의하는 것보다 안전하다.
+    var isCompact = false
     let action: () -> Void
+
+    private var buttonHeight: CGFloat { isCompact ? 34 : 54 }
 
     var body: some View {
         Button(action: action) {
             providerLabel
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
+                .frame(maxWidth: isCompact ? nil : .infinity)
+                .frame(height: buttonHeight)
                 .background(backgroundColor)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .overlay {
@@ -81,8 +87,8 @@ struct AuthProviderButton: View {
                 .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity)
-        .frame(height: 54)
+        .frame(maxWidth: isCompact ? nil : .infinity)
+        .frame(height: buttonHeight)
         .disabled(isDisabled)
         .opacity(isDisabled && !isLoading ? 0.48 : 1)
         .accessibilityElement(children: .combine)
@@ -92,7 +98,12 @@ struct AuthProviderButton: View {
 
     @ViewBuilder
     private var providerLabel: some View {
-        if provider == .kakao {
+        if isCompact {
+            Text(buttonTitle)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(foregroundColor)
+                .padding(.horizontal, 14)
+        } else if provider == .kakao {
             ZStack {
                 Color(hex: "#FEE500")
                 Text(buttonTitle)
@@ -188,7 +199,7 @@ struct AuthProviderButton: View {
     }
 
     private var cornerRadius: CGFloat {
-        12
+        isCompact ? 10 : 12
     }
 }
 

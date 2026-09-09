@@ -22,13 +22,18 @@ enum UITestScrollDriver {
     }
 
     /// 화면이 올라온 뒤 호출한다. 가장 큰 스크롤 뷰를 한 화면분량씩 내린다.
+    ///
+    /// **여러 번, 오래 시도한다.** 예전에는 0.6·1.1·1.6초에 세 번만 옮겼는데,
+    /// 실서버 화면은 그 뒤에 데이터가 도착해 내용이 길어진다 — 그 순간에는
+    /// `contentSize` 가 아직 화면보다 작아서 스크롤할 것이 없다고 판단하고 끝났다.
+    /// 그래서 27-3 처럼 **아래가 잘린 화면이 1쪽으로 찍혔다** (사용자 지적 2026-09-09).
+    /// 0.3초 간격으로 4.5초까지 다시 맞춘다 — 캡처가 기다리는 시간 안이다.
     static func applyIfRequested() {
         let page = requestedPage
         guard page > 1 else { return }
 
-        // 화면 전환 애니메이션이 끝난 뒤에 옮겨야 위치가 유지된다.
-        for delay in [0.6, 1.1, 1.6] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        for step in 1...15 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 * Double(step)) {
                 scrollLargest(toPage: page)
             }
         }

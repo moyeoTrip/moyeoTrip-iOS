@@ -248,53 +248,6 @@ final class ChatRoomContentAPIClient: @unchecked Sendable {
     }
 }
 
-// MARK: - 날짜 파싱
-
-/// 서버는 나노초까지 붙은 로컬 date-time을 준다 ("2026-08-24T08:06:50.072025").
-enum ServerDateTime {
-    static func date(from value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        if let date = formatter.date(from: value) { return date }
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        return formatter.date(from: value)
-    }
-
-    /// 채팅 목록의 갱신 시각 — 오늘은 시각만, 어제는 "어제", 그 밖은 날짜
-    static func listTimeText(from value: String) -> String {
-        guard let date = date(from: value) else { return "" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        if Calendar.current.isDateInToday(date) {
-            formatter.dateFormat = "a h:mm"
-        } else if Calendar.current.isDateInYesterday(date) {
-            return "어제"
-        } else {
-            formatter.dateFormat = "M월 d일"
-        }
-        return formatter.string(from: date)
-    }
-
-    /// 말풍선 시각 — "오후 1:30"
-    static func bubbleTimeText(from value: String) -> String {
-        guard let date = date(from: value) else { return "" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "a h:mm"
-        return formatter.string(from: date)
-    }
-
-    /// 공지 작성 시각 — "8월 24일 오전 1:12"
-    static func noticeTimeText(from value: String) -> String {
-        guard let date = date(from: value) else { return value }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "M월 d일 a h:mm"
-        return formatter.string(from: date)
-    }
-}
-
 // MARK: - 화면 모델 매핑
 
 extension ServerTripMapper {
@@ -442,15 +395,41 @@ extension ServerTripMapper {
         }
 
         if let detail = content.detail {
+            // **모임 이름을 여기서 채운다.** 예전에는 채우지 않아서, 방 id 로 바로 들어오는
+            // 진입(캡처·딥링크·알림)에서는 `stubThread` 의 빈 제목이 그대로 남아
+            // 20-1 머리글에 **모임명이 아예 안 보였다** (사용자 지적 2026-09-09).
+            if !detail.title.isEmpty { updated.tripTitle = detail.title }
             updated.price = detail.participationFee.map { "1인 \(decimalText($0))원" } ?? ""
             updated.genderRestriction = genderText(detail.genderRestriction)
             updated.ageRange = ageRangeText(minimumAge: detail.minimumAge, maximumAge: detail.maximumAge)
             updated.meetupSummary = meetupSummary(detail)
-            updated.recruitmentDeadline = thread.isReadOnly ? "" : dDayText(detail.recruitmentDDay)
+            // **읽기 전용 여부를 여기서 다시 정한다.**
+            //
+            // 예전에는 갱신하지 않아서, 라우트로 채팅방에 바로 들어올 때 쓰는
+            // `stubThread` 의 `isReadOnly: true` 가 서버 응답이 온 뒤에도 그대로 남았다.
+            // 그래서 **모집 중이고 시작일이 미래인 방까지** 「여행이 종료됐어요 ·
+            // 읽기 전용 보관」으로 그려지고 입력창이 사라졌다 (사용자 지적, 2026-09-08).
+            // 방을 가리지 않았고, 20 일반 채팅방·37 오프라인 채팅에도 그대로 실려 있었다.
+            // 웹·안드로이드는 목록의 `ended` 를 쓰는데 **상세 응답에는 그 필드가 없다** —
+            // 그래서 `status` 와 날짜로 같은 뜻을 계산한다(2026-09-08 실서버로 필드 확인).
+            updated.isReadOnly = isReadOnlyRoom(status: detail.status, startDate: detail.startDate, endDate: detail.endDate)
+            updated.recruitmentDeadline = updated.isReadOnly ? "" : dDayText(detail.recruitmentDDay)
             updated.scheduleSummary = scheduleSummaryText(detail)
         }
 
         return updated
+    }
+
+    /// 채팅이 읽기 전용인지 — 서버 목록의 `ended` 와 같은 뜻을 상세 응답으로 계산한다.
+    ///
+    /// `CANCELLED`(불발)·`COMPLETED`(완료)는 그 자체로 끝난 방이고,
+    /// 그 밖에는 **여행 마지막 날이 지났으면** 끝난 것으로 본다
+    /// (방 101 = `CONFIRMED` · 2026-08-28 출발인데 목록이 `ended: true` 로 준다).
+    static func isReadOnlyRoom(status: String, startDate: String, endDate: String?, today: Date = Date()) -> Bool {
+        if status == "CANCELLED" || status == "COMPLETED" { return true }
+        guard let lastDay = ServerDateTime.date(fromDateOnly: endDate ?? startDate) else { return false }
+        // 마지막 날 당일은 아직 여행 중이다 — 그 다음 날부터 끝난 것으로 센다.
+        return Calendar.current.startOfDay(for: today) > Calendar.current.startOfDay(for: lastDay)
     }
 
     /// 동행자 목록이 주는 실제 인원으로 "2/4명 · 여행 확정"의 앞부분을 갈아 끼운다

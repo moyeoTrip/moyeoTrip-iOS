@@ -29,7 +29,18 @@ struct ServerWaitingTripList: View {
         .padding(.vertical, 44)
         .accessibilityIdentifier("meeting.applied.server.empty")
       } else {
-        ForEach(rooms) { room in
+        // 기획은 신청 상태를 **두 묶음**으로 갈라 소제목을 붙인다 —
+        // 승인 대기와 대기열은 기다리는 이유가 다르다 (19-1, 2026-09-09).
+        if !pendingRooms.isEmpty {
+          waitingSectionTitle("호스트 승인을 기다리는 중")
+        }
+        ForEach(pendingRooms) { room in
+          serverWaitingRow(room)
+        }
+        if !queuedRooms.isEmpty {
+          waitingSectionTitle("대기열에 있는 모임")
+        }
+        ForEach(queuedRooms) { room in
           serverWaitingRow(room)
         }
 
@@ -43,6 +54,23 @@ struct ServerWaitingTripList: View {
     .navigationDestination(item: $selectedTrip) { trip in
       TripDetailView(trip: trip)
     }
+  }
+
+  private var pendingRooms: [ServerWaitingRoom] {
+    rooms.filter { $0.applicationStatus != "WAITLISTED" }
+  }
+
+  private var queuedRooms: [ServerWaitingRoom] {
+    rooms.filter { $0.applicationStatus == "WAITLISTED" }
+  }
+
+  private func waitingSectionTitle(_ text: String) -> some View {
+    Text(text)
+      .font(.caption.weight(.bold))
+      .foregroundStyle(MoyeoTheme.muted)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 14)
+      .padding(.bottom, 2)
   }
 
   private func serverWaitingRow(_ room: ServerWaitingRoom) -> some View {
@@ -88,10 +116,11 @@ struct ServerWaitingTripList: View {
               .padding(.top, 2)
           }
 
+          // 문구는 기획 그대로다 — 네 표면이 같은 말을 해야 한다.
           Text(
             waiting
-              ? "호스트가 확인하면 참여 여부가 정해져요."
-              : "정원이 차서 대기 중이에요. 자리가 나면 순서대로 자동 합류돼요."
+              ? "호스트가 확인하면 채팅방이 열려요. 보통 24시간 이내에 응답해요."
+              : "정원(\(room.maxParticipants)명)이 차서 대기 중이에요. 자리가 나면 순서대로 자동 합류돼요."
           )
           .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
           .foregroundStyle(tintText)

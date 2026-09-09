@@ -170,6 +170,33 @@ final class TravelCourseAPIClient: @unchecked Sendable {
         try await api.get("/api/v1/travel-courses/chat-rooms/\(roomID)")
     }
 
+    /// 코스 수정에 실어 보내는 방문지 한 곳.
+    ///
+    /// 읽기용 `ServerTravelCourse.Place` 는 `Decodable` 전용이고 제목·썸네일·좌표까지 들고 있다.
+    /// 서버가 **쓰기에서 받는 것은 이 네 개뿐**이라 전송용을 따로 둔다
+    /// (읽기 모델에 `Encodable` 을 붙이면 서버가 안 받는 필드까지 실려 나간다).
+    /// 18-1 경로 수정 · 18-7 이름·소개 수정 — **같은 엔드포인트**다 (`PATCH`).
+    ///
+    /// 2026-09-04 BE 회신 §5 로 `title`·`description` 선택 필드가 붙었다.
+    /// **생략하면 기존 값을 유지하는 부분 수정**이라 `PUT` 이 아니라 `PATCH` 다.
+    /// `places` 만 보내던 예전 호출도 그대로 동작한다.
+    ///
+    /// 조건: 호스트가 직접 만든 `CUSTOM` 코스이고 **여행 확정 전**일 때만.
+    /// 제목을 보냈다면 공백일 수 없다(빈 문자열은 400).
+    /// 저장되면 방에 시스템 메시지가 남고 참가자에게 알림이 간다.
+    func updateRoomCourse(
+        roomID: Int64,
+        title: String? = nil,
+        description: String? = nil,
+        places: [ServerCoursePlaceEdit]? = nil
+    ) async throws {
+        try await api.sendVoid(
+            "/api/v1/travel-courses/chat-rooms/\(roomID)",
+            method: "PATCH",
+            body: ServerUpdateCourseRequest(title: title, description: description, places: places)
+        )
+    }
+
     /// 12-1 검색 결과 — **제목에 포함되거나 태그명이 일치**하는 공개 코스를 준다.
     /// 소개글(`description`)은 검색 대상이 아니다 (정본 `ATTACH-COMPOSER-CANON.md` R6).
     func searchCourses(keyword: String) async throws -> [ServerTravelCourse] {
@@ -337,5 +364,35 @@ enum ServerCourseMapper {
             return "\(Int(kilometers))km"
         }
         return String(format: "%.1fkm", kilometers)
+    }
+}
+
+/// `PATCH /travel-courses/chat-rooms/{roomId}` 의 `places` 원소.
+///
+/// 서버가 쓰기에서 받는 필드만 담는다 — 읽기 모델(`ServerTravelCourse.Place`)에는
+/// 제목·썸네일·좌표가 더 있지만 그것들은 서버가 콘텐츠에서 채운다.
+struct ServerCoursePlaceEdit: Encodable, Equatable {
+    let contentId: Int64
+    let dayNumber: Int
+    let sequence: Int
+    let visitTime: String?
+}
+
+/// `PATCH /travel-courses/chat-rooms/{roomId}` 의 요청 본문.
+///
+/// **nil 은 「키를 아예 넣지 않는다」는 뜻이다.** `encodeIfPresent` 라야 서버가 "생략" 으로
+/// 읽어 기존 값을 유지한다 — `null` 을 보내면 지우려는 시도로 읽힐 수 있다.
+struct ServerUpdateCourseRequest: Encodable, Equatable {
+    let title: String?
+    let description: String?
+    let places: [ServerCoursePlaceEdit]?
+
+    enum CodingKeys: String, CodingKey { case title, description, places }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(places, forKey: .places)
     }
 }

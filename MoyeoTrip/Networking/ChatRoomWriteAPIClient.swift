@@ -179,7 +179,10 @@ enum ServerCompanionsResult: Hashable {
 final class ChatRoomWriteAPIClient: @unchecked Sendable {
     static let shared = ChatRoomWriteAPIClient()
 
-    private let api: MoyeoAPIClient
+    // `private` 이 아니다 — 18-6·20-6 확장이 `ChatRoomEditAPI.swift` 에 있고,
+    // `private` 은 파일 범위라 그 확장에서 닿지 않는다.
+    // `ChatRoomAPIClient` 도 같은 이유로 이렇게 두고 있다(확장이 별 파일에 있다).
+    let api: MoyeoAPIClient
 
     init(api: MoyeoAPIClient = .shared) {
         self.api = api

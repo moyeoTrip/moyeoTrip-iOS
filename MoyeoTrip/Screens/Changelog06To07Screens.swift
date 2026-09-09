@@ -452,7 +452,10 @@ struct PlaceDetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 // 사진이 없을 때도 화면기획·웹·안드로이드처럼 풍경 자리표시자를 쓴다.
                 // 아이콘만 크게 놓으면 같은 화면인데 iOS만 사진이 없는 것처럼 보인다.
-                ZStack(alignment: .topTrailing) {
+                // 대표 사진은 **화면 좌우를 꽉 채운다** (기획·웹·안드로이드와 같다).
+                // 예전에는 20pt 여백 안에 둥근 사각형으로 들어가 iOS 만 사진이 작아 보였다
+                // (17-1b, 사용자 지적 2026-09-09). 아래 `.padding(20)` 을 되돌려 폭을 넓힌다.
+                ZStack(alignment: .bottomTrailing) {
                     CachedRemoteImage(url: place.imageURLs.first ?? place.thumbnailURL, fallbackShape: .landscape) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
@@ -460,10 +463,10 @@ struct PlaceDetailView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 210)
-                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius))
+                    .clipped()
 
-                    // 화면기획·웹의 사진 카운터
-                    Text("1/\(max(place.imageLabels.count, 1))")
+                    // 사진 장수 배지는 **이미지 우측 하단**이다 (정본 `HERO-SCROLL-CANON.md` R1-1).
+                    Text("1/\(max(place.imageURLs.count, 1))")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 8)
@@ -473,6 +476,8 @@ struct PlaceDetailView: View {
                         .padding(10)
                         .accessibilityIdentifier("placeDetail.photoCounter")
                 }
+                .padding(.horizontal, -20)
+                .padding(.top, -20)
 
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(place.title).font(.title3.weight(.heavy))

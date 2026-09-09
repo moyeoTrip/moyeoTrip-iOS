@@ -293,7 +293,7 @@ struct AuthPrimaryButton: View {
                 .font(.subheadline.weight(.heavy))
                 .foregroundStyle(isEnabled ? .white : MoyeoTheme.muted)
                 .frame(maxWidth: .infinity)
-                .frame(height: 52)
+                .frame(height: MoyeoTheme.ctaHeight)
                 .background(isEnabled ? MoyeoTheme.forest : MoyeoTheme.subtleBackground)
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
                 .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))

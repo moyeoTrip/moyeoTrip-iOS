@@ -88,7 +88,7 @@ struct AttachPlaceComposerView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(MoyeoTheme.muted)
-            TextField("장소 이름이나 지역을 검색하세요", text: $query)
+            TextField("장소 이름이나 지역을 검색해보세요", text: $query)
                 .font(.subheadline)
                 .textInputAutocapitalization(.never)
             if !query.isEmpty {

@@ -76,11 +76,9 @@ struct MeetingInfoEditView: View {
             .accessibilityLabel("집합 장소 지도")
             .accessibilityIdentifier("meetingEdit.map")
 
-            Text(String(format: "좌표 (자동 저장)   %.6f, %.6f", coordinate.latitude, coordinate.longitude))
-                .font(MoyeoTypography.tinyMeta)
-                .monospacedDigit()
-                .foregroundStyle(MoyeoTheme.text400)
-                .padding(.top, 8)
+            // 좌표는 **사용자에게 보여주지 않는다** — 지도 핀으로 위치를 알 수 있고
+            // 위경도 숫자는 읽을 일이 없다 (사용자 결정, 2026-09-09).
+            // 값 자체는 그대로 저장돼 채팅방 지도 카드·길 찾기에 쓰인다.
         }
 
         AttachFieldLabel(text: "안내 문구").padding(.top, 18)

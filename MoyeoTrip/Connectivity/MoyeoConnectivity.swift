@@ -117,7 +117,10 @@ struct MoyeoOfflineBanner: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 36)
-        .background(MoyeoTheme.warningBackground)
+        // `ignoresSafeAreaEdges` 를 비운다. **기본값이 `.all` 이라** 경고색이 상태바까지 번져
+        // 다이나믹 아일랜드 뒤가 노랗게 찍혔다 (사용자 지적, 2026-09-06 · 35·36·37).
+        // 안드로이드도 `Modifier.statusBarsPadding()` 으로 배너를 상태바 아래에 둔다.
+        .background(MoyeoTheme.warningBackground, ignoresSafeAreaEdges: [])
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("offline.banner")
     }

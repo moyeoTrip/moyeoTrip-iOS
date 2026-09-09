@@ -50,6 +50,8 @@ struct FeedView: View {
   @State private var selectedPost: FeedPost?
   /// changeLog18 — 작성자를 눌러 여는 25 프로필 카드
   @State private var authorProfileRoute: SupportRoute?
+  /// 목록 카드의 `...` 로 여는 30-2 신고 시트. 상세(23)와 같은 경로를 쓴다.
+  @State private var reportRoute: SupportRoute?
 
   init(
     tabData: MoyeoTabDataStore,
@@ -93,7 +95,7 @@ struct FeedView: View {
   /// 조건을 여러 곳에 나눠 적었다가 프로필 카드를 빠뜨려, 그 화면의 하단 버튼이
   /// 탭바에 깔려 눌리지 않았다 — 한 군데서만 판단한다.
   private var isCoveringScreenOpen: Bool {
-    selectedPost != nil || isWritingPost || authorProfileRoute != nil
+    selectedPost != nil || isWritingPost || authorProfileRoute != nil || reportRoute != nil
   }
 
   /// 캐시가 없고 조회 중일 때만 로딩 문구를 띄운다 (R2). 이미 받은 목록은 로딩으로 덮지 않는다.
@@ -164,6 +166,9 @@ struct FeedView: View {
                 onOpenPost: {
                   selectedPost = post
                 },
+                onReport: {
+                  reportRoute = .report(post.id)
+                },
                 onOpenAuthor: {
                   authorProfileRoute = .publicProfile(post.authorProfileSubject)
                 }
@@ -232,6 +237,9 @@ struct FeedView: View {
     .navigationDestination(item: $authorProfileRoute) { route in
       SupportDestinationView(route: route)
     }
+    .navigationDestination(item: $reportRoute) { route in
+      SupportDestinationView(route: route)
+    }
     .navigationDestination(isPresented: $isWritingPost) {
       FeedWriteView(initialStep: feedWriteInitialStep, requestedRoomID: feedWriteRoomID) { post in
         publish(post)
@@ -248,6 +256,9 @@ struct FeedView: View {
     }
     // 프로필 카드의 하단 액션바(카드 뒤집기·친구 신청)가 탭바에 깔려 눌리지 않았다.
     .onChange(of: authorProfileRoute) { _, _ in
+      isBottomNavigationSuppressed = isCoveringScreenOpen
+    }
+    .onChange(of: reportRoute) { _, _ in
       isBottomNavigationSuppressed = isCoveringScreenOpen
     }
     .onDisappear {
@@ -327,13 +338,8 @@ struct FeedDetailView: View {
     likeOverride?.liked ?? post.serverLiked
   }
 
-  /// 신고할 수 있는 피드인가. 서버 피드가 아니면(목 id·미로그인) 보낼 대상이 없고,
-  /// 내가 쓴 피드는 서버가 받지 않는다 (정본 §2 — 자기 피드에는 신고 버튼을 두지 않는다).
-  private var canReportPost: Bool {
-    guard post.serverFeedID != nil else { return false }
-    guard let authorID = post.serverAuthorID, let myID = MoyeoCurrentUser.id else { return true }
-    return authorID != myID
-  }
+  /// 목록 카드와 **같은 규칙**을 쓴다 (`FeedPost.canReport`).
+  private var canReportPost: Bool { post.canReport }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -387,21 +393,12 @@ struct FeedDetailView: View {
             .foregroundStyle(MoyeoTheme.muted)
             .lineSpacing(3)
 
-          ZStack(alignment: .topTrailing) {
-            // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
-            FeedPhotoPreview(post: post, height: 168)
-            .frame(height: 168)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            Text(post.photoCountText)
-              .font(.caption2.weight(.heavy))
-              .foregroundStyle(.white)
-              .padding(.horizontal, 7)
-              .padding(.vertical, 4)
-              .background(.black.opacity(0.55))
-              .clipShape(Capsule())
-              .padding(8)
-          }
+          // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
+          //
+          // 목록용 미리보기(`FeedPhotoPreview`, 앞 2장)를 쓰지 않는다 — 상세에서는
+          // **전체를 좌우로 넘겨 볼 수 있어야** 하고 배지도 지금 위치를 가리켜야 한다.
+          // 예전에는 4장 중 2장만 보이는데 배지는 고정 `"1/4"` 였다.
+          FeedPhotoPager(photoURLs: post.photoURLs, height: 168)
 
           Text(post.detailBodyText)
             .font(.subheadline)
@@ -669,7 +666,12 @@ private struct FeedVisibilityBadge: View {
 private struct FeedPostCard: View {
   let post: FeedPost
   let onOpenPost: () -> Void
+  /// 30-2 신고 시트를 연다. 상세(23)의 `...` 와 같은 동작이다.
+  let onReport: () -> Void
   let onOpenAuthor: () -> Void
+
+  /// 상세(23)와 **같은 규칙**을 쓴다 (`FeedPost.canReport`) — 두 곳에 따로 적으면 갈린다.
+  private var canReport: Bool { post.canReport }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -694,8 +696,20 @@ private struct FeedPostCard: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpenAuthor)
             Spacer()
-            Image(systemName: "ellipsis")
-              .foregroundStyle(MoyeoTheme.muted)
+            // 예전에는 `Button` 이 아니라 그냥 `Image` 였다 — **눌러도 아무 일도 없었다.**
+            // 피드 상세(23)의 `...` 와 같은 동작·같은 조건을 쓴다: 신고 시트를 열고,
+            // 자기 피드에는 두지 않는다(서버가 400 `40039` 로 거절한다).
+            if canReport {
+              Button(action: onReport) {
+                Image(systemName: "ellipsis")
+                  .foregroundStyle(MoyeoTheme.muted)
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("더보기")
+              .accessibilityIdentifier("feed.post.\(post.id).more")
+            }
           }
 
           Text(post.feedTitle)

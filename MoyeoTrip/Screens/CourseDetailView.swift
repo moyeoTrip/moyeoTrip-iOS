@@ -52,6 +52,16 @@ struct CourseDetailView: View {
                             DetailPanel(title: "코스 미리보기") {
                                 CourseRouteMap(stops: displayCourse.itinerary)
                             }
+
+                            // **방문지 목록**. 기획·웹·안드로이드에는 있는데 iOS 에만 없어서
+                            // 지도만 보고 어디를 도는지 알 수 없었다 (사용자 지적, 2026-09-09).
+                            DetailPanel(title: "방문지 \(displayCourse.itinerary.count)곳") {
+                                VStack(spacing: 10) {
+                                    ForEach(displayCourse.itinerary) { stop in
+                                        CourseStopRow(stop: stop)
+                                    }
+                                }
+                            }
                         }
 
                         Color.clear
@@ -441,5 +451,40 @@ private struct DetailPanel<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
+    }
+}
+
+/// 14 방문지 한 줄 — 순번 · 이름 · `N일차 · HH:mm`.
+///
+/// 기획·웹·안드로이드가 같은 모양이다. 서버가 안 준 값(시각 등)은 **그 자리를 비운다**.
+private struct CourseStopRow: View {
+    let stop: ItineraryStop
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(stop.order)")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.forest)
+                .frame(width: 26, height: 26)
+                .background(MoyeoTheme.leaf)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(stop.name)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .lineLimit(1)
+                let meta = [stop.day > 0 ? "\(stop.day)일차" : nil, stop.time.isEmpty ? nil : stop.time]
+                    .compactMap { $0 }
+                    .joined(separator: " · ")
+                if !meta.isEmpty {
+                    Text(meta)
+                        .font(MoyeoTypography.tinyMeta)
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
     }
 }

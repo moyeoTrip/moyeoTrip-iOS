@@ -71,37 +71,48 @@ struct HostManageView: View {
                     .padding(.bottom, 12)
                     .accessibilityIdentifier("hostManage.route")
 
-                    // 18-5 집합 정보 수정 — 모집을 연 뒤 집합 장소·시간을 고칠 길이 없었다.
-                    // 근거 `PUT /chat-rooms/{id}/meeting-info` (정본 §6-1).
-                    HostManageLinkRow(
-                        title: "집합 정보 수정",
-                        detail: "집합 장소·안내 문구·집합 일시를 고쳐요. 고치면 동행자 모두에게 알림이 가요.",
-                        icon: "mappin.and.ellipse",
-                        isEnabled: trip.serverRoomID != nil
-                    ) {
-                        if let roomID = trip.serverRoomID {
-                            meetingEditRoute = RoomIDRoute(roomID: roomID, kind: "meetingEdit")
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
-                    .accessibilityIdentifier("hostManage.meetingEdit")
-
+                    // 두 동작은 **나란한 버튼**이다 — 기획·웹이 그렇다.
+                    // 예전에는 셰브런이 달린 목록 줄 두 개였고, 그래서 같은 화면인데
+                    // 앱만 「메뉴 화면」처럼 보였다 (18, 사용자 지적 2026-09-09).
+                    //
                     // 18-4 여행 확정 / 불발 — 참가자가 보는 20-4 확정 모먼트는 있는데
                     // 호스트가 그 버튼을 누르는 화면이 없었다 (정본 §6-1).
-                    HostManageLinkRow(
-                        title: "여행 확정하기",
-                        detail: "이 인원으로 떠날지, 이번 모집을 접을지 정해요.",
-                        icon: "checkmark.seal",
-                        isEnabled: trip.serverRoomID != nil
-                    ) {
-                        if let roomID = trip.serverRoomID {
-                            tripStatusRoute = RoomIDRoute(roomID: roomID, kind: "tripStatus")
+                    // 18-5 집합 정보 수정 — `PUT /chat-rooms/{id}/meeting-info`.
+                    HStack(spacing: 10) {
+                        Button {
+                            if let roomID = trip.serverRoomID {
+                                tripStatusRoute = RoomIDRoute(roomID: roomID, kind: "tripStatus")
+                            }
+                        } label: {
+                            Text("여행 확정하기")
+                                .font(.subheadline.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.brandText)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 46)
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.forest))
                         }
+                        .buttonStyle(.plain)
+                        .disabled(trip.serverRoomID == nil)
+                        .accessibilityIdentifier("hostManage.tripStatus")
+
+                        Button {
+                            if let roomID = trip.serverRoomID {
+                                meetingEditRoute = RoomIDRoute(roomID: roomID, kind: "meetingEdit")
+                            }
+                        } label: {
+                            Text("집합 정보 수정")
+                                .font(.subheadline.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.brandText)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 46)
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.forest))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(trip.serverRoomID == nil)
+                        .accessibilityIdentifier("hostManage.meetingEdit")
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 18)
-                    .accessibilityIdentifier("hostManage.tripStatus")
 
                     Divider()
                         .overlay(MoyeoTheme.line)
@@ -158,7 +169,7 @@ struct HostManageView: View {
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 50)
+                    .frame(height: MoyeoTheme.ctaHeight)
                     .background(thread == nil ? MoyeoTheme.text400 : MoyeoTheme.forest)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }

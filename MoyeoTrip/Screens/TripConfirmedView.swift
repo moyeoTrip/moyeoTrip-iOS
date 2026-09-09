@@ -78,8 +78,12 @@ struct TripConfirmedView: View {
 
   /// 마감일은 **서버가 준 값**이다. 예전에는 `5월 22일 마감까지` 가 코드에 박혀 있었다.
   /// 마감 표기를 못 받으면 그 구절 없이 인원만 적는다 (NO-MOCK-CANON R1).
+  ///
+  /// 문구용 날짜는 **`yyyy.MM.dd (E)` 전체 날짜**다 (웹·안드로이드와 같은 꼴).
+  /// `recruitmentDeadline` 은 배지용 `D-35 · 10/17` 꼴이라 문장에 넣으면
+  /// 「8/27 마감까지」처럼 iOS 만 짧게 나왔다 (20-4, 사용자 지적 2026-09-09).
   private var confirmedCopy: some View {
-    let deadline = trip.recruitmentDeadline.trimmingCharacters(in: .whitespaces)
+    let deadline = trip.deadlineSentenceDate
     let joined = Text("\(trip.confirmedMemberCount)명").foregroundColor(MoyeoTheme.forest)
     return VStack(spacing: 2) {
       if deadline.isEmpty {
@@ -136,7 +140,7 @@ struct TripConfirmedView: View {
         .font(MoyeoTypography.font(size: 15, weight: .bold, relativeTo: .headline))
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .frame(height: 52)
+        .frame(height: MoyeoTheme.ctaHeight)
         .background(thread == nil ? MoyeoTheme.text400 : MoyeoTheme.forest)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -213,6 +217,23 @@ private struct ConfirmedTripCard: View {
 }
 
 extension TripRecruitment {
+  /// 20-4 문장에 넣을 마감일. 배지용 `D-35 · 10/17` 에서 날짜만 떼어 전체 날짜로 되돌린다.
+  /// 배지 문구가 비어 있으면(마감 개념이 없는 방) 빈 문자열이다 — 그러면 구절을 빼고 적는다.
+  fileprivate var deadlineSentenceDate: String {
+    let badge = recruitmentDeadline.trimmingCharacters(in: .whitespaces)
+    guard !badge.isEmpty else { return "" }
+    // `D-35 · 10/17` → `10/17`. 구분자가 없으면 그대로 쓴다.
+    let shortDate = badge.contains("·")
+      ? badge.split(separator: "·").map { $0.trimmingCharacters(in: .whitespaces) }.last ?? badge
+      : badge
+    let parts = shortDate.split(separator: "/")
+    guard parts.count == 2, let month = Int(parts[0]), let day = Int(parts[1]) else { return shortDate }
+    // 연도는 여행 시작일에서 가져온다 — 마감은 시작일과 같은 해다.
+    let year = scheduleDetails?.startDate.split(separator: ".").first.flatMap { Int($0) }
+      ?? Calendar.current.component(.year, from: Date())
+    return ServerTripMapper.displayDate(String(format: "%04d-%02d-%02d", year, month, day))
+  }
+
   /// 20-4 확정 인원 — **서버가 준 참가자 수**다.
   /// 예전에는 `max(joined, capacity)` 로 정원을 대신 적어 1명인 방을 8명으로 보여줬다.
   var confirmedMemberCount: Int {

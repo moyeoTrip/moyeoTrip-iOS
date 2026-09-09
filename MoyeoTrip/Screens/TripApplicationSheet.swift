@@ -91,17 +91,23 @@ struct ApplicationSheet: View {
                     .ignoresSafeArea(edges: .top)
                     .accessibilityHidden(true)
 
+                // 뒤로가기는 **좌상단 · 원형 배경**이다 (기획 16).
+                // 예전에는 `max(safeAreaTop + 12, 52)` 로 밀어 사진 한가운데쯤 내려와 있었고
+                // 원형 배경도 없어 흰 화살표만 떠 있었다 (사용자 지적, 2026-09-09).
+                // 사진 위라 배경색을 알 수 없으니 반투명 검정 원에 담는다.
                 Button(action: onDismiss) {
                     Image(systemName: "chevron.left")
-                        .font(.title2.weight(.bold))
+                        .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 42, height: 42)
+                        .background(.black.opacity(0.38))
+                        .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("뒤로")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.leading, 18)
-                .padding(.top, max(proxy.safeAreaInsets.top + 12, 52))
+                .padding(.top, proxy.safeAreaInsets.top + 10)
 
                 // 화면기획처럼 시트 높이는 콘텐츠에 맞춘다 — 내부 스크롤 없이
                 // 내 소개 카드까지 온전히 보이고 신청하기 버튼이 그 아래 온다.

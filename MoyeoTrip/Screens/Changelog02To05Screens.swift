@@ -14,25 +14,6 @@ struct ChangelogPerson: Identifiable {
   var id: String { name }
 }
 
-private struct ChangelogComment: Identifiable {
-  let mascot: String
-  let name: String
-  let badge: String
-  let body: String
-  let time: String
-  var likes: Int = 0
-  /// 대댓글. 댓글 구조가 검수되려면 답글까지 보여야 한다.
-  var replies: [ChangelogComment] = []
-  /// 실서버 댓글은 같은 사람이 같은 문장을 두 번 남길 수 있어 commentId를 식별자로 쓴다.
-  var serverCommentID: Int64?
-  /// 작성자 프로필 이미지. 서버가 주면 이걸 그리고, 없으면 `mascot` 으로 떨어진다.
-  var authorImageURL: URL?
-
-  var id: String {
-    serverCommentID.map { "server-comment-\($0)" } ?? "\(name).\(body)"
-  }
-}
-
 enum FriendManagementSegment: String, CaseIterable, Identifiable {
   case mine = "내 친구"
   case received = "받은 신청"
@@ -342,11 +323,13 @@ struct ChatMenuBody: View {
               .font(.caption.weight(.heavy))
               .foregroundStyle(MoyeoTheme.text700)
           }
-          // 서버 모임은 서버가 준 일정·집합 정보만 보여준다
-          Text(serverContent == nil ? "5/25(토) 당일치기 · 08:00 – 18:00" : displayThread.scheduleSummary)
-          if serverContent == nil {
-            Text("07:50 청송 시외버스터미널 정문 앞 집합")
-          } else if !displayThread.meetupSummary.isEmpty {
+          // 서버가 준 일정·집합 정보만 보여준다. 못 받았으면 **아무것도 그리지 않는다** —
+          // 예전에는 `5/25(토) …`·`07:50 청송 …` 이라는 고정 글자를 대신 넣었다
+          // (NO-MOCK-CANON R1 위반 · 실제로 없는 방의 정보를 말하는 셈이다).
+          if !displayThread.scheduleSummary.isEmpty {
+            Text(displayThread.scheduleSummary)
+          }
+          if !displayThread.meetupSummary.isEmpty {
             Text(displayThread.meetupSummary)
           }
           ScrollView(.horizontal, showsIndicators: false) {
@@ -357,11 +340,20 @@ struct ChatMenuBody: View {
               sideConditionPill(displayThread.genderDisplayText, icon: "person.crop.circle")
             }
           }
-          HStack(spacing: 8) {
-            changelogSecondaryButton("모집 상세") {}
-            changelogSecondaryButton("여행 경로") {}
+          // 두 버튼에 **동작이 없었다** — `{}` 라 눌러도 아무 일이 없었다 (20-1, 2026-09-09).
+          // 모집 상세는 15, 여행 경로는 18-3 코스 경로로 간다. 방 id 를 모르면 갈 곳이 없어 숨긴다.
+          if let serverRoomID = displayThread.serverRoomID {
+            HStack(spacing: 8) {
+              changelogSecondaryButton("모집 상세") {
+                onOpenRoute(.tripDetail("\(ServerTripMapper.serverTripIDPrefix)\(serverRoomID)"))
+              }
+              changelogSecondaryButton("여행 경로") {
+                // 확정 뒤에는 경로가 잠긴다 — 20-1 에서는 읽기 상태로 연다.
+                onOpenRoute(.courseEdit("\(ServerTripMapper.serverTripIDPrefix)\(serverRoomID)", .tripConfirmed))
+              }
+            }
+            .padding(.top, 6)
           }
-          .padding(.top, 6)
         }
         .font(MoyeoTypography.cardMeta)
         .foregroundStyle(MoyeoTheme.muted)
@@ -771,7 +763,7 @@ private struct MemberActionsSheet: View {
           .font(.subheadline.weight(.heavy))
           .foregroundStyle(MoyeoTheme.brandText)
           .frame(maxWidth: .infinity)
-          .frame(height: 50)
+          .frame(height: MoyeoTheme.ctaHeight)
           .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
               .stroke(MoyeoTheme.forest, lineWidth: 1)
@@ -1097,13 +1089,13 @@ struct ChatAttachmentMenuView: View {
         }
       }
       .padding(.top, 16)
+      // 「닫기」는 글자만이다 — 기획·웹·안드로이드 셋 다 배경 없는 ghost 버튼이다.
+      // 회색 판을 깔면 iOS 만 시트 안에 버튼이 하나 더 있는 것처럼 보였다 (20-2).
       Button { dismiss() } label: {
         Text("닫기")
           .font(.subheadline.weight(.bold))
           .foregroundStyle(MoyeoTheme.ink)
           .frame(maxWidth: .infinity, minHeight: 48)
-          .background(MoyeoTheme.subtleBackground)
-          .clipShape(RoundedRectangle(cornerRadius: 12))
       }
       .buttonStyle(.plain)
       .padding(.top, 16)
@@ -1113,9 +1105,20 @@ struct ChatAttachmentMenuView: View {
     .padding(.bottom, 28)
     .padding(.top, 2)
     .frame(maxWidth: .infinity)
+    // 아래쪽 두 모서리는 **직각**이다 — 시트가 화면 바닥에 붙어 있으니 둥글릴 이유가 없다.
+    // 예전에는 네 모서리를 다 24 로 둥글려 iOS 만 시트가 떠 있는 것처럼 보였다
+    // (기획 `borderRadius: '24px 24px 0 0'` · 웹·안드로이드도 위만 둥글다, 20-2 사용자 지적).
     .background(
       MoyeoTheme.card
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(
+          UnevenRoundedRectangle(
+            topLeadingRadius: 24,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 24,
+            style: .continuous
+          )
+        )
         .ignoresSafeArea(edges: .bottom)
     )
   }
@@ -1514,7 +1517,11 @@ struct TripMessageView: View {
         actionCard("다녀온 코스는 어떠셨어요? 코스 평가하기", icon: "star.fill") {
           showsCourseRating = true
         }
-        actionCard("피드에 오늘의 여행 기록 남기기", icon: "doc.text.image") {}
+        // 예전에는 `{}` — **눌러도 아무 일이 없었다**. 27-1 에서 피드 글쓰기를 권하는
+        // 유일한 자리인데 갈 곳이 없었다 (죽은 버튼 감사 2026-09-09).
+        actionCard("피드에 오늘의 여행 기록 남기기", icon: "doc.text.image") {
+          route = .feedWrite
+        }
         actionCard("다녀온 코스를 다른 여행자에게 공개하기", icon: "map.fill") {
           route = .coursePublish
         }
@@ -1539,7 +1546,7 @@ struct TripMessageView: View {
             .font(.subheadline.weight(.heavy))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            .frame(height: MoyeoTheme.ctaHeight)
             .background(MoyeoTheme.forest)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
@@ -2517,18 +2524,28 @@ struct TripDayView: View {
 }
 
 struct NotificationDetailView: View {
+  /// 29-2 는 **실서버 설정**을 그린다 — `GET /notifications/settings` + `GET /users/me/profile`.
+  /// 예전에는 화면 안의 `@State` 기본값(모든 메시지 · 방해금지 켜짐 · 22:30~07:00)만 그렸다.
+  /// 그래서 (가) 웹·안드로이드는 서버값을 읽어 꺼져 있는데 iOS 만 켜진 채로 찍혔고,
+  /// (나) **바꿔도 서버에 저장되지 않아 그 시간에 푸시가 그대로 왔다** (사용자 지적 2026-09-09).
+  /// 방해금지는 서버가 발송을 막는 기능이라 저장이 안 되면 기능 자체가 없는 것과 같다.
   @State private var mode = "모든 메시지"
-  @State private var quietHours = true
-  @State private var quietDays = Set(["월", "화", "수", "목", "금"])
+  @State private var quietHours = false
+  @State private var quietDays: Set<String> = []
+  @State private var quietStart = "22:30"
+  @State private var quietEnd = "07:00"
+  /// 저장 PUT 은 프로필의 다른 알림 스위치까지 **함께** 보내야 한다(부분 갱신이 없다).
+  @State private var profile: ServerMyProfile?
+  @State private var didLoad = false
   private let modes = ["모든 메시지", "멘션·답글만", "받지 않기"]
+  private let weekdays = ["월", "화", "수", "목", "금", "토", "일"]
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
+        // 제목 줄을 두지 않는다 — 기획·웹·안드로이드는 설명 문구로 바로 시작한다.
+        // iOS 만 「알림 범위」 라는 머리글이 하나 더 있어 4열에서 이 화면만 한 줄 길었다.
         VStack(alignment: .leading, spacing: 8) {
-          Text("알림 범위")
-            .font(.subheadline.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.ink)
           Text("모임이 여러 개면 알림이 금방 쌓여요. 받고 싶은 만큼만 켜두세요.")
             .font(.caption)
             .foregroundStyle(MoyeoTheme.muted)
@@ -2540,56 +2557,85 @@ struct NotificationDetailView: View {
               isSelected: mode == item
             ) {
               mode = item
+              save()
             }
           }
         }
-        settingsCard("방해금지 시간대") {
-          MoyeoCheckRow(
-            title: "방해금지 시간대",
-            subtitle: "이 시간엔 소리·진동 없이 조용히 쌓여요",
-            isOn: $quietHours,
-            accessibilityIdentifier: "notificationDetail.quietHours"
-          )
-          if quietHours {
-            HStack(spacing: 10) {
-              quietHourField(label: "시작", value: "22:30")
-              quietHourField(label: "종료", value: "07:00")
-            }
-            VStack(alignment: .leading, spacing: 6) {
-              Text("요일").font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
-              HStack(spacing: 6) {
-                ForEach(["월", "화", "수", "목", "금", "토", "일"], id: \.self) { day in
-                  let on = quietDays.contains(day)
-                  Button {
-                    if on { quietDays.remove(day) } else { quietDays.insert(day) }
-                  } label: {
-                    Text(day)
-                      .font(.caption.weight(.heavy))
-                      .foregroundStyle(on ? MoyeoTheme.onLeaf : MoyeoTheme.muted)
-                      .frame(maxWidth: .infinity)
-                      .frame(height: 38)
-                      .background(on ? MoyeoTheme.leaf : MoyeoTheme.card)
-                      .clipShape(RoundedRectangle(cornerRadius: 10))
-                      .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                          .stroke(on ? MoyeoTheme.forest : MoyeoTheme.line))
-                  }
-                  .buttonStyle(.plain)
-                }
-              }
-            }
-            Text("집합 30분 전 알림처럼 여행 당일 안내는 방해금지 시간에도 전달돼요.")
-              .font(.caption2).foregroundStyle(MoyeoTheme.muted)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        // 화면기획에는 하단 안내 배너가 없다. 방해금지 예외 안내는 카드 안 문구로 이미 한 번 나온다.
+        quietHoursCard
       }.padding(18).padding(.bottom, 28)
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationTitle("채팅 알림")
     .navigationBarTitleDisplayMode(.inline)
     .accessibilityIdentifier("screen.notificationDetail")
+    .task { await load() }
+  }
+
+  /// 카드 밖 머리글을 두지 않는다 — 카드 첫 줄이 이미 「방해금지 시간대」다(같은 말을 두 번 썼다).
+  private var quietHoursCard: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      // 체크박스가 아니라 **토글**이다 — 기획·웹·안드로이드 셋 다 토글이고,
+      // 「지금 켜져 있는 상태」를 말하는 스위치라 체크박스(고르는 것)와 뜻이 다르다.
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("방해금지 시간대")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.ink)
+          Text("이 시간엔 소리·진동 없이 조용히 쌓여요")
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 8)
+        Toggle("", isOn: $quietHours)
+          .labelsHidden()
+          .tint(MoyeoTheme.leaf)
+          .accessibilityIdentifier("notificationDetail.quietHours")
+          .accessibilityLabel("방해금지 시간대")
+          .onChange(of: quietHours) { _, _ in save() }
+      }
+      if quietHours {
+        HStack(spacing: 10) {
+          quietHourField(label: "시작", value: quietStart)
+          quietHourField(label: "종료", value: quietEnd)
+        }
+        VStack(alignment: .leading, spacing: 6) {
+          Text("요일").font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+          HStack(spacing: 6) {
+            ForEach(weekdays, id: \.self) { day in
+              weekdayChip(day)
+            }
+          }
+        }
+        Text("집합 30분 전 알림처럼 여행 당일 안내는 방해금지 시간에도 전달돼요.")
+          .font(.caption2).foregroundStyle(MoyeoTheme.muted)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(14)
+    .background(MoyeoTheme.card)
+    .clipShape(RoundedRectangle(cornerRadius: 12))
+    .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
+  }
+
+  private func weekdayChip(_ day: String) -> some View {
+    let on = quietDays.contains(day)
+    return Button {
+      if on { quietDays.remove(day) } else { quietDays.insert(day) }
+      save()
+    } label: {
+      Text(day)
+        .font(.caption.weight(.heavy))
+        .foregroundStyle(on ? MoyeoTheme.onLeaf : MoyeoTheme.muted)
+        .frame(maxWidth: .infinity)
+        .frame(height: 38)
+        .background(on ? MoyeoTheme.leaf : MoyeoTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+          RoundedRectangle(cornerRadius: 10)
+            .stroke(on ? MoyeoTheme.forest : MoyeoTheme.line))
+    }
+    .buttonStyle(.plain)
   }
 
   private func modeDetail(for mode: String) -> String {
@@ -2597,6 +2643,66 @@ struct NotificationDetailView: View {
     case "모든 메시지": "모임의 모든 대화를 알려드려요"
     case "멘션·답글만": "나를 부르거나 내 메시지에 답할 때만"
     default: "앱을 열었을 때만 확인해요"
+    }
+  }
+
+  private func load() async {
+    guard !didLoad else { return }
+    guard
+      let settings = try? await NotificationAPIClient.shared.settings(),
+      let loadedProfile = try? await UserProfileAPIClient.shared.myProfile()
+    else { return }
+    profile = loadedProfile
+    mode = Self.modeText(for: loadedProfile.chatNotificationMode)
+    quietHours = settings.doNotDisturbEnabled
+    if let start = settings.doNotDisturbStartTime { quietStart = String(start.prefix(5)) }
+    if let end = settings.doNotDisturbEndTime { quietEnd = String(end.prefix(5)) }
+    quietDays = Set(settings.doNotDisturbDays.compactMap(Self.koreanDay))
+    // 저장은 불러온 뒤에만 한다 — 기본값으로 서버를 덮어쓰면 사용자 설정이 사라진다.
+    didLoad = true
+  }
+
+  private func save() {
+    guard didLoad, let profile else { return }
+    let update = ServerNotificationSettingsUpdate(
+      chatNotificationMode: Self.modeCode(for: mode),
+      recruitmentDeadlineEnabled: profile.recruitmentDeadlineEnabled,
+      socialActivityEnabled: profile.socialActivityEnabled,
+      marketingEnabled: profile.marketingEnabled,
+      doNotDisturbEnabled: quietHours,
+      doNotDisturbStartTime: quietHours ? quietStart : nil,
+      doNotDisturbEndTime: quietHours ? quietEnd : nil,
+      doNotDisturbDays: quietDays.compactMap(Self.apiDay).sorted()
+    )
+    Task { _ = try? await NotificationAPIClient.shared.updateSettings(update) }
+  }
+
+  private static let dayPairs = [
+    ("MONDAY", "월"), ("TUESDAY", "화"), ("WEDNESDAY", "수"), ("THURSDAY", "목"),
+    ("FRIDAY", "금"), ("SATURDAY", "토"), ("SUNDAY", "일")
+  ]
+
+  private static func koreanDay(_ code: String) -> String? {
+    dayPairs.first { $0.0 == code.uppercased() }?.1
+  }
+
+  private static func apiDay(_ korean: String) -> String? {
+    dayPairs.first { $0.1 == korean }?.0
+  }
+
+  private static func modeText(for code: String?) -> String {
+    switch code {
+    case "MENTIONS_AND_REPLIES": "멘션·답글만"
+    case "NONE": "받지 않기"
+    default: "모든 메시지"
+    }
+  }
+
+  private static func modeCode(for text: String) -> String {
+    switch text {
+    case "멘션·답글만": "MENTIONS_AND_REPLIES"
+    case "받지 않기": "NONE"
+    default: "ALL"
     }
   }
 }
@@ -2855,7 +2961,7 @@ struct SystemNoticeView: View {
             .font(.subheadline.weight(.heavy))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            .frame(height: MoyeoTheme.ctaHeight)
             .background(MoyeoTheme.forest)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
@@ -2891,298 +2997,6 @@ struct SystemNoticeView: View {
     }
     .accessibilityIdentifier(
       mode == .maintenance ? "screen.systemMaintenance" : "screen.systemError")
-  }
-}
-
-struct FeedCommentsView: View {
-  let post: FeedPost
-  @State private var comment = ""
-  @State private var submitted: [String] = []
-  /// 실서버 댓글 — 서버 피드이고 조회가 성공했을 때만 채워진다 (nil = 아직 못 받음).
-  /// 무한 스크롤로 다음 묶음을 **뒤에 붙인다** (서버가 최신 id 부터 주므로 순서가 그대로 맞다).
-  @State private var serverComments: [ServerFeedComment]?
-  /// 다음 묶음 커서. 값이 없으면 마지막 묶음이다 (`nextId: null`).
-  @State private var nextCommentID: Int64?
-  @State private var isLoadingComments = false
-  /// 첫 묶음을 한 번이라도 받아봤는지 — 받기 전에는 "댓글 없음" 을 띄우지 않는다.
-  @State private var hasLoadedFirstPage = false
-  /// 이 화면에서 등록해 서버에 반영된 댓글 수. 제목 개수를 서버 값 위에 더한다.
-  @State private var postedCount = 0
-  /// 진입 경로가 스텁 게시물(캡처·딥링크)일 때 제목·작성자·전체 개수를 채우려고 직접 받은 피드.
-  @State private var loadedFeed: ServerFeed?
-
-  /// 한 번에 받는 최상위 댓글 수. `GET /feeds` 와 같은 20 이다.
-  private static let commentPageSize = 20
-
-  /// 제목의 댓글 수.
-  ///
-  /// 커서 페이지네이션이라 받은 묶음만 세면 실제보다 작아진다 — `GET /feeds/{id}` 의
-  /// `commentCount` 가 **대댓글까지 포함한 전체 수**라 그게 근거다
-  /// (실서버 확인: 피드 1 = 최상위 3 + 답글 2 = 5).
-  private var displayCommentCount: Int {
-    let serverTotal = post.commentCount > 0 ? post.commentCount : Int(loadedFeed?.commentCount ?? 0)
-    if serverTotal > 0 { return serverTotal + postedCount + submitted.count }
-    guard let serverComments else { return submitted.count }
-    return serverComments.reduce(0) { $0 + 1 + ($1.replies?.count ?? 0) } + submitted.count
-  }
-
-  /// 다음 묶음이 남아 있는지 — 서버가 준 `nextId` 로만 판단한다 (클라가 추측하지 않는다).
-  private var hasMoreComments: Bool {
-    nextCommentID != nil
-  }
-
-  /// 서버 피드면 서버 댓글만 그린다. 서버가 빈 배열을 주면 §2 빈 상태를 그린다.
-  private var displayComments: [ChangelogComment] {
-    guard let serverComments else { return comments }
-    // 함수 참조(`map(Self.comment(from:))`)로 넘기면 main-actor 격리가 벗겨져 Swift 6 경고가 난다.
-    return serverComments.map { changelogComment(from: $0) }
-  }
-
-  /// 서버 댓글 → 23-1 댓글 행. 서버가 주지 않는 값(마스코트·배지·좋아요 수)은 채우지 않는다.
-  private func changelogComment(from server: ServerFeedComment) -> ChangelogComment {
-    var time = ""
-    if let createdAt = server.createdAt {
-      time = ServerDateTime.listTimeText(from: createdAt)
-    }
-    return ChangelogComment(
-      mascot: "",
-      name: server.author?.nickname ?? "",
-      badge: "",
-      body: server.content ?? "",
-      time: time,
-      replies: server.replyList.map { changelogComment(from: $0) },
-      serverCommentID: server.commentId,
-      authorImageURL: MoyeoImageURL.resolve(server.author?.profileImageUrl)
-    )
-  }
-
-  /// 서버 댓글을 못 받았을 때의 자리. 목 댓글을 채우지 않는다 (NO-MOCK-CANON R1).
-  private let comments: [ChangelogComment] = []
-
-  var body: some View {
-    VStack(spacing: 0) {
-      ScrollView {
-        LazyVStack(spacing: 0) {
-          // 어떤 피드의 댓글인지 — 화면기획 23-1 상단 원글 요약
-          originalPostSummary
-          if displayComments.isEmpty, submitted.isEmpty {
-            if isLoadingComments && !hasLoadedFirstPage {
-              // 첫 묶음을 받는 중이다 — 아직 없다고 단정하지 않는다.
-              MoyeoEmptyStateView(
-                message: MoyeoEmptyText.loading,
-                accessibilityIdentifier: "feedComments.loading"
-              )
-            } else {
-              MoyeoEmptyStateView(
-                message: MoyeoEmptyText.noComments,
-                accessibilityIdentifier: "feedComments.empty"
-              )
-            }
-          }
-          ForEach(displayComments) { item in
-            commentRow(item)
-              // 무한 스크롤 — **마지막 댓글**이 보이면 다음 묶음을 받는다.
-              // 별도 표지에 `onAppear` 를 달면 그 표지가 한 번만 나타나 두 번째 묶음에서 멈춘다
-              // (실제로 그렇게 멈추는 걸 시뮬레이터로 확인했다). 목록이 늘어나면
-              // 새 마지막 항목이 다시 이 자리를 맡으므로 묶음마다 다시 걸린다.
-              .onAppear {
-                guard item.id == displayComments.last?.id else { return }
-                Task { await loadMoreServerComments() }
-              }
-            // 대댓글은 들여쓰기로 부모와의 관계를 보여준다
-            ForEach(item.replies) { reply in
-              commentRow(reply, compact: true)
-                .padding(.leading, 32)
-            }
-          }
-          ForEach(submitted, id: \.self) { item in
-            commentRow(ChangelogComment(mascot: "🦌", name: "나", badge: "", body: item, time: "방금"))
-          }
-          if hasMoreComments {
-            // 다음 묶음이 남아 있다는 표시일 뿐이다 — 받아오는 건 마지막 댓글의 `onAppear` 가 한다.
-            MoyeoEmptyStateView(
-              message: MoyeoEmptyText.loading,
-              accessibilityIdentifier: "feedComments.loadingMore"
-            )
-            .padding(.vertical, 12)
-          }
-          Text("함께 간 친구의 댓글이 먼저 보여요")
-            .font(.caption2)
-            .foregroundStyle(MoyeoTheme.text400)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 14)
-        }.padding(.horizontal, 18)
-      }
-      HStack(spacing: 8) {
-        TextField("댓글을 입력하세요...", text: $comment, axis: .vertical).lineLimit(1...4).padding(
-          .horizontal, 13
-        ).frame(minHeight: 44).background(MoyeoTheme.subtleBackground).clipShape(Capsule())
-        Button {
-          submit()
-        } label: {
-          Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 44, height: 44)
-            .background(MoyeoTheme.forest).clipShape(Circle())
-        }.buttonStyle(.plain).disabled(
-          comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-      }.padding(12).background(MoyeoTheme.card)
-    }
-    .background(MoyeoTheme.background.ignoresSafeArea())
-    // 서버 댓글을 받았으면 그 개수가 근거다 — 목록에 5건이 떠 있는데 제목만 0 이면 안 된다.
-    // 대댓글도 화면에 보이므로 함께 센다.
-    .navigationTitle("댓글 \(displayCommentCount)")
-    .navigationBarTitleDisplayMode(.inline)
-    .task {
-      await loadServerComments()
-    }
-    .accessibilityIdentifier("screen.feedComments")
-  }
-
-  /// 첫 묶음. 댓글을 새로 달았을 때도 이걸 다시 부른다 —
-  /// 최신 댓글이 최상위 첫 자리로 오므로 목록을 처음부터 다시 세우는 게 맞다.
-  private func loadServerComments() async {
-    guard MoyeoServerSync.isEnabled, let feedID = post.serverFeedID else { return }
-    // 스텁 게시물(캡처·딥링크)로 들어오면 제목·작성자·전체 개수가 비어 있다 — 피드를 직접 받는다.
-    if post.authorName.isEmpty, loadedFeed == nil {
-      loadedFeed = try? await FeedAPIClient.shared.feed(id: feedID)
-    }
-    isLoadingComments = true
-    defer {
-      isLoadingComments = false
-      hasLoadedFirstPage = true
-    }
-    guard let page = try? await FeedAPIClient.shared.comments(
-      feedID: feedID,
-      limit: Self.commentPageSize
-    ) else { return }
-    serverComments = page.comments
-    nextCommentID = page.nextId
-  }
-
-  /// 다음 묶음. 서버가 준 `nextId` 를 `beforeCommentId` 로 그대로 넘긴다.
-  private func loadMoreServerComments() async {
-    guard MoyeoServerSync.isEnabled,
-          let feedID = post.serverFeedID,
-          let cursor = nextCommentID,
-          !isLoadingComments else { return }
-    isLoadingComments = true
-    defer { isLoadingComments = false }
-    guard let page = try? await FeedAPIClient.shared.comments(
-      feedID: feedID,
-      beforeCommentID: cursor,
-      limit: Self.commentPageSize
-    ) else {
-      // 실패하면 같은 커서로 무한히 다시 부르지 않도록 멈춘다.
-      nextCommentID = nil
-      return
-    }
-    // 같은 커서 응답이 두 번 붙지 않게 이미 가진 id 는 건너뛴다.
-    let known = Set((serverComments ?? []).map(\.commentId))
-    serverComments = (serverComments ?? []) + page.comments.filter { !known.contains($0.commentId) }
-    nextCommentID = page.nextId
-  }
-
-  /// 원글 요약 — 스텁 게시물로 들어왔으면 직접 받은 피드가 근거다 (없으면 빈 값 그대로 둔다).
-  private var summaryTitle: String {
-    post.feedTitle.isEmpty ? (loadedFeed?.trip.courseTitle ?? "") : post.feedTitle
-  }
-
-  private var summaryAuthorName: String {
-    post.authorName.isEmpty ? (loadedFeed?.author.nickname ?? "") : post.authorName
-  }
-
-  private var summaryLikeCount: Int {
-    post.authorName.isEmpty ? Int(loadedFeed?.likeCount ?? 0) : post.likeCount
-  }
-
-  private var originalPostSummary: some View {
-    HStack(spacing: 10) {
-      MoyeoPhotoTile(mascot: "", mood: post.mood, height: 40, cornerRadius: 10)
-        .frame(width: 40)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(summaryTitle)
-          .font(.caption.weight(.heavy))
-          .foregroundStyle(MoyeoTheme.ink)
-          .lineLimit(1)
-        Text("\(summaryAuthorName) · 좋아요 \(summaryLikeCount)")
-          .font(.caption2)
-          .foregroundStyle(MoyeoTheme.muted)
-          .lineLimit(1)
-      }
-      Spacer(minLength: 0)
-    }
-    .padding(.top, 10)
-    .padding(.bottom, 12)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(MoyeoTheme.softLine).frame(height: 1)
-    }
-    .accessibilityIdentifier("feedComments.originalPost")
-  }
-
-  private func commentRow(_ item: ChangelogComment, compact: Bool = false) -> some View {
-    HStack(alignment: .top, spacing: 11) {
-      // 서버가 프로필 이미지를 주면 반드시 이미지다 — 없을 때만 마스코트로 떨어진다.
-      if let authorImageURL = item.authorImageURL {
-        CachedRemoteImage(url: authorImageURL) { image in
-          image
-            .resizable()
-            .scaledToFill()
-        } placeholder: {
-          MoyeoTheme.leaf
-        }
-        .frame(width: compact ? 30 : 38, height: compact ? 30 : 38)
-        .clipShape(Circle())
-      } else {
-        MascotAvatar(mascot: item.mascot, size: compact ? 30 : 38, background: MoyeoTheme.leaf)
-      }
-      VStack(alignment: .leading, spacing: 5) {
-        HStack(spacing: 6) {
-          Text(item.name).font(.subheadline.weight(.bold))
-          if !item.badge.isEmpty {
-            Text(item.badge).font(.system(size: 9.5, weight: .bold)).foregroundStyle(
-              MoyeoTheme.forest
-            )
-            .padding(.horizontal, 7).frame(height: 21).background(MoyeoTheme.leaf).clipShape(
-              Capsule())
-          }
-          Spacer()
-          Text(item.time).font(.caption2).foregroundStyle(MoyeoTheme.text400)
-        }
-        Text(item.body).font(.subheadline).foregroundStyle(MoyeoTheme.ink)
-        HStack(spacing: 14) {
-          HStack(spacing: 4) {
-            Image(systemName: "heart").font(.system(size: 12, weight: .semibold))
-            if item.likes > 0 { Text("\(item.likes)") }
-          }
-          // 화면기획 23-1의 댓글 행 액션은 좋아요와 답글 달기 둘이다 (신고는 더보기에 없다)
-          Button("답글 달기") {}
-        }.font(.caption.weight(.bold)).foregroundStyle(MoyeoTheme.muted).frame(minHeight: 30)
-      }
-    }.padding(.vertical, 12).overlay(alignment: .bottom) {
-      Rectangle().fill(MoyeoTheme.softLine).frame(height: 1)
-    }
-  }
-
-  private func submit() {
-    let value = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
-    comment = ""
-    guard MoyeoServerSync.isEnabled, let feedID = post.serverFeedID else {
-      submitted.append(value)
-      return
-    }
-    // 서버 피드는 등록 후 **첫 묶음부터** 다시 읽는다 — 새 댓글이 최신 id 라 첫 묶음 맨 앞에 온다.
-    // 화면에서 만든 댓글을 서버 값처럼 섞지 않는다.
-    Task {
-      do {
-        try await FeedAPIClient.shared.postComment(feedID: feedID, content: value)
-        postedCount += 1
-      } catch {
-        return
-      }
-      nextCommentID = nil
-      serverComments = nil
-      await loadServerComments()
-    }
   }
 }
 

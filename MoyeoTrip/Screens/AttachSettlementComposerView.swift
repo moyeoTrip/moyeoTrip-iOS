@@ -52,7 +52,7 @@ struct AttachSettlementComposerView: View {
         ) {
             AttachFieldLabel(text: "무엇을 정산하나요", isRequired: true)
             AttachTextField(
-                placeholder: "예) 점심 · 달기약수탕 백숙",
+                placeholder: "예: 점심 · 달기약수탕 백숙",
                 text: $subject,
                 identifier: "attachSettlement.subject"
             )
@@ -159,9 +159,21 @@ struct AttachSettlementComposerView: View {
     }
 
     private var noteEditor: some View {
+        // `TextEditor` 에는 placeholder 가 없다 — 겹쳐 그린다.
+        // 예전에는 안내 글자가 없어 iOS 만 빈 상자였다 (20-2e, 2026-09-09).
         TextEditor(text: $note)
             .font(.subheadline)
             .scrollContentBackground(.hidden)
+            .overlay(alignment: .topLeading) {
+                if note.isEmpty {
+                    Text("예: 계좌는 채팅방에 따로 남길게요.")
+                        .font(.subheadline)
+                        .foregroundStyle(MoyeoTheme.text400)
+                        .padding(.horizontal, 5)
+                        .padding(.top, 8)
+                        .allowsHitTesting(false)
+                }
+            }
             .padding(8)
             .frame(height: 76)
             .background(MoyeoTheme.card)

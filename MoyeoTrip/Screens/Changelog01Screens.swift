@@ -46,8 +46,37 @@ struct RecruitmentDraft: Hashable {
     // 여행 시간 · 집합 시간 · 비용의 시작값은 **입력 폼의 기본값**이다 (남의 데이터가 아니다).
     // 안드로이드 `RecruitmentDraft`(startTime 08:00 · endTime 18:00 · meetingTime 08:00 · 비용 0)와 같은 값으로,
     // 인원·나이대·성별 기본값과 같은 성격이다. 날짜는 호스트가 골라야 하므로 비워 둔다.
-    var schedule = TripScheduleDetails(kind: .dayTrip, startDate: "", startTime: "08:00", endTime: "18:00")
-    var deadline = ""
+    /// 여행 날짜와 모집 마감일의 **폼 기본값**이다.
+    ///
+    /// 예전에는 둘 다 비워 뒀다(「호스트가 골라야 한다」). 그런데 17-6 요약에서 「마감」 값이
+    /// 통째로 비어 사용자가 「마감 일시가 안 보인다」고 지적했다 (2026-09-09).
+    /// 웹은 이미 날짜 기본값을 갖고 있었으므로, 세 구현을 같은 규칙으로 맞춘다:
+    /// **출발 = 2주 뒤 · 마감 = 출발 3일 전**. 호스트가 2단계에서 언제든 바꾼다.
+    var schedule = TripScheduleDetails(
+        kind: .dayTrip,
+        startDate: RecruitmentDraft.defaultStartDate,
+        startTime: "08:00",
+        endTime: "18:00"
+    )
+    var deadline = RecruitmentDraft.defaultDeadline
+
+    /// 「2026.09.23 (수)」 — 오늘부터 2주 뒤.
+    static var defaultStartDate: String {
+        dateText(daysFromToday: 14)
+    }
+
+    /// 「2026.09.20 (일) 23:59」 — 출발 3일 전 자정 직전.
+    static var defaultDeadline: String {
+        "\(dateText(daysFromToday: 11)) 23:59"
+    }
+
+    private static func dateText(daysFromToday days: Int) -> String {
+        let target = Calendar.current.date(byAdding: .day, value: days, to: Date()) ?? Date()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy.MM.dd (E)"
+        return formatter.string(from: target)
+    }
     /// 집합 장소. 이름·주소는 호스트가 지도를 끌어 정한다 —
     /// 위경도만 경북 중심으로 시작한다(값 표시가 아니라 지도 카메라의 첫 위치다).
     var meeting = MeetingPointDetails(
@@ -448,15 +477,15 @@ struct CreationFooter: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 6)
                     .frame(minWidth: 56)
-                    .frame(height: 50)
+                    .frame(height: MoyeoTheme.ctaHeight)
             }
             Button(nextTitle, action: next)
                 .font(.subheadline.weight(.heavy))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
+                .frame(height: MoyeoTheme.ctaHeight)
                 .background(isNextEnabled ? MoyeoTheme.primary400 : MoyeoTheme.text400)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius))
                 .disabled(!isNextEnabled)
                 .accessibilityIdentifier(nextIdentifier)
         }
@@ -777,7 +806,8 @@ struct CustomCourseEditorView: View {
                         Text(includesNextDay ? "Day 2가 추가됐어요" : "+ 다음 날 추가 (1박 이상일 때)")
                     }
                     .buttonStyle(DesignOutlineButtonStyle())
-                    DesignInfoBox(icon: "sparkles", text: "직접 만든 코스는 여행이 확정되기 전까지 방문지·시간·순서를 고칠 수 있어요. 수정하면 멤버 모두에게 알림이 가요.")
+                    // 문구는 화면기획 17-1 을 그대로 쓴다 — 웹·안드로이드와 한 글자도 달라선 안 된다.
+                    DesignInfoBox(icon: "sparkles", text: "직접 만든 코스는 여행이 확정되기 전까지 호스트가 언제든 고칠 수 있어요. 수정하면 채팅방 멤버 모두에게 알림이 가요.")
                 }
                 .padding(20)
             }
@@ -790,7 +820,11 @@ struct CustomCourseEditorView: View {
                 next: {
                     dismiss()
                     onContinue()
-                }
+                },
+                // 방문지가 **두 곳 이상**이어야 코스가 성립한다 (서버도 `places` 최소 2개를 요구한다).
+                // 예전에는 늘 눌릴 수 있어서, 방문지 0개인 상태에서도 초록으로 활성이었다 —
+                // 웹·안드로이드는 잠그는데 iOS 만 열려 있었다 (17-1, 사용자 지적 2026-09-09).
+                isNextEnabled: stops.count >= 2
             )
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
@@ -1172,7 +1206,8 @@ private struct RecruitmentDetailView: View {
                     label: "코스",
                     icon: "lock.fill",
                     value: draft.course.title,
-                    detail: "Step 1에서 고른 코스라 여기서는 바꿀 수 없어요."
+                    detail: "Step 1에서 고른 코스 이름이에요. 여기서는 바꿀 수 없어요.",
+                    detailBelowField: true
                 )
                 .accessibilityIdentifier("createDetail.course")
                 VStack(alignment: .leading, spacing: 8) {
@@ -1256,9 +1291,14 @@ struct RecruitmentSummaryView: View {
                         Pill(text: draft.source.title)
                             .accessibilityIdentifier("createSummary.source")
                     }
+                    // **값이 없는 줄은 그리지 않는다.** 라벨만 있고 값이 빈 줄은
+                    // 「정보가 빠졌다」로 읽힌다 — 17-6 의 「마감」이 그렇게 비어 있었다
+                    // (사용자 지적 2026-09-09).
+                    //
+                    // 좌표 줄은 **없앤다** — 위경도는 사용자가 읽을 값이 아니다
+                    // (17-3 에서 네 표면 다 뺀 것과 같은 이유).
                     SummaryRow("calendar", "일정", draft.scheduleSummary)
                     SummaryRow("mappin.and.ellipse", "집합", draft.meetingSummary)
-                    SummaryRow("map", "좌표", String(format: "%.6f, %.6f", draft.meeting.latitude, draft.meeting.longitude))
                     SummaryRow("person.2", "인원", "최소 \(draft.minimumParticipants)명 · 최대 \(draft.capacity)명")
                     SummaryRow("slider.horizontal.3", "조건", "\(draft.minimumAge)~\(draft.maximumAge)세 · \(draft.genderSummary)")
                     SummaryRow("wonsign.circle", "비용", draft.estimatedCostSummary)
@@ -1327,7 +1367,14 @@ struct CourseRouteEditView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Button { dismiss() } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
+                // 색을 직접 준다 — 안 주면 시스템 강조색(파랑)이 나온다.
+                // 「AccentColor」 자산도 브랜드 초록으로 채웠지만, 상단바 아이콘은
+                // 기획·웹·안드로이드처럼 **글자색**이라 여기서 못박는다 (18-1, 2026-09-09).
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .foregroundStyle(MoyeoTheme.ink)
+                        .frame(width: 44, height: 44)
+                }
                 Spacer()
                 Text("여행 경로").font(.headline.weight(.heavy))
                 Spacer()
@@ -1403,7 +1450,7 @@ struct CourseRouteEditView: View {
                         .font(.subheadline.weight(.heavy))
                         .foregroundStyle(MoyeoTheme.brandText)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(height: MoyeoTheme.ctaHeight)
                         .background(MoyeoTheme.card)
                         .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.forest))
                         .clipShape(RoundedRectangle(cornerRadius: 9))
@@ -1783,29 +1830,28 @@ private struct NoticeCard: View {
                 }
                 Text(notice.createdAt).monospacedDigit()
                 Spacer(minLength: 0)
-                // 화면기획 20-3 — 고정 공지는 "수정", 고정 해제된 공지는 "다시 고정".
-                // 둘 다 실제 동작이 붙는다: "다시 고정"은 PUT notices/{id}, "수정"은 20-3a 로 간다.
-                if let onTogglePin, !notice.isPinned {
+                // 화면기획 20-3 — 고정 토글과 「수정」을 **둘 다** 둔다.
+                // 예전에는 고정된 공지에 「수정」만, 풀린 공지에 「다시 고정」만 있어서
+                // 고정을 푸는 길이 iOS 에만 없었다 (웹·안드로이드는 둘 다 있다, 2026-09-09).
+                if let onTogglePin {
                     Button(action: onTogglePin) {
-                        Text("다시 고정")
+                        Text(notice.isPinned ? "고정 해제" : "다시 고정")
                             .foregroundStyle(isBusy ? MoyeoTheme.text400 : MoyeoTheme.forest)
                             .fontWeight(.heavy)
                     }
                     .buttonStyle(.plain)
                     .disabled(isBusy)
                     .accessibilityIdentifier("noticeHistory.repin.\(notice.id)")
-                } else if let onEdit {
+                }
+                if let onEdit {
                     Button(action: onEdit) {
                         Text("수정")
                             .foregroundStyle(MoyeoTheme.forest)
                             .fontWeight(.heavy)
                     }
                     .buttonStyle(.plain)
+                    .padding(.leading, onTogglePin == nil ? 0 : 12)
                     .accessibilityIdentifier("noticeHistory.edit.\(notice.id)")
-                } else {
-                    Text(notice.isPinned ? "수정" : "다시 고정")
-                        .foregroundStyle(MoyeoTheme.forest)
-                        .fontWeight(.heavy)
                 }
             }
             .font(.caption2)
@@ -1934,6 +1980,9 @@ private struct DesignField: View {
     let icon: String
     let value: String
     var detail: String?
+    /// 안내 문구를 **입력 뷰 아래**에 둘지. 기획·웹·안드로이드가 그렇게 그린다 —
+    /// 뷰 안에 넣으면 값과 안내가 한 상자에 섞여 iOS 만 달라 보였다 (사용자 지적, 2026-09-09).
+    var detailBelowField = false
     /// 값이 비었을 때 대신 보여줄 안내. 지어낸 기본값을 넣지 않기 위한 자리다.
     var placeholder: String?
     var action: (() -> Void)?
@@ -1950,6 +1999,9 @@ private struct DesignField: View {
             } else {
                 row
             }
+            if detailBelowField, let detail {
+                Text(detail).font(.caption).foregroundStyle(MoyeoTheme.muted)
+            }
         }
     }
 
@@ -1962,7 +2014,7 @@ private struct DesignField: View {
                 Text(isPlaceholder ? (placeholder ?? "") : value)
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(isPlaceholder ? MoyeoTheme.muted : MoyeoTheme.ink)
-                if let detail {
+                if let detail, !detailBelowField {
                     Text(detail).font(.caption2).foregroundStyle(MoyeoTheme.muted)
                 }
             }
@@ -1972,7 +2024,7 @@ private struct DesignField: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(minHeight: detail == nil ? 50 : 60)
+        .frame(minHeight: (detail == nil || detailBelowField) ? 50 : 60)
         .contentShape(Rectangle())
         .background(MoyeoTheme.card)
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(MoyeoTheme.line))
@@ -2028,14 +2080,16 @@ private struct SummaryRow: View {
     let icon: String; let label: String; let value: String
     init(_ icon: String, _ label: String, _ value: String) { self.icon = icon; self.label = label; self.value = value }
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 18)
-            Text(label).font(.caption).foregroundStyle(MoyeoTheme.muted).frame(width: 36, alignment: .leading)
-            // 값이 비면 자리만 비운다 — 구분자나 단위만 남는 문구를 그리지 않는다.
-            if !value.isEmpty {
+        // 값이 없으면 **줄 자체를 그리지 않는다**. 예전에는 아이콘과 라벨만 남아
+        // 「마감」 같은 칸이 빈 채로 남았고, 정보가 빠진 것처럼 읽혔다
+        // (17-6, 사용자 지적 2026-09-09).
+        if !value.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 18)
+                Text(label).font(.caption).foregroundStyle(MoyeoTheme.muted).frame(width: 36, alignment: .leading)
                 Text(value).font(.caption.weight(.heavy)).foregroundStyle(MoyeoTheme.ink)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
     }
 }

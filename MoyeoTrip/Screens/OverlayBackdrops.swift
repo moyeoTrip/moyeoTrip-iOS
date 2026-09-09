@@ -86,3 +86,38 @@ struct ChatRoomOverlayBackdrop: View {
     }
   }
 }
+
+/// 20-6 확인 시트 뒤에 깔리는 채팅방 — **딤을 넣지 않는다.**
+///
+/// `ChatRoomOverlayBackdrop` 은 자체 스크림을 얹는다. 확인 시트(`MoyeoConfirmSheet`)도
+/// 스크림을 얹으므로 둘을 겹치면 **딤이 두 겹**이 되어 iOS 만 유난히 어둡게 찍혔다
+/// (2026-09-08 대조: iOS 0.390 vs 나머지 0.57~0.60).
+/// 스크림은 시트가 대는 것이 맞으므로 여기서는 화면만 그린다 —
+/// 23-2·23-3 의 `FeedOverlayBackdrop` 과 같은 방식이다.
+struct ChatRoomPlainBackdrop: View {
+  var thread: ChatThread?
+
+  var body: some View {
+    if let thread {
+      OverlayBackdropHeaderlessChatRoom(thread: thread)
+    } else {
+      MoyeoTheme.background
+    }
+  }
+}
+
+private struct OverlayBackdropHeaderlessChatRoom: View {
+  let thread: ChatThread
+
+  var body: some View {
+    VStack(spacing: 0) {
+      OverlayBackdropHeader(
+        title: thread.tripTitle,
+        trailingIcons: ["magnifyingglass", "line.3.horizontal"]
+      )
+      ChatRoomBody(thread: thread)
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+}

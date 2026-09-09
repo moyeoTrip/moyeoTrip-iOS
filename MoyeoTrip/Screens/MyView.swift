@@ -137,13 +137,26 @@ struct MyView: View {
 
   /// 25 프로필 카드에 그릴 내 정보. `GET /users/me` 는 userID 를 주지 않아
   /// 받은 값(닉네임 · 이미지 · 소개 · 여행 스타일)만 넘긴다.
+  /// 내 카드도 **남의 카드와 똑같은 경로**로 만든다.
+  ///
+  /// 예전에는 `.me` 라는 별도 분기가 있었는데, 그 분기가 공개 프로필을 합치지 않아
+  /// 내 카드에만 매너 점수·여행·피드가 없었다. 항목을 하나씩 맞추는 대신 **분기를 없앴다** —
+  /// 두 경로가 있으면 언제든 다시 어긋난다. 이제 내 카드도 `serverUser` 로 들어가
+  /// `GET users/{id}/profile` · `travel-reviews` 를 같은 코드로 받는다.
   private var myProfileSubject: ProfileCardSubject {
     guard let serverProfile else { return .unavailable }
-    return .me(
-      nickname: serverProfile.nickname,
-      profileImageURL: MoyeoImageURL.resolve(serverProfile.profileImageUrl),
-      introduction: serverProfile.introduction,
-      travelStyles: serverProfile.travelStyles.map(\.label)
+    // 내 userId 는 액세스 토큰에서 동기로 읽는다 (TAB-STATE-CANON R6).
+    // 없으면 공개 프로필을 못 받아 **항목이 빠진 카드**가 되므로 빈 상태로 둔다 —
+    // 반쪽 카드를 그리는 것보다 정직하다.
+    guard let userID = MoyeoCurrentUser.id else { return .unavailable }
+    return .serverUser(
+      ProfileCardUserReference(
+        userID: userID,
+        nickname: serverProfile.nickname,
+        profileImageUrl: serverProfile.profileImageUrl,
+        introduction: serverProfile.introduction,
+        nicknameColor: serverProfile.nicknameColor
+      )
     )
   }
 
@@ -638,24 +651,16 @@ private struct ProfileEditView: View {
       ScrollView {
         VStack(spacing: 0) {
           VStack(spacing: 10) {
-            ZStack(alignment: .bottomTrailing) {
-              // 아바타는 닉네임에서 계산한다 (R5). `emojiOverride` 를 주면 서버 프로필
-              // 이미지까지 무시되므로 여기서는 주지 않는다.
-              AuthenticatedProfileAvatar(profile: profile, size: 96)
-              Image(systemName: "lock.fill")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(MoyeoTheme.muted)
-                .frame(width: 26, height: 26)
-                .background(MoyeoTheme.subtleBackground)
-                .clipShape(Circle())
-                .overlay(Circle().stroke(MoyeoTheme.line))
-            }
+            // 자물쇠 배지를 달지 않는다. 닉네임 아래 "바꿀 수 없어요" 경고도 두지 않는다 —
+            // 고칠 수 없다는 사실은 아래 **비공개 정보**의 `닉네임`·`캐릭터` 줄에 잠금 표시로
+            // 이미 있다. 들어오자마자 큰 자물쇠와 경고로 맞이하면 압박으로 읽힌다.
+            //
+            // 아바타는 닉네임에서 계산한다 (R5). `emojiOverride` 를 주면 서버 프로필
+            // 이미지까지 무시되므로 여기서는 주지 않는다.
+            AuthenticatedProfileAvatar(profile: profile, size: 96)
             Text(displayName)
               .font(.title3.weight(.heavy))
               .foregroundStyle(MoyeoTheme.ink)
-            Text("한 번 정한 친구는 바꿀 수 없어요")
-              .font(.caption)
-              .foregroundStyle(MoyeoTheme.muted)
           }
           .frame(maxWidth: .infinity)
           .padding(.vertical, 24)
@@ -848,12 +853,11 @@ private struct ProfileTravelTasteBlock: View {
             .font(.subheadline.weight(.bold))
             .foregroundStyle(MoyeoTheme.ink)
           Spacer(minLength: 8)
+          // 화살표를 두지 않는다 — 기획·웹·안드로이드는 「탭해서 바로 수정」 문구만 둔다.
+          // iOS 만 chevron 이 붙어 있어 4열 비교에서 이 줄만 달라 보였다 (28, 2026-09-09).
           Text("탭해서 바로 수정")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.brandText)
-          Image(systemName: "chevron.right")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(MoyeoTheme.text400)
+            .foregroundStyle(MoyeoTheme.muted)
         }
 
         ProfileTravelTastePreviewLine(title: "여행 스타일", items: orderedTravelStyles)
@@ -882,34 +886,36 @@ private struct ProfileTravelTastePreviewLine: View {
   let items: [String]
 
   var body: some View {
-    HStack(spacing: 6) {
+    // 제목은 칩 **위**에 둔다. 예전에는 왼쪽에 붙여 한 줄로 놓았는데,
+    // 기획·웹·안드로이드는 셋 다 위에 두므로 iOS 만 줄바꿈이 달라 보였다 (28, 2026-09-09).
+    VStack(alignment: .leading, spacing: 6) {
       Text(title)
-        .font(.caption.weight(.semibold))
+        .font(.caption2.weight(.semibold))
         .foregroundStyle(MoyeoTheme.muted)
-        .frame(width: 58, alignment: .leading)
-      ForEach(items, id: \.self) { item in
-        Text(item)
+      HStack(spacing: 6) {
+        // 고른 칩은 **꽉 찬 초록**이다 (기획·웹 `variant="primary"` · 안드 `colors.primary`).
+        // 예전에는 `selectionSurface` + 초록 글자라 iOS 만 옅은 칩으로 찍혔다.
+        ForEach(items, id: \.self) { item in
+          Text(item)
+            .font(.caption.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.onLeaf)
+            .padding(.horizontal, 11)
+            .frame(height: 27)
+            .background(MoyeoTheme.leaf)
+            .clipShape(Capsule())
+        }
+        Text("+ 추가")
           .font(.caption.weight(.heavy))
-          .foregroundStyle(MoyeoTheme.brandText)
-          .padding(.horizontal, 9)
+          .foregroundStyle(MoyeoTheme.muted)
+          .padding(.horizontal, 11)
           .frame(height: 27)
-          .background(MoyeoTheme.selectionSurface)
+          .background(MoyeoTheme.subtleBackground)
           .clipShape(Capsule())
           .overlay {
-            Capsule().stroke(MoyeoTheme.forest.opacity(0.7), lineWidth: 1)
+            Capsule().stroke(MoyeoTheme.line, lineWidth: 1)
           }
+        Spacer(minLength: 0)
       }
-      Text("+ 추가")
-        .font(.caption.weight(.heavy))
-        .foregroundStyle(MoyeoTheme.muted)
-        .padding(.horizontal, 9)
-        .frame(height: 27)
-        .background(MoyeoTheme.subtleBackground)
-        .clipShape(Capsule())
-        .overlay {
-          Capsule().stroke(MoyeoTheme.line, lineWidth: 1)
-        }
-      Spacer(minLength: 0)
     }
   }
 }
@@ -2051,25 +2057,36 @@ struct ProviderManagementView: View {
   @ViewBuilder
   private func providerCard(_ provider: AuthServiceProvider) -> some View {
     let isConnected = service.providers.contains(provider)
-    VStack(alignment: .leading, spacing: 12) {
+    // 연결 버튼은 **줄 오른쪽에 작게** 둔다 (웹과 같은 배치, 사용자 지적 2026-09-09).
+    // 예전에는 줄 아래에 폭을 꽉 채우는 큰 버튼이 붙어 카드 하나가 세 줄 높이였고,
+    // 웹은 한 줄이라 같은 화면이 플랫폼마다 두 배 길이로 찍혔다.
+    // 색은 그대로 둔다 — 카카오 노랑·Apple 흑백·Google 외곽선은 각 사업자의 브랜드 규정이다.
+    VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 12) {
         ProviderManagementMark(provider: provider)
         VStack(alignment: .leading, spacing: 2) {
           Text(provider.providerName)
             .font(MoyeoTypography.cardTitle)
             .foregroundStyle(MoyeoTheme.ink)
-          Text(isConnected ? "연결됨" : provider.providerConnectionHint)
+          // 부제는 **연결 상태**만 말한다. 예전에는 사업자별 안내 문구였는데
+          // 웹은 「연결되지 않음」이라 같은 줄이 플랫폼마다 다른 말을 했다 (29-5, 2026-09-09).
+          Text(isConnected ? "연결됨" : "연결되지 않음")
             .font(MoyeoTypography.cardMeta)
             .foregroundStyle(isConnected ? MoyeoTheme.forest : MoyeoTheme.muted)
         }
-        Spacer()
+        Spacer(minLength: 8)
         if isConnected {
           Image(systemName: "checkmark.circle.fill")
             .foregroundStyle(MoyeoTheme.forest)
+        } else {
+          providerAction(provider, isConnected: isConnected)
         }
       }
 
-      providerAction(provider, isConnected: isConnected)
+      // 이메일만 입력이 필요해 줄 아래로 펼친다 — 나머지는 눌러서 바로 사업자 화면으로 간다.
+      if provider == .email, !isConnected, isEmailFormExpanded {
+        emailConnectionForm
+      }
     }
     .padding(16)
     .background(MoyeoTheme.card)
@@ -2081,32 +2098,31 @@ struct ProviderManagementView: View {
     .disabled(service.isLoading || service.linkingProvider != nil)
   }
 
+  /// 줄 오른쪽의 작은 연결 버튼. 문구는 네 표면 모두 「연결하기」다 (기획 `ScreenAccountProviders`).
   @ViewBuilder
   private func providerAction(_ provider: AuthServiceProvider, isConnected: Bool) -> some View {
-    if provider == .email, !isConnected {
-      if isEmailFormExpanded {
-        emailConnectionForm
-      } else {
-        AuthProviderButton(
-          provider: .email,
-          isDisabled: service.isLoading || service.linkingProvider != nil,
-          showsMark: false,
-          titleOverride: "이메일 연결",
-          accessibilityIdentifierOverride: "providers.email.link"
-        ) {
-          withAnimation(.easeInOut(duration: 0.18)) {
-            isEmailFormExpanded = true
-          }
+    if provider == .email {
+      AuthProviderButton(
+        provider: .email,
+        isDisabled: service.isLoading || service.linkingProvider != nil,
+        showsMark: false,
+        titleOverride: isEmailFormExpanded ? "입력 닫기" : "연결하기",
+        accessibilityIdentifierOverride: "providers.email.link",
+        isCompact: true
+      ) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+          isEmailFormExpanded.toggle()
         }
       }
-    } else if !isConnected {
+    } else {
       AuthProviderButton(
         provider: provider,
         isLoading: service.linkingProvider == provider,
         isDisabled: service.isLoading || service.linkingProvider != nil,
         showsMark: false,
-        titleOverride: "\(provider.providerName) 연결",
-        accessibilityIdentifierOverride: "providers.\(provider.pathComponent).link"
+        titleOverride: "연결하기",
+        accessibilityIdentifierOverride: "providers.\(provider.pathComponent).link",
+        isCompact: true
       ) {
         Task { await service.link(provider) }
       }
@@ -2128,16 +2144,8 @@ struct ProviderManagementView: View {
         .textContentType(.newPassword)
         .moyeoInput()
         .accessibilityIdentifier("providers.email.password")
+      // 닫기는 줄 오른쪽 버튼이 겸한다 — 같은 동작을 두 곳에 두지 않는다.
       emailSubmitButton
-      Button("입력 닫기") {
-        withAnimation(.easeInOut(duration: 0.18)) {
-          isEmailFormExpanded = false
-        }
-      }
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(MoyeoTheme.muted)
-      .frame(maxWidth: .infinity)
-      .buttonStyle(.plain)
     }
   }
 
@@ -2173,10 +2181,6 @@ extension AuthServiceProvider {
     case .email: "이메일"
     case .apple: "Apple"
     }
-  }
-
-  fileprivate var providerConnectionHint: String {
-    self == .email ? "이메일과 비밀번호가 필요해요" : "추가로 연결할 수 있어요"
   }
 }
 
@@ -3111,7 +3115,13 @@ private struct ProfileEditListRow: View {
 
   private var row: some View {
     HStack(spacing: 8) {
-      Text(label).font(.subheadline.weight(.bold)).foregroundStyle(MoyeoTheme.ink)
+      // 라벨은 줄이지 않는다 — 값이 길면(자기소개 등) 라벨이 먼저 눌려 줄바꿈될 수 있다.
+      // 웹에서 실제로 「자/기/소/개」로 세로로 쪼개진 것을 봤다. 값만 줄임표로 줄인다.
+      Text(label)
+        .font(.subheadline.weight(.bold))
+        .foregroundStyle(MoyeoTheme.ink)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
       Spacer(minLength: 8)
       Text(value)
         .font(.subheadline.weight(locked ? .regular : .bold))

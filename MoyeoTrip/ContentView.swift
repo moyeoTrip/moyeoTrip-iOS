@@ -298,6 +298,9 @@ struct ContentView: View {
         if connectivity.isOffline, !connectivity.hasCachedContent {
             OfflineEmptyView(onRetry: connectivity.retry)
         } else {
+            // 배너는 화면을 아래로 밀어야 한다 — `safeAreaInset(edge: .top)` 으로 바꿔 봤더니
+            // 밀지 않고 **헤더 위에 겹쳐** 뒤로가기·메뉴 버튼을 가렸다. 쌓는 방식이 맞고,
+            // 경고색이 상태바까지 번지던 것은 배너 쪽에서 `ignoresSafeAreaEdges: []` 로 막았다.
             VStack(spacing: 0) {
                 if connectivity.isOffline {
                     MoyeoOfflineBanner(cachedContentAvailable: true)

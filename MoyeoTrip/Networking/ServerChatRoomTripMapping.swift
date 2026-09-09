@@ -159,7 +159,10 @@ enum ServerTripMapper {
             price: detail.participationFee.map { "1인 \(decimalText($0))원" } ?? "무료 · 미정",
             capacity: detail.maxParticipants,
             joined: detail.participantCount,
-            minimumParticipants: 0,
+            // 서버가 **준다** (`GET /chat-rooms/{id}` 의 `minimumParticipants`).
+            // 예전에는 0 을 박아 넣어 20-4 카드의 「· 최소 3명 충족」 구절이 통째로 사라졌다
+            // (웹·안드로이드는 그 값을 쓴다, 사용자 지적 2026-09-09).
+            minimumParticipants: detail.minimumParticipants ?? 0,
             status: status(from: detail.status),
             summary: detail.description ?? "",
             vibe: "",

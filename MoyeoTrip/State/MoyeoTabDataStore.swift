@@ -179,10 +179,30 @@ extension MoyeoTabDataStore {
         guard MoyeoServerSync.isEnabled else { return }
         if let profile = try? await UserProfileAPIClient.shared.myProfile() {
             myProfile = profile
+            persistDisplayProfile(profile)
         }
         if let rooms = try? await ChatRoomAPIClient.shared.myRooms() {
             myRooms = rooms
         }
+    }
+
+    /// 다음 **콜드 스타트에서 프로필 사진이 한 박자 늦게 뜨지 않도록** URL 을 남긴다.
+    ///
+    /// 닉네임은 액세스 토큰에서 동기로 읽어 앱이 켜지는 순간 그려지는데(R6), 사진 URL 은
+    /// `GET users/me/profile` 응답을 기다려야 해서 **닉네임만 먼저 뜨고 사진이 뒤따라왔다**
+    /// (사용자가 발견 — 앱을 껐다 켤 때마다 반복됐다).
+    ///
+    /// 이미지 바이트는 디스크 캐시에 남아 있으므로 **URL 만 알면 즉시 그린다.**
+    /// `ContentView` 가 시작할 때 `cachedProfile()` 로 이 값을 동기로 읽는다.
+    /// 저장 자리는 가입 플로우가 쓰던 것과 같다 — 여기서는 실제 프로필 응답으로 덮는다
+    /// (가입 후보 응답보다 이쪽이 지금 사진이다).
+    private func persistDisplayProfile(_ profile: ServerMyProfile) {
+        UserDefaultsAuthDisplayProfileStore().save(
+            AuthDisplayProfile(
+                nickname: profile.nickname,
+                profileImageURL: MoyeoImageURL.resolve(profile.profileImageUrl)
+            )
+        )
     }
 
     /// 로그아웃·계정 전환 시 보관소를 비운다 (R4).
@@ -209,6 +229,8 @@ extension MoyeoTabDataStore {
         loadingFeedTab = nil
         feedSegment = .discover
         myProfile = nil
+        // 저장해 둔 표시용 프로필도 지운다 — 다음 로그인 화면에 남의 사진이 남으면 안 된다.
+        UserDefaultsAuthDisplayProfileStore().clear()
         myRooms = nil
         mySegment = Self.defaultMySegment
     }

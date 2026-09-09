@@ -9,12 +9,33 @@ import Foundation
 
 /// 인기 검색어 한 건 — `GET /api/v1/search/popular-keywords` 응답 그대로다.
 ///
-/// 서버가 주는 값은 **이 셋뿐이다.** 순위 변동(상승·하락)을 알려주는 필드가 없으므로
-/// 화면기획의 화살표(▲▼)는 그리지 않는다 — 그건 목데이터였다 (NO-MOCK-CANON R1).
+/// 등락은 서버가 2026-09-09 에 열어줬다: `rankTrend` 와 `rankChange`.
+/// 기준은 **전일 순위**다(API 스펙 `PopularSearchKeywordResponse`).
 struct ServerPopularKeyword: Decodable, Hashable, Identifiable {
+    /// 전일 순위 대비 등락. 스펙의 enum 은 UP · DOWN · SAME · NEW 다.
+    ///
+    /// `unknown` 은 **모르는 값이 왔을 때만** 쓴다 — 그때는 화면이 등락을 그리지 않는다.
+    /// 지어내지 않는다(NO-MOCK-CANON R1).
+    enum RankTrend: String, Decodable, Hashable {
+        case up = "UP"
+        case down = "DOWN"
+        case same = "SAME"
+        case new = "NEW"
+        case unknown
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = RankTrend(rawValue: raw) ?? .unknown
+        }
+    }
+
     let rank: Int
     let keyword: String
     let searchCount: Int64
+    /// 스펙상 필수지만, 낡은 응답을 받아도 화면이 죽지 않도록 옵셔널로 둔다.
+    let rankTrend: RankTrend?
+    /// 변동 폭. 양수는 상승 · 음수는 하락이고 **신규 진입은 `null`** 이다.
+    let rankChange: Int?
 
     var id: Int { rank }
 }

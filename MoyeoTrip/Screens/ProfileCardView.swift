@@ -17,7 +17,6 @@ enum ProfileCardSubject: Hashable {
   case unavailable
   /// 내 프로필. `GET /users/me` 응답에는 userID 가 없어 공개 프로필 API 를 부를 수 없다 —
   /// 받은 값(닉네임 · 이미지 · 소개 · 여행 스타일)만 카드에 그린다.
-  case me(nickname: String, profileImageURL: URL?, introduction: String?, travelStyles: [String])
   /// 27 도감의 실서버 동행자 — 나와 동행한 횟수 · 내가 남긴 메시지까지 들고 있다
   case serverCompanion(ServerTravelDexCompanion)
   /// 유저 id 만 아는 진입점 (피드 작성자 · 멤버 액션 시트 · 친구 목록)
@@ -31,12 +30,23 @@ struct ProfileCardUserReference: Hashable {
   let nickname: String
   let profileImageUrl: String?
   let introduction: String?
+  /// 진입점이 이미 알고 있으면 넘긴다 — **카드 색이 한 박자 늦게 바뀌지 않게** 한다.
+  /// 색은 공개 프로필에서만 오므로, 모르는 채 열면 기본색으로 그렸다가 응답이 온 뒤 바뀐다.
+  /// 마이 화면은 `GET users/me/profile` 로 이미 색을 갖고 있다.
+  let nicknameColor: String?
 
-  init(userID: Int64, nickname: String, profileImageUrl: String? = nil, introduction: String? = nil) {
+  init(
+    userID: Int64,
+    nickname: String,
+    profileImageUrl: String? = nil,
+    introduction: String? = nil,
+    nicknameColor: String? = nil
+  ) {
     self.userID = userID
     self.nickname = nickname
     self.profileImageUrl = profileImageUrl
     self.introduction = introduction
+    self.nicknameColor = nicknameColor
   }
 }
 
@@ -45,8 +55,7 @@ struct ProfileCardView: View {
 
   /// 내 카드인지. 자기에게 친구 신청을 걸 수는 없어 하단 동작을 하나 줄인다.
   private var isMe: Bool {
-    if case .me = subject { return true }
-    // 남의 카드로 들어왔더라도 대상이 나면 마찬가지다 (피드 작성자가 나인 경우).
+    // 대상 userId 가 나면 내 카드다 — 마이에서 열든 피드 작성자를 눌러 열든 같다.
     if let id = subject.userID, let mine = MoyeoCurrentUser.id { return id == mine }
     return false
   }
@@ -55,6 +64,13 @@ struct ProfileCardView: View {
   @State private var publicProfile: ServerPublicProfile?
   /// 다른 여행자들이 남긴 평가 (뒷면)
   @State private var receivedReviews: [ServerReceivedTravelReview]?
+  /// 나와의 동행 정보 — 「N회 동행」 배지 · 「최근 동행」 줄 · 뒷면의 내가 남긴 한 줄 메시지.
+  ///
+  /// 도감(27)에서 들어오면 `.serverCompanion` 으로 이미 들고 오지만, **유저 id 만 아는
+  /// 진입점**(피드 작성자 · 멤버 · 캡처 라우트)에서는 그 값이 없어 세 칸이 통째로 사라졌다 —
+  /// 같은 화면이 들어온 길에 따라 달라 보였다 (25, 사용자 지적 2026-09-09).
+  /// `GET /users/me/travel-dex` 에 그 값이 다 있으니 찾아서 채운다.
+  @State private var dexCompanion: ServerTravelDexCompanion?
 
   /// 뒤집힘을 **부호 있는 반회전 수**로 센다. `0` 앞면, `±1` 뒷면, `±2` 다시 앞면.
   /// 부호가 방향이다 — 왼쪽으로 밀면 줄고 오른쪽으로 밀면 는다. `Bool` 이던 동안에는
@@ -80,8 +96,15 @@ struct ProfileCardView: View {
   }
 
   private var companion: ProfileCardCompanion {
-    ProfileCardCompanion(
-      subject: subject,
+    // 도감에서 들어왔으면 그 값이 이미 대상 안에 있다. 아니면 찾아 둔 도감 항목으로 바꿔 끼운다.
+    let resolvedSubject: ProfileCardSubject = {
+      if case .serverUser = subject, let dexCompanion {
+        return .serverCompanion(dexCompanion)
+      }
+      return subject
+    }()
+    return ProfileCardCompanion(
+      subject: resolvedSubject,
       profile: publicProfile,
       receivedReviews: receivedReviews ?? []
     )
@@ -244,6 +267,12 @@ struct ProfileCardView: View {
     if receivedReviews == nil {
       receivedReviews = try? await UserProfileAPIClient.shared.travelReviews(userID: userID)
     }
+    // 도감에서 들어온 경우에는 이미 값이 있어 부르지 않는다.
+    if case .serverUser = subject, dexCompanion == nil {
+      let dex = try? await SocialAPIClient.shared.travelDex()
+      // 도감에 없으면 나와 동행한 적이 없는 사람이다 — 그 칸은 비워 둔다(지어내지 않는다).
+      dexCompanion = dex?.companions.first { $0.userId == userID }
+    }
   }
 }
 
@@ -253,8 +282,6 @@ extension ProfileCardSubject {
     switch self {
     case .unavailable:
       return "unavailable"
-    case .me(let nickname, _, _, _):
-      return "me.\(nickname)"
     case .serverCompanion(let companion):
       return "companion.\(companion.userId)"
     case .serverUser(let reference):
@@ -267,10 +294,6 @@ extension ProfileCardSubject {
     switch self {
     case .unavailable:
       return nil
-    case .me:
-      // 내 카드도 남의 카드와 같은 공개 프로필을 쓴다 — 여행·피드·매너 점수·받은 평가.
-      // 여기서 nil 을 주는 동안 내 카드에는 닉네임과 소개만 있었다.
-      return MoyeoCurrentUser.id
     case .serverCompanion(let companion):
       return companion.userId
     case .serverUser(let reference):

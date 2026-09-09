@@ -37,6 +37,10 @@ struct FeedWriteView: View {
     @State private var selectedCoverIndex = 0
     @State private var currentStep = 1
     @State private var isPublished = false
+    /// 올리는 중 — 두 번 눌러 두 번 올라가지 않게 막는다.
+    @State private var isPublishing = false
+    /// 올리다 실패한 이유. 조용히 실패하면 올라간 것으로 착각한다.
+    @State private var publishError: String?
     @State private var selectedVisibility: FeedVisibility = .friendsOnly
     /// 기록할 코스 후보 — **내가 다녀온 여행**(`ended && status == "CONFIRMED"`)만이다.
     /// 예전에는 `GET /travel-courses/public` 을 후보로 써서 내가 가지도 않은 남의 코스
@@ -53,6 +57,9 @@ struct FeedWriteView: View {
     @State private var pickedPhotoItems: [PhotosPickerItem] = []
     @State private var pickedPhotos: [UIImage] = []
     private let stepCount = 5
+    /// 서버에는 제목 필드가 없다 — 제목은 **본문 첫 줄**로 올려 보낸다 (BE 요청 §8-7).
+    private static let titleLimit = 60
+    private static let bodyLimit = 500
 
     /// 고른 여행. 후보가 없으면 nil 이고 관련 섹션은 그리지 않는다.
     private var selectedTrip: FeedWriteTripCandidate? {
@@ -73,7 +80,18 @@ struct FeedWriteView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     stepIntro
                     stepContent
+                    if let publishError {
+                        Text(publishError)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.coral)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("feedWrite.publishError")
+                    }
                 }
+                // 폭을 **끝까지 늘린다**. `ScrollView` 는 내용 폭이 좁으면 가로로 가운데 놓는다 —
+                // 그래서 카드가 안쪽으로 들어가고 좌우 여백이 서로 달라졌다
+                // (24-4 iOS 만 좌 69pt · 우 94pt, 안드로이드는 20/20, 사용자 지적 2026-09-09).
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
                 .padding(.bottom, 120)
@@ -191,13 +209,13 @@ private extension FeedWriteView {
             Button {
                 publishAndDismiss()
             } label: {
-                Text(isPublished ? "게시됨" : "게시")
+                Text(isPublished ? "게시됨" : (isPublishing ? "올리는 중" : "게시"))
                     .font(.caption.weight(.heavy))
                     .foregroundStyle(currentStep >= stepCount ? MoyeoTheme.forest : MoyeoTheme.muted)
                     .frame(width: 40, height: 44)
             }
             .buttonStyle(.plain)
-            .disabled(currentStep < stepCount || isPublished)
+            .disabled(currentStep < stepCount || isPublished || isPublishing)
             .accessibilityIdentifier("feed.write.publish")
         }
         .padding(.horizontal, 12)
@@ -266,20 +284,50 @@ private extension FeedWriteView {
         }
     }
 
+    /// **입력은 두 칸이다** — 라벨과 구분선을 둔다.
+    /// 예전에는 제목과 본문이 라벨 없이 붙어 있어 무엇을 쓰는 칸인지 알 수 없었다
+    /// (사용자 지적 「제목과 내용 입력 뷰가 둘 다 있어야 하고 잘 구분되게」, 2026-09-09).
     var memoCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("제목", text: $title)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("제목")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.muted)
+            TextField("이번 여행을 한마디로", text: $title)
                 .font(.headline.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.ink)
                 .textInputAutocapitalization(.never)
+                .frame(height: 40)
+                .onChange(of: title) { _, value in
+                    if value.count > Self.titleLimit { title = String(value.prefix(Self.titleLimit)) }
+                }
+                .accessibilityIdentifier("feedWrite.title")
 
+            Rectangle()
+                .fill(MoyeoTheme.softLine)
+                .frame(height: 1)
+                .padding(.vertical, 6)
+
+            Text("내용")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.muted)
             TextEditor(text: $memo)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(MoyeoTheme.text700)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 84)
+                .overlay(alignment: .topLeading) {
+                    if memo.isEmpty {
+                        Text("여행 어땠는지 한 줄 남겨주세요.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.text400)
+                            .padding(.horizontal, 5)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .accessibilityIdentifier("feedWrite.memo")
 
-            Text("\(min(memo.count, 500)) / 500")
+            Text("\(min(memo.count, Self.bodyLimit)) / \(Self.bodyLimit.formatted(.number))")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(MoyeoTheme.text400)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -595,7 +643,7 @@ private extension FeedWriteView {
                     .font(.subheadline.weight(.heavy))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 50)
+                    .frame(height: MoyeoTheme.ctaHeight)
                     .background(MoyeoTheme.forest)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
@@ -711,9 +759,64 @@ private extension FeedWriteView {
             photoCountText: pickedPhotos.isEmpty ? "" : "1/\(pickedPhotos.count)"
         )
 
-        isPublished = true
-        onPublish(post)
-        dismiss()
+        // **서버에 올린다.** 예전에는 이 자리에서 화면 안 목록에만 끼워 넣고 끝냈다 —
+        // 앱을 다시 켜면 사라지고 웹·안드로이드에서도 보이지 않았다 (2026-09-09 발견).
+        // 웹 `createFeed` · 안드 `FeedRepository.createFeed` 와 같은 엔드포인트를 쓴다.
+        guard MoyeoServerSync.isEnabled, let roomID = selectedTrip?.room.roomId else {
+            // 미로그인·목데이터 상태에서는 올릴 곳이 없다 — 화면 안 목록만 갱신한다.
+            isPublished = true
+            onPublish(post)
+            dismiss()
+            return
+        }
+        isPublishing = true
+        Task {
+            defer { isPublishing = false }
+            do {
+                _ = try await FeedAPIClient.shared.createFeed(
+                    chatRoomID: roomID,
+                    content: Self.contentWithTitle(trimmedTitle, body),
+                    visibility: selectedVisibility.serverValue,
+                    images: Self.multipartImages(from: pickedPhotos)
+                )
+            } catch {
+                publishError = error.localizedDescription
+                return
+            }
+            isPublished = true
+            onPublish(post)
+            dismiss()
+        }
+    }
+
+    /// 제목이 있으면 본문 첫 줄로 올려 보낸다 — 서버에 제목 필드가 없다 (BE §8-7).
+    private static func contentWithTitle(_ title: String, _ body: String) -> String {
+        guard !title.isEmpty else { return body }
+        return body.isEmpty ? title : "\(title)\n\n\(body)"
+    }
+
+    /// 고른 사진을 서버가 받는 `images` 파트로 만든다. JPEG 0.85 는 20MB 상한 안에 넉넉히 든다.
+    private static func multipartImages(from images: [UIImage]) -> [MoyeoMultipartFile] {
+        images.enumerated().compactMap { index, image in
+            guard let data = image.jpegData(compressionQuality: 0.85) else { return nil }
+            return MoyeoMultipartFile(
+                partName: "images",
+                fileName: "feed-\(index + 1).jpg",
+                mimeType: "image/jpeg",
+                data: data
+            )
+        }
+    }
+}
+
+private extension FeedVisibility {
+    /// 서버 `visibility` 값. 웹·안드로이드와 같은 문자열이다.
+    var serverValue: String {
+        switch self {
+        case .publicAll: "PUBLIC"
+        case .friendsOnly: "FRIENDS"
+        case .privateOnly: "PRIVATE"
+        }
     }
 }
 

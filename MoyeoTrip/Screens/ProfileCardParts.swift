@@ -36,9 +36,8 @@ struct ProfileCardTitleBar: View {
           tripCountCapsule(tripCount)
         }
       case .backLabel:
-        Text("카드 뒷면")
-          .font(MoyeoTypography.font(size: 9.5, weight: .heavy))
-          .foregroundStyle(MoyeoTheme.muted)
+        // 「카드 뒷면」 문구를 두지 않는다 — 뒤집힌 것은 화면이 이미 보여준다.
+        EmptyView()
       }
     }
     .padding(.horizontal, 12)

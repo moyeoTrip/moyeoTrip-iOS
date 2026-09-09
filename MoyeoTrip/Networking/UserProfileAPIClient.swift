@@ -18,7 +18,14 @@ struct ServerRegionOption: Decodable, Identifiable, Hashable {
 }
 
 struct ServerMyProfile: Decodable, Hashable {
+    /// 서버는 늘 주는데 예전에는 받지 않았다 (2026-09-07 실서버 확인: `{"userId":61,…}`).
+    /// **내가 쓴 것인지 판정하려면 이 값이 있어야 한다** — 23-1a·23-2·18-6 이 쓴다.
+    /// 예전 응답을 캐시로 읽는 경우가 있어 옵셔널로 둔다.
+    let userId: Int64?
     let nickname: String
+    /// 서버는 주는데 예전에는 받지 않았다 — 그래서 25 카드를 열 때 색을 몰라 기본색으로
+    /// 그렸다가 공개 프로필이 온 뒤 바뀌어 **색이 한 박자 늦게 변했다**.
+    let nicknameColor: String?
     let profileImageUrl: String?
     let introduction: String?
     let travelStyles: [ServerProfileOption]
