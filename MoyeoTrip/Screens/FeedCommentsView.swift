@@ -8,6 +8,9 @@
 //  좋아요는 두지 않는다 — 서버에 댓글 좋아요 API 가 없다 (BE 요청 §4).
 //
 
+// 원글 요약·댓글 행·입력줄이 한 화면의 부품이라 다른 화면 파일들과 같은 예외를 둔다.
+// 확장으로 갈라 놓은 부품들이 `private` 이라 파일을 더 쪼개면 접근 수준을 넓혀야 한다.
+// swiftlint:disable file_length
 import SwiftUI
 
 private struct ChangelogComment: Identifiable {
@@ -76,10 +79,14 @@ struct FeedCommentsView: View {
   }
 
   /// 서버 댓글 → 23-1 댓글 행. 서버가 주지 않는 값(마스코트·배지·좋아요 수)은 채우지 않는다.
+  ///
+  /// 시각은 **글 작성 시각**이라 상대 시각 정본(`ServerFeedMapper.createdAtText`)을 쓴다.
+  /// 예전에는 **채팅용** `ServerDateTime.listTimeText` 를 써서 iOS 만 `오후 3:20` · `9월 7일` 이
+  /// 떴다 — 안드로이드는 `3일 전` 이었다 (2026-09-14 사용자 지적, RELATIVE-TIME-CANON).
   private func changelogComment(from server: ServerFeedComment) -> ChangelogComment {
     var time = ""
     if let createdAt = server.createdAt {
-      time = ServerDateTime.listTimeText(from: createdAt)
+      time = ServerFeedMapper.createdAtText(createdAt)
     }
     return ChangelogComment(
       mascot: "",
@@ -99,9 +106,21 @@ struct FeedCommentsView: View {
   /// 「답글 달기」의 대상. 예전에는 `Button("답글 달기") {}` — **동작이 없는 버튼**이었다
   /// (23-1, 사용자 지적 2026-09-09). 서버는 `parentCommentId` 를 받는다.
   @State private var replyTarget: ChangelogComment?
-  @State private var showsReportNotice = false
+  /// 신고 중인 댓글. 접수 API 가 없던 시절에는 `ReportUnsupportedDialog` 를 띄우는
+  /// `Bool` 하나였다 — 서버에는 그때도 `POST /feeds/{feedId}/comments/{commentId}/reports`
+  /// 가 있었다 (2026-09-14 실서버 확인). 이제 30-2 와 같은 결의 시트로 실제 접수한다.
+  @State private var reportTargetComment: ChangelogComment?
   @State private var blockTarget: ChangelogComment?
+  /// 23-1a 내 댓글 수정·삭제 화면으로 갈지.
+  @State private var opensMyCommentEditor = false
   @State private var actionMessage: String?
+  /// 댓글 등록 실패를 **입력칸 바로 위**에 적는다. 위쪽 `actionMessage` 는 스크롤을 올려야 보인다.
+  @State private var submitError: String?
+  @State private var isSubmitting = false
+
+  /// 서버 `content` 한도와 같은 값. 예전에는 한도도 카운터도 없어, 넘긴 댓글이
+  /// 오류 없이 사라졌다 (IOS-F26).
+  private static let commentLimit = 500
 
   var body: some View {
     VStack(spacing: 0) {
@@ -148,7 +167,9 @@ struct FeedCommentsView: View {
             }
           }
           ForEach(submitted, id: \.self) { item in
-            commentRow(ChangelogComment(mascot: "🦌", name: "나", badge: "", body: item, time: "방금"))
+            // 마스코트를 화면에서 고르지 않는다 — 표는 `MoyeoNicknameAnimal` 하나뿐이고
+            // 이 자리는 닉네임을 모른다 (NO-MOCK-CANON R5). 이 파일의 다른 줄과 같이 비운다.
+            commentRow(ChangelogComment(mascot: "", name: "나", badge: "", body: item, time: "방금"))
           }
           if hasMoreComments {
             // 다음 묶음이 남아 있다는 표시일 뿐이다 — 받아오는 건 마지막 댓글의 `onAppear` 가 한다.
@@ -181,22 +202,7 @@ struct FeedCommentsView: View {
         .frame(maxWidth: .infinity)
         .background(MoyeoTheme.subtleBackground)
       }
-      HStack(spacing: 8) {
-        TextField(
-          replyTarget == nil ? "댓글을 입력하세요..." : "답글을 입력하세요...",
-          text: $comment,
-          axis: .vertical
-        ).lineLimit(1...4).padding(
-          .horizontal, 13
-        ).frame(minHeight: 44).background(MoyeoTheme.subtleBackground).clipShape(Capsule())
-        Button {
-          submit()
-        } label: {
-          Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 44, height: 44)
-            .background(MoyeoTheme.forest).clipShape(Circle())
-        }.buttonStyle(.plain).disabled(
-          comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-      }.padding(12).background(MoyeoTheme.card)
+      composer
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     // 서버 댓글을 받았으면 그 개수가 근거다 — 목록에 5건이 떠 있는데 제목만 0 이면 안 된다.
@@ -207,9 +213,16 @@ struct FeedCommentsView: View {
       await loadServerComments()
     }
     .overlay {
-      if showsReportNotice {
-        // 댓글 신고는 접수 API 가 없다 — 네 표면이 같은 안내를 쓴다 (정본 `REPORT-CANON.md` §3).
-        ReportUnsupportedDialog { showsReportNotice = false }
+      // 댓글 신고는 **실제로 접수된다**. 사유는 `GET /feeds/report-reasons` 가 준다.
+      if let target = reportTargetComment,
+        let feedID = post.serverFeedID ?? loadedFeed?.feedId,
+        let commentID = target.serverCommentID {
+        MoyeoReportSheet(
+          target: .comment(feedID: feedID, commentID: commentID),
+          previewText: target.body
+        ) {
+          reportTargetComment = nil
+        }
       }
     }
     .alert(
@@ -224,7 +237,20 @@ struct FeedCommentsView: View {
     } message: {
       Text("차단하면 이 유저가 만들었거나 참여한 모집이 홈·탐색에서 모두 숨겨져요.")
     }
+    .navigationDestination(isPresented: $opensMyCommentEditor) {
+      if let feedID = post.serverFeedID {
+        CommentEditView(feedID: feedID)
+      } else {
+        MoyeoEmptyStateView(message: MoyeoEmptyText.noFeeds)
+      }
+    }
     .accessibilityIdentifier("screen.feedComments")
+  }
+
+  /// 이 댓글이 내 것인가. 서버 댓글만 `authorUserID` 를 알고, 토큰의 userId 와 견준다.
+  private func isMyComment(_ item: ChangelogComment) -> Bool {
+    guard let authorID = item.authorUserID, let mine = MoyeoCurrentUser.id else { return false }
+    return authorID == mine
   }
 
   /// 차단은 신고와 달리 **실제로 반영된다** (`POST users/me/blocks/{userId}`).
@@ -235,7 +261,7 @@ struct FeedCommentsView: View {
         try await SocialAPIClient.shared.block(userID: userID)
         actionMessage = "\(target.name)님을 차단했어요."
       } catch {
-        actionMessage = error.localizedDescription
+        actionMessage = error.moyeoUserMessage(fallback: "차단하지 못했어요. 잠시 후 다시 시도해주세요.")
         return
       }
       // 차단하면 목록이 달라진다 — 첫 묶음부터 다시 읽는다.
@@ -306,10 +332,36 @@ extension FeedCommentsView {
     post.authorName.isEmpty ? Int(loadedFeed?.likeCount ?? 0) : post.likeCount
   }
 
+  /// 원글의 **첫 사진** — 피드가 준 사진 중 `sequence` 가 가장 앞선 것.
+  /// (피드에 「대표 사진」이라는 개념은 없다 — 결정 ⑪.)
+  ///
+  /// 예전에는 사진이 있어도 무시하고 `MoyeoPhotoTile`(그라데이션 하늘 + 산 능선 도형)을
+  /// 항상 그렸다. 그 도형은 40×40 으로 줄면 정체불명 무늬가 돼서 「이미지가 아니라 이상한 게
+  /// 들어가 있다」는 지적을 받았다 (2026-09-14).
+  private var summaryPhotoURL: URL? {
+    if let photoURL = post.photoURL { return photoURL }
+    return loadedFeed?.images.min { $0.sequence < $1.sequence }
+      .flatMap { MoyeoImageURL.resolve($0.imageUrl) }
+  }
+
   private var originalPostSummary: some View {
     HStack(spacing: 10) {
-      MoyeoPhotoTile(mascot: "", mood: post.mood, height: 40, cornerRadius: 10)
-        .frame(width: 40)
+      // 사진이 **있으면 반드시 사진**이다. 없을 때만 기존 대체 그림으로 떨어진다.
+      if let summaryPhotoURL {
+        CachedRemoteImage(url: summaryPhotoURL) { image in
+          image
+            .resizable()
+            .scaledToFill()
+        } placeholder: {
+          MoyeoTheme.leaf
+        }
+        .frame(width: 40, height: 40)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityHidden(true)
+      } else {
+        MoyeoPhotoTile(mascot: "", mood: post.mood, height: 40, cornerRadius: 10)
+          .frame(width: 40)
+      }
       VStack(alignment: .leading, spacing: 2) {
         Text(summaryTitle)
           .font(.caption.weight(.heavy))
@@ -370,10 +422,20 @@ extension FeedCommentsView {
               .foregroundStyle(MoyeoTheme.brandText)
               .accessibilityIdentifier("feedComments.reply")
           }
-          Button("신고") { showsReportNotice = true }
-            .accessibilityIdentifier("feedComments.report")
-          Button("차단") { blockTarget = item }
-            .accessibilityIdentifier("feedComments.block")
+          // **내 댓글에는 신고·차단이 말이 안 된다.** 대신 23-1a 수정·삭제로 보낸다.
+          // 그 화면(`CommentEditView`)도 API 도 오래 있었는데 **미는 곳이 캡처 하네스뿐**이라
+          // 제품에서는 닿을 수 없었다 — 파일 머리 주석이 「수정·삭제는 별 화면」이라고
+          // 적어 두고 그 별 화면으로 가는 길은 두지 않았다 (IOS-F27, 죽은 UI).
+          if isMyComment(item) {
+            Button("수정·삭제") { opensMyCommentEditor = true }
+              .foregroundStyle(MoyeoTheme.brandText)
+              .accessibilityIdentifier("feedComments.editMine")
+          } else {
+            Button("신고") { reportTargetComment = item }
+              .accessibilityIdentifier("feedComments.report")
+            Button("차단") { blockTarget = item }
+              .accessibilityIdentifier("feedComments.block")
+          }
         }
         .buttonStyle(.plain)
         .font(.caption.weight(.bold))
@@ -385,17 +447,66 @@ extension FeedCommentsView {
     }
   }
 
+  /// 입력줄 — 실패 문구와 글자수를 **입력칸 바로 옆에** 둔다.
+  private var composer: some View {
+    VStack(spacing: 6) {
+      if let submitError {
+        Text(submitError)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MoyeoTheme.dangerRed)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("feedComments.submitError")
+      }
+      HStack(spacing: 8) {
+        TextField(
+          replyTarget == nil ? "댓글을 입력하세요..." : "답글을 입력하세요...",
+          text: Binding(
+            get: { comment },
+            set: { comment = String($0.prefix(Self.commentLimit)) }
+          ),
+          axis: .vertical
+        ).lineLimit(1...4).padding(
+          .horizontal, 13
+        ).frame(minHeight: 44).background(MoyeoTheme.subtleBackground).clipShape(Capsule())
+        Button {
+          submit()
+        } label: {
+          Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 44, height: 44)
+            .background(MoyeoTheme.forest).clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(replyTarget == nil ? "댓글 올리기" : "답글 올리기")
+        .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
+      }
+      if !comment.isEmpty {
+        Text("\(comment.count) / \(Self.commentLimit)자")
+          .font(MoyeoTypography.tinyMeta)
+          .foregroundStyle(comment.count >= Self.commentLimit ? MoyeoTheme.dangerRed : MoyeoTheme.muted)
+          .frame(maxWidth: .infinity, alignment: .trailing)
+          .accessibilityIdentifier("feedComments.counter")
+      }
+    }
+    .padding(12)
+    .background(MoyeoTheme.card)
+  }
+
+  /// 등록에 **성공한 뒤에만** 입력칸을 비운다. 예전에는 요청을 보내기도 전에 비우고
+  /// `catch { return }` 으로 실패를 삼켜, 쓴 글이 말없이 사라졌다 (IOS-F26).
   private func submit() {
     let value = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
-    comment = ""
+    guard !value.isEmpty, !isSubmitting else { return }
+    submitError = nil
     guard MoyeoServerSync.isEnabled, let feedID = post.serverFeedID else {
       submitted.append(value)
+      comment = ""
       return
     }
     // 서버 피드는 등록 후 **첫 묶음부터** 다시 읽는다 — 새 댓글이 최신 id 라 첫 묶음 맨 앞에 온다.
     // 화면에서 만든 댓글을 서버 값처럼 섞지 않는다.
+    isSubmitting = true
     Task {
+      defer { isSubmitting = false }
       do {
         try await FeedAPIClient.shared.postComment(
           feedID: feedID,
@@ -404,7 +515,10 @@ extension FeedCommentsView {
         )
         replyTarget = nil
         postedCount += 1
+        comment = ""
       } catch {
+        // 쓴 글은 입력칸에 그대로 둔다 — 다시 누르면 그대로 보낼 수 있어야 한다.
+        submitError = error.moyeoUserMessage(fallback: "댓글을 올리지 못했어요. 잠시 후 다시 시도해주세요.")
         return
       }
       nextCommentID = nil

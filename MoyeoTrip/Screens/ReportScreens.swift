@@ -4,92 +4,71 @@
 //
 //  신고 두 갈래 (정본 `docs/alignment/REPORT-CANON.md`).
 //
-//  * 피드 신고 → 실제 접수한다. 30-2 시트([ReportView]).
-//  * 멤버·채팅방·댓글 신고 → 접수 API 가 없다. 누른 자리에서 [ReportUnsupportedDialog] 로 안내한다.
+//  * 피드 신고 → 30-2 시트([ReportView]). 이 파일.
+//  * 댓글 · 모집 · 멤버 신고 → 같은 결의 [MoyeoReportSheet]. 대상별 계약은 [MoyeoReportTarget].
 //
-//  한 화면에 두 결과를 섞지 않는다 — "접수되지 않는 경로에서 접수된 것처럼 보이게 하지 않는다"(정본 §4).
+//  2026-09-14 실서버 확인으로 **네 대상 모두 접수 엔드포인트가 있다**. 그래서 안내만 하던
+//  `ReportUnsupportedDialog` 와 그 문구("아직 앱에서 받지 못해요")는 여기서 지웠다 —
+//  접수되는 경로에서 접수되지 않는 것처럼 보이게 하지 않는다(정본 §4 의 뒤집힌 쪽).
 //
 
 import SwiftUI
 
-/// 접수 API 가 없는 신고를 **누른 자리에서** 안내한다 (정본 §3).
-///
-/// 화면을 옮기지 않는다 — 문의 버튼은 29 설정 안에 있어서 거기로 보내면 하려던 일에서 멀어진다.
-/// 문구·버튼은 네 표면(기획 `ReportUnsupportedDialog` · 웹 · 안드로이드 · iOS)이 **글자까지 같은 것**을 쓴다.
-struct ReportUnsupportedDialog: View {
-  var onClose: () -> Void = {}
-  @Environment(\.openURL) private var openURL
+// MARK: - 상세 입력 키보드
 
-  var body: some View {
-    ZStack {
-      MoyeoTheme.overlayScrim
-        .ignoresSafeArea()
-        .onTapGesture { onClose() }
-
-      VStack(alignment: .leading, spacing: 0) {
-        Text("신고를 접수하지 못해요")
-          .font(.headline.weight(.heavy))
-          .foregroundStyle(MoyeoTheme.ink)
-          .fixedSize(horizontal: false, vertical: true)
-
-        Text("멤버·채팅방 신고는 아직 앱에서 받지 못해요. GitHub 이슈나 이메일로 알려주시면 확인할게요.")
-          .font(.subheadline)
-          .foregroundStyle(MoyeoTheme.muted)
-          .lineSpacing(4)
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(.top, 8)
-
-        VStack(spacing: 8) {
-          contactButton(
-            title: MoyeoContact.issuesLabel,
-            url: MoyeoContact.issuesURL,
-            identifier: "reportUnsupported.issues"
-          )
-          contactButton(
-            title: MoyeoContact.emailLabel,
-            url: MoyeoContact.mailtoURL,
-            identifier: "reportUnsupported.email"
-          )
-          Button(action: onClose) {
-            Text("닫기")
-              .font(.subheadline.weight(.bold))
-              .foregroundStyle(MoyeoTheme.muted)
-              .frame(maxWidth: .infinity)
-              .frame(height: 44)
-          }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("reportUnsupported.close")
+private extension ReportView {
+  /// 신고 → (선택) 차단 순서로 보낸다. 신고가 이미 접수됐으면 **신고는 건너뛰고 차단만** 다시 한다.
+  func runSubmit() {
+    guard let reason = selectedReason, !isSubmitting else { return }
+    isSubmitting = true
+    notice = nil
+    Task {
+      if !reportAccepted {
+        do {
+          try await FeedAPIClient.shared.report(feedID: feedID, reason: reason, details: details)
+          reportAccepted = true
+        } catch {
+          isSubmitting = false
+          notice = Self.notice(for: error)
+          return
         }
-        .padding(.top, 16)
       }
-      .padding(20)
-      .frame(maxWidth: 330)
-      .background(MoyeoTheme.card)
-      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 18).stroke(MoyeoTheme.line))
-      .shadow(color: Color.black.opacity(0.28), radius: 24, y: 10)
+      // 신고는 접수됐다. 차단은 별개 요청이라 실패해도 신고를 되돌리지 않는다 (정본 §2).
+      guard blocksUser, let userID = blockTargetUserID else {
+        isSubmitting = false
+        dismiss()
+        return
+      }
+      do {
+        try await SocialAPIClient.shared.block(userID: userID)
+        isSubmitting = false
+        dismiss()
+      } catch {
+        isSubmitting = false
+        notice = .blockFailed(error.moyeoUserMessage(fallback: "차단하지 못했어요."))
+      }
     }
-    .accessibilityIdentifier("screen.reportUnsupported")
   }
 
-  private func contactButton(title: String, url: URL, identifier: String) -> some View {
-    Button {
-      openURL(url)
-    } label: {
-      Text(title)
-        .font(.subheadline.weight(.bold))
-        .foregroundStyle(MoyeoTheme.ink)
-        .frame(maxWidth: .infinity)
-        .frame(height: 44)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
+  /// 「신고하기」를 누를 수 있는가 — 사유를 골랐고, 보내는 중이 아니다.
+  var canSubmit: Bool {
+    selectedReason != nil && !isSubmitting
+  }
+
+  /// 키보드 위 「완료」 줄. 시트가 바닥에 붙어 있고 스크롤이 없어서, 이 버튼이 없으면
+  /// 상세를 적은 뒤 「신고하기」에 닿을 길이 사라진다 (2026-09-15 기기 확인).
+  @ToolbarContentBuilder
+  var keyboardDoneToolbar: some ToolbarContent {
+    ToolbarItemGroup(placement: .keyboard) {
+      Spacer()
+      Button("완료") { isDetailsFocused = false }
+        .font(.subheadline.weight(.heavy))
+        .accessibilityIdentifier("report.details.done")
     }
-    .buttonStyle(.plain)
-    .accessibilityIdentifier(identifier)
   }
 }
 
-/// 30-2 신고 시트. **피드 전용이다** (정본 §1) —
-/// 서버가 실제로 받는 신고는 `POST /api/v1/feeds/{feedId}/reports` 하나뿐이다.
+/// 30-2 신고 시트. **피드 전용이다** — 다른 대상은 [MoyeoReportSheet] 가 받는다.
 ///
 /// 사유는 `GET /api/v1/feeds/report-reasons` 가 코드와 표시 문구를 함께 준다.
 /// **클라이언트가 사유를 갖지 않는다** — 예전에는 여기에 6종을 박아 뒀고 그 문구가
@@ -103,8 +82,11 @@ private struct ReportBackdrop: View {
 
   var body: some View {
     if let feed {
+      // 이 뒤 화면은 **장식용 다시 그리기**다 — 누를 수는 없지만 스크린리더는 그대로 읽어,
+      // 시트 안을 다 읽고 나면 똑같은 피드 상세가 한 번 더 읽혔다 (TC ENV-007).
       FeedDetailView(post: ServerFeedMapper.post(from: feed))
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     } else {
       MoyeoTheme.background
     }
@@ -143,8 +125,18 @@ struct ReportView: View {
   @State private var reasonsState: ReasonsState = .loading
   @State private var selectedReason: String?
   @State private var details = ""
-  @State private var blocksUser = true
+  /// 「작성자 차단」은 **기본 꺼짐**이다. 차단은 되돌릴 수 없는데 예전에는 켜진 채로
+  /// 시작해, 사유만 고르고 보낸 사람이 차단까지 하게 됐다 (IOS-F54, 안드로이드 교차 발견).
+  @State private var blocksUser = false
   @State private var isSubmitting = false
+  /// 신고가 이미 204 로 접수됐는지. **차단만 실패해 다시 누를 때 신고를 또 보내지 않으려고** 둔다
+  /// (정본 §2 · TC SOCIAL-032). 예전에는 다시 누르면 신고가 한 번 더 나가 409(이미 신고함)로 떨어졌고,
+  /// 그 바람에 차단을 다시 시도할 길이 사라졌다 (2026-09-15 기기에서 확인).
+  @State private var reportAccepted = false
+  /// 상세 입력에 키보드가 올라와 있는지. **내릴 길이 없으면 「신고하기」에 닿지 못한다** —
+  /// 시트는 바닥에 붙어 있고 스크롤이 없어서, 상세를 적고 나면 버튼이 키보드 뒤에 영영 가렸다
+  /// (2026-09-15 기기에서 확인 — 피드 23 신고).
+  @FocusState private var isDetailsFocused: Bool
   @State private var notice: SubmitNotice?
   /// 서버 피드로 채운 미리보기·작성자. 진입점이 값을 주면 부르지 않는다.
   @State private var loadedFeed: ServerFeed?
@@ -187,10 +179,6 @@ struct ReportView: View {
     return loadedFeed.trip.courseTitle.isEmpty ? loadedFeed.content : loadedFeed.trip.courseTitle
   }
 
-  private var canSubmit: Bool {
-    selectedReason != nil && !isSubmitting
-  }
-
   var body: some View {
     VStack(spacing: 0) {
       Spacer(minLength: 0)
@@ -204,6 +192,7 @@ struct ReportView: View {
     // 안드로이드도 `FeedDetailScreen` 을 깐다.
     .background(ReportBackdrop(feed: loadedFeed))
     .toolbar(.hidden, for: .navigationBar)
+    .toolbar { keyboardDoneToolbar }
     .accessibilityIdentifier("screen.report")
     .task { await load() }
   }
@@ -302,6 +291,7 @@ struct ReportView: View {
               details = String(value.prefix(Self.detailsLimit))
             }
           }
+          .focused($isDetailsFocused)
           .accessibilityIdentifier("report.details")
       }
       // 간격까지 네 표면이 같다 — 기획·웹·안드로이드가 `0 / 300` 이다.
@@ -367,7 +357,7 @@ struct ReportView: View {
       EmptyView()
     case .duplicate:
       // `409 40917` 은 오류가 아니다 — 붉게 띄우지 않고 안내로 적는다 (정본 §2).
-      Text("이미 신고한 피드예요")
+      Text("이미 신고한 피드예요.")
         .font(.caption)
         .foregroundStyle(MoyeoTheme.muted)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -412,53 +402,24 @@ struct ReportView: View {
     do {
       let reasons = try await FeedAPIClient.shared.reportReasons()
       reasonsState = reasons.isEmpty ? .failed : .loaded(reasons)
-      // 첫 사유를 미리 고른다 — 웹·안드로이드와 같다. 고르지 않은 상태로 두면
-      // 「신고하기」가 비활성으로 찍히고, 같은 아트보드가 표면마다 다르게 보인다.
-      // 사유 코드를 클라가 갖지 않으려고 **서버 목록의 첫 항목**을 쓴다.
-      if selectedReason == nil { selectedReason = reasons.first?.reason }
+      // **미리 고르지 않는다.** 첫 사유를 자동 선택하면, 사유를 읽지도 않고 보낸 신고가
+      // 목록 맨 위 사유로 접수된다 — 신고당하는 쪽에 불리하게 기운다 (IOS-F54).
+      // 「신고하기」는 사유를 고를 때까지 비활성이고, 그 편이 맞다.
     } catch {
       reasonsState = .failed
     }
   }
 
-  private func submit() {
-    guard let reason = selectedReason, !isSubmitting else { return }
-    isSubmitting = true
-    notice = nil
-    Task {
-      do {
-        try await FeedAPIClient.shared.report(feedID: feedID, reason: reason, details: details)
-      } catch {
-        isSubmitting = false
-        notice = Self.notice(for: error)
-        return
-      }
-      // 신고는 접수됐다. 차단은 별개 요청이라 실패해도 신고를 되돌리지 않는다 (정본 §2).
-      guard blocksUser, let userID = blockTargetUserID else {
-        isSubmitting = false
-        dismiss()
-        return
-      }
-      do {
-        try await SocialAPIClient.shared.block(userID: userID)
-        isSubmitting = false
-        dismiss()
-      } catch {
-        isSubmitting = false
-        notice = .blockFailed(
-          (error as? LocalizedError)?.errorDescription ?? "차단하지 못했어요."
-        )
-      }
-    }
-  }
+  private func submit() { runSubmit() }
 
-  /// `409 40917` = 이미 신고한 피드. 나머지는 서버 문구를 그대로 보여준다.
+  /// `409 40917` = 이미 신고한 피드(안내). `400 40039` = 본인 피드(오류).
+  /// 문구는 `REPORT-COPY-CANON.md` 표를 그대로 쓴다.
   private static func notice(for error: Error) -> SubmitNotice {
-    if let apiError = error as? MoyeoAPIError,
-      case .server(let statusCode, let code, _) = apiError,
-      statusCode == 409 || code == MoyeoServerErrorCode.feedAlreadyReported {
-      return .duplicate
-    }
-    return .failed((error as? LocalizedError)?.errorDescription ?? "신고를 접수하지 못했어요.")
+    let fallback = SubmitNotice.failed(error.moyeoUserMessage(fallback: "신고를 접수하지 못했어요."))
+    guard let apiError = error as? MoyeoAPIError,
+      case .server(let statusCode, let code, _) = apiError else { return fallback }
+    if statusCode == 409 || code == MoyeoServerErrorCode.feedAlreadyReported { return .duplicate }
+    if code == MoyeoServerErrorCode.feedReportSelf { return .failed("본인이 쓴 피드는 신고할 수 없어요.") }
+    return fallback
   }
 }

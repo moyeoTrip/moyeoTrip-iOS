@@ -231,7 +231,8 @@ enum AuthClientError: LocalizedError, Equatable {
         case .server(_, _, let message):
             return message
         case .transport:
-            return "서버에 연결하지 못했어요. 네트워크 상태를 확인해주세요."
+            // 통신 실패 문구는 앱에 하나다 (`MoyeoUserFacingError.network` · 웹·안드와 같은 문장).
+            return MoyeoUserFacingError.network
         case .wrongEmailPassword:
             return "비밀번호가 올바르지 않아요. 비밀번호 재설정을 이용해주세요."
         }

@@ -130,6 +130,9 @@ struct ContentView: View {
     @State private var feedPath = NavigationPath()
     @State private var myPath = NavigationPath()
     @State private var isBottomNavigationSuppressed = false
+    /// 38 점검 안내 화면을 띄운 시점의 홈 스택 깊이 (OFF-013).
+    /// 값이 있으면 이미 점검 화면이 떠 있다는 뜻이라 503 이 더 와도 다시 쌓지 않는다.
+    @State private var maintenanceDepth: Int?
     /// 세션 안에서 만들어진 값만 담는다. 서버에서 오는 목록은 각 화면이 직접 받는다.
     @State private var feedPosts: [FeedPost] = []
     @State private var chatThreads: [ChatThread] = []
@@ -238,6 +241,9 @@ struct ContentView: View {
         .task(id: isAuthenticated) {
             guard isAuthenticated, !ProcessInfo.processInfo.arguments.contains("UITEST_MODE") else { return }
             await MoyeoPushNotificationManager.shared.requestAuthorizationIfNeeded()
+            // 토큰이 돌았으면 서버에 올린다. 예전에는 가입·로그인 때 한 번만 올려서,
+            // 그 뒤 토큰이 바뀌는 순간부터 푸시가 끊겼다 (IOS-F108).
+            await MoyeoPushNotificationManager.shared.syncTokenWithBackend()
             if let cachedProfile = currentUserService.cachedProfile() {
                 profile = profile.applying(cachedProfile)
             }
@@ -260,9 +266,39 @@ struct ContentView: View {
             guard isAuthenticated, let destination = notification.object as? MoyeoPushDestination else { return }
             openPushDestination(destination)
         }
+        // Firebase 가 토큰을 새로 주는 **그 자리에서** 서버에 올린다.
+        // 예전에는 이 알림의 구독자가 0 이라 아무 일도 일어나지 않았다 (IOS-F108).
+        .onReceive(NotificationCenter.default.publisher(for: .moyeoPushTokenDidRefresh)) { _ in
+            guard isAuthenticated else { return }
+            Task { await MoyeoPushNotificationManager.shared.syncTokenWithBackend() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .moyeoSignupGateRequired)) { _ in
             returnToSignupFlow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .moyeoServerMaintenance)) { _ in
+            showServerMaintenance()
+        }
+        .onChange(of: homePath) { _, path in
+            // 사용자가 점검 화면에서 빠져나갔으면 다음 503 은 다시 안내할 수 있어야 한다.
+            if let depth = maintenanceDepth, path.count != depth {
+                maintenanceDepth = nil
+            }
+        }
+    }
+
+    /// 서버가 503(또는 `50300`)으로 "지금 점검 중"이라고 답했다 (OFF-013).
+    ///
+    /// 웹과 같은 규칙이다 — 쌓지 않고 **현재 화면을 교체**한다.
+    /// 점검 중에 뒤로 가면 같은 503 을 다시 맞을 뿐이라 되돌아갈 자리를 남겨 둘 이유가 없다.
+    /// 이미 점검 화면이면 아무것도 하지 않는다(겹쳐 쌓이지 않게).
+    private func showServerMaintenance() {
+        guard isAuthenticated, maintenanceDepth == nil else { return }
+        selectedTab = .home
+        if !homePath.isEmpty {
+            homePath.removeLast()
+        }
+        homePath.append(SupportRoute.systemMaintenance)
+        maintenanceDepth = homePath.count
     }
 
     /// 서버가 409 `40902`·`40918` 로 "가입이 아직 안 끝났다"고 알려온 경우 (정본 R1).
@@ -280,6 +316,7 @@ struct ContentView: View {
     /// 로그아웃·계정 전환·가입 게이트 복귀에서 이전 사용자의 흔적을 모두 지운다 (TAB-STATE-CANON R4).
     /// 보관소가 살아 있으면 다음 로그인 화면에 남의 목록·프로필이 그대로 남는다.
     private func clearSessionScopedState() {
+        maintenanceDepth = nil
         homePath = NavigationPath()
         explorePath = NavigationPath()
         meetingsPath = NavigationPath()
@@ -367,6 +404,9 @@ struct ContentView: View {
                         selectedTab = .explore
                     }
                 )
+                // 커스텀 헤더 화면에서 가장자리 스와이프로 뒤로 가기 (IOS-F03).
+                // 스택마다 한 번만 걸면 그 스택의 모든 화면에 적용된다.
+                .moyeoBackSwipeEnabled()
             }
         case .explore:
             NavigationStack(path: $explorePath) {
@@ -375,6 +415,7 @@ struct ContentView: View {
                     isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
                     tripContext: tripContext
                 )
+                .moyeoBackSwipeEnabled()
             }
         case .meetings:
             NavigationStack(path: $meetingsPath) {
@@ -384,6 +425,7 @@ struct ContentView: View {
                     isBottomNavigationSuppressed: $isBottomNavigationSuppressed,
                     tripContext: tripContext
                 )
+                .moyeoBackSwipeEnabled()
             }
         case .feed:
             if initialFeedStartsWriting {
@@ -406,6 +448,7 @@ struct ContentView: View {
                         feedWriteInitialStep: initialFeedWriteStep,
                         feedWriteRoomID: initialFeedWriteRoomID
                     )
+                    .moyeoBackSwipeEnabled()
                 }
             }
         case .my:
@@ -418,6 +461,7 @@ struct ContentView: View {
                     feedPosts: feedPosts,
                     onAuthenticationRequired: requireAuthentication
                 )
+                .moyeoBackSwipeEnabled()
             }
         }
     }
@@ -453,6 +497,23 @@ struct ContentView: View {
         case .my:
             selectedTab = .my
             myPath = NavigationPath()
+        case .friends:
+            // 알림 목록에서 친구 신청을 누를 때와 같은 곳으로 간다.
+            selectedTab = .my
+            myPath = NavigationPath()
+            myPath.append(MyRoute.friends)
+        case .chatRoom(let roomID):
+            // **그 방의 채팅**을 연다. 예전에는 어떤 푸시를 눌러도 홈 탭으로 초기화됐다
+            // (TC NOTIF-029·030·031).
+            selectedTab = .meetings
+            meetingsPath = NavigationPath()
+            meetingsPath.append(ServerTripMapper.stubThread(serverRoomID: roomID))
+        case .tripDetail(let roomID):
+            // **모집 상세**를 연다. 확정·불발·신청 결과·마감 임박이 여기로 온다 —
+            // 앱 안 알림 목록에서 같은 알림을 누를 때와 같은 곳이어야 한다.
+            selectedTab = .meetings
+            meetingsPath = NavigationPath()
+            meetingsPath.append(ServerTripMapper.placeholderTrip(roomID: roomID))
         }
     }
 

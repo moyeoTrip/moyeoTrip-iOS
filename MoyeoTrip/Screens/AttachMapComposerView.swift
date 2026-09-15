@@ -65,7 +65,7 @@ struct AttachMapComposerView: View {
             detail = try? await ChatRoomAPIClient.shared.detail(roomID: roomID)
             isLoading = false
         }
-        .attachComposerFailureAlert(sendState)
+        .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
     private func mapCard(_ coordinate: MoyeoMapCoordinate) -> some View {
@@ -118,7 +118,38 @@ struct AttachMapComposerView: View {
 
     private func send() {
         sendState.send(fallbackMessage: "만날 위치를 공유하지 못했어요.") {
+            // 이 API 는 **본문이 없다** — 서버가 보내는 그 순간의 방 좌표를 읽어 카드를 만든다.
+            // 그래서 화면을 열어 둔 사이 호스트가 집합 장소를 바꾸면 **미리보기는 옛 좌표인데
+            // 실제로 나가는 카드는 새 좌표**가 된다(웹 담당이 먼저 찾아 같은 방식으로 고쳤다).
+            // 보내기 직전에 다시 읽어, 달라졌으면 **보내지 않고** 미리보기를 갱신하고 알린다.
+            if MoyeoServerSync.isEnabled {
+                let latest = try await ChatRoomAPIClient.shared.detail(roomID: roomID)
+                if !Self.hasSameMeetingPoint(latest, detail) {
+                    detail = latest
+                    throw MeetingPointChangedError()
+                }
+            }
             _ = try await ChatRoomWriteAPIClient.shared.shareMeetingLocation(roomID: roomID)
         } onSuccess: { onSent() }
+    }
+
+    /// 화면이 그리고 있는 집합 지점과 서버가 지금 말하는 집합 지점이 같은가.
+    /// 좌표는 카드에 찍히는 자리(소수점 넷째)까지만 견준다 — 그 아래 차이는 카드에 드러나지 않는다.
+    private static func hasSameMeetingPoint(
+        _ latest: ServerChatRoomDetail,
+        _ shown: ServerChatRoomDetail?
+    ) -> Bool {
+        guard let shown else { return false }
+        func rounded(_ value: Double?) -> Double? { value.map { ($0 * 10_000).rounded() / 10_000 } }
+        return rounded(latest.meetingLatitude) == rounded(shown.meetingLatitude)
+            && rounded(latest.meetingLongitude) == rounded(shown.meetingLongitude)
+            && (latest.meetingDetails ?? "") == (shown.meetingDetails ?? "")
+    }
+}
+
+/// 보내려는 순간 집합 장소가 바뀌어 있던 경우. 오류가 아니라 **다시 보라는 안내**다.
+private struct MeetingPointChangedError: LocalizedError {
+    var errorDescription: String? {
+        "집합 장소가 방금 바뀌었어요. 새 위치를 확인하고 다시 보내주세요."
     }
 }

@@ -73,7 +73,7 @@ struct AttachPlaceComposerView: View {
             searchField
             resultsSection
             if let selectedPlace {
-                AttachFieldLabel(text: "이렇게 보내져요")
+                AttachFieldLabel(text: "이렇게 보내져요", isFirst: true)
                     .padding(.top, 18)
                 previewCard(selectedPlace)
             }
@@ -81,7 +81,7 @@ struct AttachPlaceComposerView: View {
         .task(id: query) {
             await model.load(keyword: query)
         }
-        .attachComposerFailureAlert(sendState)
+        .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
     private var searchField: some View {

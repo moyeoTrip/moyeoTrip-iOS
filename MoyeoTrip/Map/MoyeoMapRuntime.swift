@@ -13,9 +13,25 @@ struct MoyeoMapCoordinate: Hashable {
         self.longitude = longitude
     }
 
-    /// 위경도가 비어 있는 목데이터는 지도를 그리지 않는다.
+    /// 서버가 준 위경도를 **믿을 수 있을 때만** 좌표로 만든다.
+    ///
+    /// 예전에는 `nil` 만 걸렀다. 그래서 `0,0`(좌표 미입력의 흔한 표현)과 지구 밖 값이
+    /// **유효한 좌표로 통과**했고, 11 지도 탐색은 그 값을 그대로 카메라 중심으로 썼다
+    /// (`ServerTripMapper.mapContent` 가 `markers.first` 를 중심으로 잡는다).
+    /// 응답 주입으로 확인한 실제 증상 — `0,0` 하나면 지도가 **서해(칭다오 앞바다)**,
+    /// `60,200` 이면 **니가타 앞바다**를 비추고 경북 핀이 한 개도 안 보인다
+    /// (TC SEARCH-016, 2026-09-15). 17-1a 방문지 지도만 `latitude != 0` 를 따로 걸고 있었는데,
+    /// 화면마다 따로 거르면 이렇게 빠뜨린다 — **좌표를 만드는 이 한 곳**에서 거른다.
     init?(latitude: Double?, longitude: Double?) {
-        guard let latitude, let longitude else { return nil }
+        guard let latitude, let longitude,
+            latitude.isFinite, longitude.isFinite,
+            // `0,0` 은 기니만 한복판이다. 이 서비스가 그곳을 가리킬 일은 없고,
+            // 실제로는 「좌표가 없다」는 뜻으로 들어온다.
+            !(latitude == 0 && longitude == 0),
+            (-90...90).contains(latitude), (-180...180).contains(longitude)
+        else {
+            return nil
+        }
         self.init(latitude: latitude, longitude: longitude)
     }
 }

@@ -134,6 +134,8 @@ struct CachedRemoteImage<Content: View, Placeholder: View>: View {
             } else if let fallbackShape, showsFallback {
                 // 호출부의 resizable·scaledToFill·clipShape 가 그대로 적용되도록 content 로 넘긴다.
                 content(Image(MoyeoPlaceholderImage.assetName(for: fallbackShape)))
+                    // ENV-006: 장식용 대체 이미지 — VoiceOver 가 에셋 이름을 읽지 않게 숨긴다.
+                    .accessibilityHidden(true)
             } else {
                 placeholder()
             }

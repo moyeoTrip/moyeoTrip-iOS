@@ -13,10 +13,13 @@ struct HostApplicantCard: View {
     let secondaryLabel: String
     let onPrimary: () -> Void
     let onSecondary: () -> Void
+    /// 신청자 프로필로 가는 길. **접힌 대기자 줄에는 있었는데 이 카드에만 없었다** —
+    /// 호스트가 누구인지 모르는 채로 승인·거절을 정하게 됐다 (웹 교차 발견 2026-09-14).
+    var onOpenProfile: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HostApplicantHeader(applicant: applicant)
+            HostApplicantHeader(applicant: applicant, onOpenProfile: onOpenProfile)
             // 신청 한마디는 인용 블록으로 (화면기획). 신청자가 안 남겼으면 빈 인용을 그리지 않는다.
             if !applicant.note.isEmpty {
                 Text("\u{201C}\(applicant.note)\u{201D}")
@@ -70,8 +73,20 @@ struct HostApplicantCard: View {
 
 private struct HostApplicantHeader: View {
     let applicant: HostApplicant
+    var onOpenProfile: (() -> Void)?
 
     var body: some View {
+        if let onOpenProfile {
+            Button(action: onOpenProfile) { header(isActionable: true) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(applicant.name) 프로필 보기")
+                .accessibilityIdentifier("hostPending.primary.profile")
+        } else {
+            header(isActionable: false)
+        }
+    }
+
+    private func header(isActionable: Bool) -> some View {
         HStack(spacing: 12) {
             // 서버 신청자는 프로필 이미지를 준다. 없으면 leaf 원만 남기고 마스코트를 지어내지 않는다.
             if let profileImageURL = applicant.profileImageURL {
@@ -100,11 +115,16 @@ private struct HostApplicantHeader: View {
                     .foregroundStyle(MoyeoTheme.muted)
             }
             Spacer()
-            // 화면기획 18 — 대기 카드 우상단 더보기
-            Image(systemName: "ellipsis")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(MoyeoTheme.text400)
+            // 화면기획 18 — 대기 카드 우상단 더보기.
+            // 누를 수 있을 때만 그린다 — 갈 곳이 없는데 아이콘만 두면 죽은 UI 다.
+            if isActionable {
+                Image(systemName: "ellipsis")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.text400)
+                    .frame(width: 44, height: 44)
+            }
         }
+        .contentShape(Rectangle())
     }
 }
 

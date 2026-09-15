@@ -300,12 +300,27 @@ struct PrimaryActionButton: View {
 struct SearchField: View {
     @Binding var text: String
     let placeholder: String
+    /// 돋보기를 눌렀을 때 할 일. 주면 아이콘이 **버튼**이 되고, 안 주면 예전처럼 장식이다.
+    /// 예전에는 늘 장식이라 돋보기를 눌러도 검색이 실행되지 않았다 (TC SEARCH-019).
+    var onSubmit: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(MoyeoTheme.muted)
+            if let onSubmit {
+                Button(action: onSubmit) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .frame(width: 30, height: 38)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("검색")
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
             TextField(placeholder, text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

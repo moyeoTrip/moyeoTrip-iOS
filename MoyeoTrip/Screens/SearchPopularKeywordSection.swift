@@ -5,7 +5,30 @@
 //  12 검색 · 인기 검색어 섹션. `SearchView.swift` 가 500줄을 넘어 갈라냈다.
 //
 
+import Combine
 import SwiftUI
+
+/// 12 인기 검색어 목록의 상태. **0건과 실패를 가른다.**
+///
+/// 0건이면 섹션을 감추는 게 맞지만(빈 상태 문구를 새로 만들지 않는다), 못 받은 것을 같이 감추면
+/// 사용자는 「오늘은 인기 검색어가 없구나」로 읽는다 — 안드 `SEARCH-032` 와 같은 결함이었다.
+@MainActor
+final class SearchPopularKeywordModel: ObservableObject {
+    @Published private(set) var rows: [ServerPopularKeyword] = []
+    @Published private(set) var didFail = false
+
+    /// 인증이 필요한 집계라 세션이 없으면 부르지 않는다.
+    func load() async {
+        guard MoyeoServerSync.isEnabled else { return }
+        do {
+            rows = try await SearchAPIClient.shared.popularKeywords(limit: 10)
+            didFail = false
+        } catch {
+            rows = []
+            didFail = true
+        }
+    }
+}
 
 /// 12 인기 검색어 (`GET /api/v1/search/popular-keywords?limit=10`).
 ///

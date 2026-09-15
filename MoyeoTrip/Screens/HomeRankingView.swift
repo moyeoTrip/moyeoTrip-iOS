@@ -15,6 +15,9 @@ import SwiftUI
 struct PopularCourseRanking: View {
     let courses: [TravelCourse]?
     let isLoading: Bool
+    /// 마지막 조회가 실패했는지. 실패는 빈 상태와 **다르게** 그린다 (NO-MOCK-CANON R1 · TC HOME-015).
+    var didFail = false
+    var onRetry: () -> Void = {}
 
     private var topThree: [TravelCourse] {
         Array((courses ?? []).prefix(3))
@@ -31,6 +34,12 @@ struct PopularCourseRanking: View {
 
             if courses == nil, isLoading {
                 message(MoyeoEmptyText.loading, identifier: "home.popularCourses.loading")
+            } else if didFail {
+                MoyeoSectionRetryNotice(
+                    message: "인기 코스를 불러오지 못했어요.",
+                    identifier: "home.popularCourses",
+                    onRetry: onRetry
+                )
             } else if topThree.isEmpty {
                 message("아직 인기 코스가 없어요.", identifier: "home.popularCourses.empty")
             } else {

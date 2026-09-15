@@ -43,6 +43,12 @@ struct MoyeoConfirmSheet: View {
     let confirmTitle: String
     var isDanger = false
     var isBusy = false
+    /// 확인을 눌렀는데 **실패했을 때** 그 자리에 적을 문구.
+    ///
+    /// 예전에는 확인 시트들이 실패를 `try?`·빈 `catch` 로 삼키고 그대로 닫혀서,
+    /// 눌렀는지 안 눌렀는지도 알 수 없었다 (TC SOCIAL-010 계열 · 웹 교차).
+    /// 서버 `errorMessage` 를 그대로 쓰지 말고 `moyeoUserMessage(fallback:)` 로 만들어 넘긴다 (결정 ⑩).
+    var failureMessage: String?
     var identifier: String
     let onCancel: () -> Void
     let onConfirm: () -> Void
@@ -75,6 +81,16 @@ struct MoyeoConfirmSheet: View {
 
                 if !lines.isEmpty {
                     AttachNoteBox(lines: lines)
+                }
+
+                if let failureMessage {
+                    Text(failureMessage)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MoyeoTheme.dangerRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("\(identifier).error")
                 }
 
                 HStack(spacing: 8) {
@@ -110,5 +126,8 @@ struct MoyeoConfirmSheet: View {
             .moyeoBottomSheetSurface()
         }
         .accessibilityIdentifier("screen.\(identifier)")
+        // `.sheet` 가 아니라 **화면 안에 겹쳐 그리는 오버레이**다 — UIKit 이 모달로 쳐 주지
+        // 않으므로 스크린리더가 뒤 화면까지 계속 읽는다. 직접 모달이라고 알려 준다 (TC ENV-007).
+        .accessibilityAddTraits(.isModal)
     }
 }

@@ -1,12 +1,21 @@
 import Combine
 import Foundation
 
+// 인증 상태 기계 한 벌이다. `private` 인 `dependencies`·`message(for:)` 와
+// `private(set)` published 값들을 같은 타입의 확장이 쓰기 때문에, 파일을 가르려면
+// 그 보호를 모듈 전체에 풀어야 한다 — 500줄을 넘기지 않으려고 캡슐화를 깨지 않는다.
+// 상한(800줄)까지는 여유가 있고, 화면 파일들(FeedView·ExploreView 등)도 같은 방식을 쓴다.
+// 비밀번호 재설정 대기 규칙은 `AuthPasswordResetThrottle.swift` 로 이미 갈라 뒀다.
+// swiftlint:disable file_length
+
 @MainActor
 final class AuthFlowViewModel: ObservableObject {
     @Published var stage: AuthFlowStage = .onboarding
     @Published private(set) var loadingProvider: AuthServiceProvider?
     @Published private(set) var isSubmittingEmail = false
     @Published private(set) var passwordResetMessage: String?
+    /// 몇 번째 발송인지와 다시 보내기 대기 시간 (IOS-F56).
+    @Published private(set) var passwordResetThrottle = AuthPasswordResetThrottle()
     @Published private(set) var isSubmittingSignup = false
     @Published private(set) var isRestoringSession = false
     @Published private(set) var isLoadingProfileImages = false
@@ -41,13 +50,23 @@ final class AuthFlowViewModel: ObservableObject {
         dependencies.apiClient
     }
 
+    /// 닉네임 단계의 상태를 흐름 모델이 소유한다.
+    /// 화면이 매번 새로 만들면 「다음 → 뒤로」에서 첫 응답으로 되돌아가고,
+    /// 재추천으로 이미 무효가 된 `selectionToken` 으로 가입을 시도하게 된다 (IOS-F57).
+    private(set) lazy var nicknameViewModel = AuthNicknameViewModel(
+        provider: dependencies.apiClient,
+        initialResponse: nicknameResponse
+    )
+
     var selectedNicknameForProfile: String? {
         let nickname = selectedNickname.trimmingCharacters(in: .whitespacesAndNewlines)
         return nickname.isEmpty ? nil : nickname
     }
 
     var selectedNicknameCandidateForProfile: AuthNicknameCandidate? {
-        nicknameResponse.candidates.first { $0.nickname == selectedNickname }
+        // 재추천 뒤에는 첫 응답이 아니라 화면에 떠 있는 **최신** 후보에서 찾아야 한다 (IOS-F57).
+        nicknameViewModel.candidates.first { $0.nickname == selectedNickname }
+            ?? nicknameResponse.candidates.first { $0.nickname == selectedNickname }
     }
 
     var isBusy: Bool {
@@ -76,8 +95,12 @@ final class AuthFlowViewModel: ObservableObject {
         let storedTokens: AuthTokens
         do {
             guard let loadedTokens = try dependencies.sessionStore.load() else {
-                stage = .onboarding
-                return false
+                // 저장된 세션이 없다 — 다만 **가입을 끝내지 못한 것**일 수 있다 (TC SIGN-042).
+                // 가입 완료 전에는 서버가 accessToken·refreshToken 을 null 로 주므로 Keychain 에
+                // 남는 것이 없고, 예전에는 여기서 곧바로 온보딩으로 떨어져 닉네임 단계에서
+                // 앱을 껐다 켜면 처음부터 다시 시작했다. Firebase 는 로그인 상태를 기기에 유지하므로
+                // 그 세션이 살아 있으면 서버 `signupState` 에 맞는 단계로 이어간다.
+                return await resumeSignupFromIdentityProviderSession()
             }
             storedTokens = loadedTokens
         } catch {
@@ -116,12 +139,36 @@ final class AuthFlowViewModel: ObservableObject {
                 tokens = nil
                 stage = .onboarding
             } else {
-                // 네트워크 실패·서버 5xx 는 사용자가 조치할 수 있다 — 계속 오류로 보여준다.
-                stage = .login
+                // 네트워크 실패·서버 5xx 다. **세션을 지우지 않는다** — 토큰이 무효라는 근거가 없고,
+                // 지우면 통신이 돌아와도 다시 로그인해야 한다. 예전에는 여기서 `.login` 으로 보내
+                // 이미 로그인한 사람이 **로그아웃된 것처럼** 보였다(안드 AND-68 과 같은 결함).
+                // 안드 `sessionRestoreFailed` 와 같이 전용 단계로 보내 「로그아웃된 건 아니에요」를
+                // 먼저 말하고 다시 시도할 길을 준다.
+                stage = .sessionRestoreFailed
                 errorMessage = message(for: error)
             }
         }
         return false
+    }
+
+    /// 서비스 토큰이 없을 때, 살아 있는 Firebase 세션으로 가입을 이어간다 (TC SIGN-042).
+    ///
+    /// 유지된 로그인 상태가 없으면 예전과 같이 온보딩으로 간다 — 그때는 정말 처음 여는 것이다.
+    private func resumeSignupFromIdentityProviderSession() async -> Bool {
+        guard let idToken = try? await dependencies.identityProvider.currentUserIDToken() else {
+            stage = .onboarding
+            return false
+        }
+        isRestoringSession = true
+        defer { isRestoringSession = false }
+        do {
+            return try await routeAfterBackendLogin(idToken: idToken)
+        } catch {
+            // 이어갈 수 없으면 그때 온보딩으로 보낸다. 오류 배너는 남기지 않는다
+            // (화면을 옮기는 것 자체가 안내다 · AUTH-SILENT-CASES-CANON R3).
+            stage = .onboarding
+            return false
+        }
     }
 
     /// 세션은 살아 있는데 서버가 "회원 정보가 아직 없다"고 답한 경우 (SIGNUP-GATE-CANON R2-1).
@@ -142,6 +189,26 @@ final class AuthFlowViewModel: ObservableObject {
             // 새 토큰으로도 이어갈 수 없으면 그때 로그인 화면으로 보낸다. 오류 배너는 남기지 않는다(R3).
             clearSessionAndReturnToOnboarding()
         }
+    }
+
+    /// 세션 복원이 통신 문제로 실패한 화면의 **다시 시도**.
+    /// 저장된 세션은 그대로 두고 복원을 처음부터 한 번 더 태운다.
+    func retrySessionRestore() async -> Bool {
+        guard !isRestoringSession else { return false }
+        hasAttemptedSessionRestore = false
+        errorMessage = nil
+        return await restoreSession()
+    }
+
+    /// 복원이 계속 안 될 때의 탈출구 — 저장된 세션을 지우고 로그인부터 다시 한다.
+    /// 여기서만 세션을 지운다(사용자가 스스로 고른 경우다).
+    func discardSessionAndSignInAgain() {
+        guard !isRestoringSession else { return }
+        try? dependencies.sessionStore.clear()
+        tokens = nil
+        errorMessage = nil
+        hasAttemptedSessionRestore = true
+        stage = .login
     }
 
     private func clearSessionAndReturnToOnboarding() {
@@ -198,19 +265,28 @@ final class AuthFlowViewModel: ObservableObject {
     }
 
     func resetPassword(email: String) async {
-        guard !isBusy else { return }
+        guard !isBusy, passwordResetThrottle.remainingSeconds() == 0 else { return }
+        // 재전송 중에도 완료 화면을 유지한다. 예전에는 요청을 시작할 때 상태를 비워
+        // 화면이 발송 **전** 화면으로 되돌아갔다가 돌아와 깜빡였다 (IOS-F56).
+        // 「다시 보낸 것인지」는 보낸 횟수로 판정한다 — 결과 문구는 첫 발송에 비어 있기 때문이다.
+        let isResend = passwordResetThrottle.sendCount > 0
         isSubmittingEmail = true
         errorMessage = nil
-        passwordResetMessage = nil
         defer { isSubmittingEmail = false }
 
         do {
             try await dependencies.identityProvider.sendPasswordReset(to: email)
-            passwordResetMessage = "비밀번호 재설정 메일을 보냈어요."
+            passwordResetThrottle.markSent()
+            // 첫 발송은 제목(「메일을 보냈어요」)이 이미 말한다 — 본문에 같은 말을 또 쓰지 않는다.
+            // 다시 보냈을 때만, 화면이 그대로라 달라진 것을 알 수 없으므로 한 줄로 알린다 (결정 ⑭).
+            passwordResetMessage = isResend ? "방금 다시 보냈어요. 메일함을 확인해 주세요." : nil
         } catch {
             errorMessage = message(for: error)
         }
     }
+
+    /// 다시 보내기까지 남은 시간(초). 0 이면 지금 보낼 수 있다.
+    var passwordResetCooldownRemaining: Int { passwordResetThrottle.remainingSeconds() }
 
     func prepareSignup(nickname: String, selectionToken: String) {
         selectedNickname = nickname
@@ -296,7 +372,9 @@ final class AuthFlowViewModel: ObservableObject {
             stage = .profileImage
             await loadProfileImages()
         case .userInfoRequired:
-            nicknameResponse = try await dependencies.apiClient.fetchCandidates()
+            let candidates = try await dependencies.apiClient.fetchCandidates()
+            nicknameResponse = candidates
+            nicknameViewModel.adopt(candidates)
             stage = .nickname
         }
         return false
@@ -325,7 +403,7 @@ final class AuthFlowViewModel: ObservableObject {
     }
 
     private func message(for error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? "요청을 완료하지 못했어요. 다시 시도해주세요."
+        error.moyeoUserMessage(fallback: "요청을 완료하지 못했어요. 다시 시도해주세요.")
     }
 }
 

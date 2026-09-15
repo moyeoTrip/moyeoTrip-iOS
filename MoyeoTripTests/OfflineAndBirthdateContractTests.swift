@@ -67,10 +67,31 @@ struct OfflineAndBirthdateContractTests {
         #expect(components.day == 28)
     }
 
-    @Test func birthdateYearsAreNewestFirstAndNeverIncludeFutureYears() {
+    /// 예전에는 `years.first == 2026`(그 해)이었다. 미래 날짜도, 최소 연령이 안 되는 해도
+    /// 고를 수 있었고 가입 마지막 단계에서 서버 `40011` 로 거절됐다 (IOS-F58·F100).
+    ///
+    /// 한도 연도는 `minimumSignupAge` 에서 역산한다 — 서버가 또 바뀌면(2026-09-14 BE-06: 20 → 19)
+    /// 상수 하나만 고쳐도 이 경계 테스트가 새 기준을 그대로 지킨다.
+    @Test func birthdateYearsStopAtTheMinimumSignupAge() {
+        #expect(KoreanBirthdatePolicy.minimumSignupAge == 19)
         let reference = KoreanBirthdatePolicy.date(year: 2026, month: 8, day: 17)
+        let limitYear = 2026 - KoreanBirthdatePolicy.minimumSignupAge
+        #expect(limitYear == 2007)
         let years = KoreanBirthdatePolicy.years(through: reference)
-        #expect(years.first == 2026)
+        #expect(years.first == limitYear)
         #expect(years.last == 1900)
+        #expect(!years.contains(2026))
+        #expect(!years.contains(limitYear + 1))
+    }
+
+    /// 한도가 걸린 해에는 **월·일까지** 잘라야 한다. 연도만 막으면 2007-12-31 이
+    /// 여전히 고를 수 있고, 그 사람은 2026-08-17 에 아직 만 19세가 아니다.
+    @Test func birthdateMonthAndDayAreClampedInTheLimitYear() {
+        let today = KoreanBirthdatePolicy.date(year: 2026, month: 8, day: 17)
+        let limitYear = 2026 - KoreanBirthdatePolicy.minimumSignupAge
+        #expect(KoreanBirthdatePolicy.months(year: limitYear, today: today) == Array(1...8))
+        #expect(KoreanBirthdatePolicy.months(year: limitYear - 1, today: today) == Array(1...12))
+        #expect(KoreanBirthdatePolicy.selectableDays(year: limitYear, month: 8, today: today) == Array(1...17))
+        #expect(KoreanBirthdatePolicy.selectableDays(year: limitYear, month: 7, today: today) == Array(1...31))
     }
 }

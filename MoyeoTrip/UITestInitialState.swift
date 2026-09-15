@@ -290,12 +290,18 @@ struct UITestInitialState {
     }
     if screen.matches("terms-privacy") {
       selectedTab = .home
-      homePath.append(SupportRoute.signupLegalDocument(.privacy))
+      homePath.append(SupportRoute.signupLegalDocument(.privacyCollection))
       return true
     }
-    if screen.matches("terms-location") {
+    // 설정 › 개인정보 **처리방침**. 가입 동의서(`terms-privacy`)와 다른 문서다 (QA BE-03).
+    if screen.matches("privacy-settings", "terms-privacy-settings") {
       selectedTab = .home
-      homePath.append(SupportRoute.signupLegalDocument(.location))
+      homePath.append(SupportRoute.legalDocument(.privacyPolicy))
+      return true
+    }
+    if screen.matches("marketing-settings", "terms-marketing-settings") {
+      selectedTab = .home
+      homePath.append(SupportRoute.legalDocument(.marketing))
       return true
     }
     if screen.matches("terms-marketing") {

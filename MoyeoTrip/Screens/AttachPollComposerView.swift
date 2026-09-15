@@ -45,7 +45,7 @@ struct AttachPollComposerView: View {
             identifier: "attachPoll",
             onSend: send
         ) {
-            AttachFieldLabel(text: "무엇을 물어볼까요", isRequired: true)
+            AttachFieldLabel(text: "무엇을 물어볼까요", isRequired: true, isFirst: true)
             AttachTextField(placeholder: "예) 점심 뭐 먹을까요?", text: $question, identifier: "attachPoll.question")
                 .onChange(of: question) { _, value in
                     if value.count > Self.questionLimit {
@@ -61,7 +61,7 @@ struct AttachPollComposerView: View {
                 "마감하면 결과가 채팅방 카드에 그대로 남아요."
             ])
         }
-        .attachComposerFailureAlert(sendState)
+        .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
     private var optionsSection: some View {

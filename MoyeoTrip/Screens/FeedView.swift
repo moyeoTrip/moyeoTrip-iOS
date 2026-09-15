@@ -34,6 +34,12 @@ enum FeedSegment: String, CaseIterable, Hashable {
 
 private let feedTimelineMediaHeight: CGFloat = 166
 
+/// 좋아요 한 건의 현재 상태(내가 눌렀는지 · 개수). 목록 카드가 서버 값 대신 이 값을 그린다.
+struct FeedLikeState: Equatable {
+  let liked: Bool
+  let count: Int
+}
+
 struct FeedView: View {
   /// 목록·고른 탭은 화면 밖 보관소에 있다 — 탭을 다녀와도 다시 부르지 않는다 (TAB-STATE-CANON R1·R3).
   @ObservedObject var tabData: MoyeoTabDataStore
@@ -52,6 +58,13 @@ struct FeedView: View {
   @State private var authorProfileRoute: SupportRoute?
   /// 목록 카드의 `...` 로 여는 30-2 신고 시트. 상세(23)와 같은 경로를 쓴다.
   @State private var reportRoute: SupportRoute?
+  /// 목록에서 누른 좋아요의 **성공한** 결과. 상세(23)와 같은 규칙이다 —
+  /// 낙관적 갱신을 하지 않고 서버가 받아준 뒤에만 하트·숫자를 바꾼다(되돌릴 일이 없다).
+  @State private var likeOverrides: [String: FeedLikeState] = [:]
+  /// 좋아요 실패 까닭. **그 카드 자리에** 적는다 — 목록 전체를 오류로 덮지 않는다.
+  @State private var likeErrors: [String: String] = [:]
+  /// 요청이 도는 동안 같은 카드를 다시 누르지 않게 한다(연타로 토글이 엇갈리지 않게).
+  @State private var likingPostIDs: Set<String> = []
 
   init(
     tabData: MoyeoTabDataStore,
@@ -75,6 +88,14 @@ struct FeedView: View {
     self.feedWriteRoomID = feedWriteRoomID
   }
 
+  /// 지금 보고 있는 피드 탭의 스크롤 위치 (NAV-009).
+  private var scrollOffsetBinding: Binding<CGFloat> {
+    Binding(
+      get: { tabData.feedScrollOffsets[segment.accessibilityKey] ?? 0 },
+      set: { tabData.feedScrollOffsets[segment.accessibilityKey] = $0 }
+    )
+  }
+
   private var segment: FeedSegment {
     tabData.feedSegment
   }
@@ -96,6 +117,29 @@ struct FeedView: View {
   /// 탭바에 깔려 눌리지 않았다 — 한 군데서만 판단한다.
   private var isCoveringScreenOpen: Bool {
     selectedPost != nil || isWritingPost || authorProfileRoute != nil || reportRoute != nil
+  }
+
+  /// 22 목록에서 누른 좋아요 (`POST /feeds/{id}/like`). 상세(23) `toggleServerLike` 와 같은 규칙이다 —
+  /// **성공한 뒤에만** 하트·숫자를 바꾸고, 실패하면 그 카드 자리에 까닭을 적는다.
+  private func toggleLike(_ post: FeedPost) {
+    guard MoyeoServerSync.isEnabled, let feedID = post.serverFeedID else { return }
+    guard !likingPostIDs.contains(post.id) else { return }
+    likingPostIDs.insert(post.id)
+    likeErrors[post.id] = nil
+    Task {
+      do {
+        try await FeedAPIClient.shared.toggleLike(feedID: feedID)
+        let liked = !(likeOverrides[post.id]?.liked ?? post.serverLiked)
+        let base = likeOverrides[post.id]?.count ?? post.likeCount
+        likeOverrides[post.id] = FeedLikeState(liked: liked, count: max(base + (liked ? 1 : -1), 0))
+      } catch {
+        // 서버 문구를 그대로 흘리지 않는다 — `moyeoUserMessage` 가 통신·해석 실패를 먼저 가른다 (결정 ⑩).
+        likeErrors[post.id] = error.moyeoUserMessage(
+          fallback: "좋아요를 처리하지 못했어요. 잠시 후 다시 시도해주세요."
+        )
+      }
+      likingPostIDs.remove(post.id)
+    }
   }
 
   /// 캐시가 없고 조회 중일 때만 로딩 문구를 띄운다 (R2). 이미 받은 목록은 로딩으로 덮지 않는다.
@@ -150,6 +194,16 @@ struct FeedView: View {
                   accessibilityIdentifier: "feed.loading"
                 )
                 .padding(.vertical, 30)
+              } else if tabData.didFailFeed(segment) {
+                // **실패와 빈 상태를 가른다** (NO-MOCK-CANON R1 · TC FEED-038).
+                // 예전에는 서버가 500 을 줘도 「아직 올라온 피드가 없어요.」로 보였다.
+                MoyeoSectionRetryNotice(
+                  message: "피드를 불러오지 못했어요.",
+                  identifier: "feed.list"
+                ) {
+                  Task { await tabData.refreshFeed(segment) }
+                }
+                .padding(.vertical, 30)
               } else {
                 // 서버가 준 피드만 그린다 — 없으면 §2 빈 상태다
                 MoyeoEmptyStateView(
@@ -169,9 +223,16 @@ struct FeedView: View {
                 onReport: {
                   reportRoute = .report(post.id)
                 },
+                onOpenMyActions: {
+                  reportRoute = .feedActions(post.id)
+                },
                 onOpenAuthor: {
                   authorProfileRoute = .publicProfile(post.authorProfileSubject)
-                }
+                },
+                likeState: likeOverrides[post.id],
+                isLiking: likingPostIDs.contains(post.id),
+                likeErrorMessage: likeErrors[post.id],
+                onToggleLike: { toggleLike(post) }
               )
               .id("feed.post.\(post.id)")
 
@@ -196,7 +257,15 @@ struct FeedView: View {
           transaction.disablesAnimations = true
         }
         .scrollBounceBehavior(.basedOnSize)
+        // 당겨서 새로고침 — 정본 TAB-STATE-CANON R4. 한 번 받은 탭은 재진입해도 다시 부르지
+        // 않으므로(R3), 새 글을 보려면 사용자가 명시적으로 당기는 길이 있어야 한다.
+        .refreshable { await tabData.refreshFeed(tabData.feedSegment) }
         .background(MoyeoTheme.background)
+        // 탭을 오간 뒤에도 보던 자리로 돌아온다 (TC NAV-009, TAB-STATE-CANON R3).
+        // 팔로잉·발견은 보던 자리가 다르므로 탭별로 따로 기억하고,
+        // 탭을 바꾸면 그 탭의 자리에서 다시 시작하도록 `id` 로 상태를 새로 잡는다.
+        .moyeoRestoresScrollOffset(scrollOffsetBinding)
+        .id(segment.accessibilityKey)
         .onAppear {
           guard let state = QAScrollState.requested else { return }
           let target = state.targetID(middle: "feed.middle", bottom: "feed.bottom")
@@ -309,6 +378,9 @@ struct FeedDetailView: View {
   @State private var comment = ""
   @State private var submittedComments: [String] = []
   @State private var optionMessage: String?
+  /// 위 안내창의 제목. 이 창은 옵션·댓글·좋아요가 **같이 쓴다** — 좋아요가 실패했는데
+  /// 「피드 옵션」이라고만 떠서 무엇이 실패했는지 읽히지 않았다.
+  @State private var optionTitle = "피드 옵션"
   @State private var supportRoute: SupportRoute?
   /// 실서버 피드의 좋아요 토글 상태 (nil이면 서버 값 그대로)
   @State private var likeOverride: (liked: Bool, count: Int)?
@@ -341,6 +413,32 @@ struct FeedDetailView: View {
   /// 목록 카드와 **같은 규칙**을 쓴다 (`FeedPost.canReport`).
   private var canReportPost: Bool { post.canReport }
 
+  /// 「방문지 N곳」으로 여는 14 코스 상세. `FeedTripResponse.courseId` 가 근거다 —
+  /// 추가 API 가 없고 `GET /travel-courses/{courseId}` 를 그대로 연다.
+  @State private var courseRoute: Int64?
+
+  /// 「방문지 N곳」 칸.
+  ///
+  /// 예전에는 **누를 수 없는 장식**이라, 어떤 코스를 다녀온 글인지 보고도 그 코스를 열 수
+  /// 없었다 (2026-09-14 사용자 지적). `courseId` 를 아는 서버 피드에서만 누를 수 있게 하고,
+  /// 모르면 **누를 수 있는 모양을 주지 않는다** — 식별자 없이 눌리는 자리를 만들지 않는다.
+  @ViewBuilder
+  private var visitCountTile: some View {
+    if let courseID = post.serverCourseID {
+      Button {
+        courseRoute = courseID
+      } label: {
+        FeedMetricBox(title: "방문지", value: post.visitCountText, showsChevron: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityAddTraits(.isButton)
+      .accessibilityLabel("방문지 \(post.visitCountText), 코스 상세 보기")
+      .accessibilityIdentifier("feed.detail.openCourse")
+    } else {
+      FeedMetricBox(title: "방문지", value: post.visitCountText)
+    }
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       ScrollView {
@@ -368,6 +466,21 @@ struct FeedDetailView: View {
             // 30-2 는 **남의 피드**에만 둔다 — 자기 피드를 신고하면 서버가 400 `40039`
             // (`본인이 작성한 피드는 신고할 수 없습니다`)로 거절한다. 정본 §2 는 403 이라 적었지만
             // 실서버는 400 이다(2026-09-03 확인). 어느 쪽이든 버튼을 두지 않는다.
+            // 24-6 — **내 피드**에는 수정·삭제 시트를 연다. 예전에는 내 글에 `...` 자체가
+            // 없어서 앱 안에서 내 여행기록을 고치거나 지울 길이 아예 없었다 (TC FEED-027).
+            if post.canEditOrDelete {
+              Button {
+                supportRoute = .feedActions(post.id)
+              } label: {
+                Image(systemName: "ellipsis")
+                  .foregroundStyle(MoyeoTheme.muted)
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("내 피드 더보기")
+              .accessibilityIdentifier("feed.detail.myMore")
+            }
             if canReportPost {
               Button {
                 supportRoute = .report(post.id)
@@ -414,7 +527,7 @@ struct FeedDetailView: View {
               FeedMetricBox(title: "소요 시간", value: post.durationText)
             }
             if !post.visitCountText.isEmpty {
-              FeedMetricBox(title: "방문지", value: post.visitCountText)
+              visitCountTile
             }
           }
 
@@ -431,13 +544,10 @@ struct FeedDetailView: View {
             } else {
               Text("좋아요 \(post.likeCount)개")
             }
-            // 문구는 안드로이드 `FeedDetailScreen` 과 같다 — 세 플랫폼이 같은 문장을 쓴다.
-            Button("댓글 \(totalCommentCount)개 모두 보기 →") {
-              commentsPost = post
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(MoyeoTheme.forest)
-            .accessibilityIdentifier("feed.comments.openAll")
+            // **개수 표시만이다 — 누르는 기능이 없다.** 23-1 진입은 댓글 아래 한 군데뿐이다
+            // (`FEED-COMMENT-PREVIEW-CANON`: 같은 기능을 두 군데 두지 않는다).
+            Text("댓글 \(totalCommentCount)개")
+              .accessibilityIdentifier("feed.detail.commentCount")
           }
           .font(.caption.weight(.semibold))
           .foregroundStyle(MoyeoTheme.text700)
@@ -449,16 +559,13 @@ struct FeedDetailView: View {
               .frame(height: 1)
           }
 
-          // 댓글 일부(3건)를 상세에 펼친다. 대댓글은 여기서 접고 23-1 에서 본다 (F3).
-          if !previewComments.isEmpty {
-            VStack(alignment: .leading, spacing: 16) {
-              ForEach(previewComments) { entry in
-                FeedPreviewCommentRow(comment: entry)
-              }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("feed.detail.commentPreview")
-          }
+          // 댓글 일부(최상위 3건 + 각 대댓글 2건)를 상세에 펼치고, **그 아래** 23-1 진입 줄을 둔다.
+          // 대댓글은 `replies` 로 이미 응답에 들어 있다 — 추가 호출을 만들지 않는다.
+          FeedCommentPreviewSection(
+            comments: previewComments,
+            commentCount: totalCommentCount,
+            onOpenAll: { commentsPost = post }
+          )
 
           if !submittedComments.isEmpty {
             VStack(spacing: 8) {
@@ -506,8 +613,8 @@ struct FeedDetailView: View {
                 // 화면에서 만든 문장을 서버 목록에 섞지 않는다.
                 await loadPreviewComments()
               } catch {
-                optionMessage = (error as? LocalizedError)?.errorDescription
-                  ?? "댓글을 등록하지 못했어요. 잠시 후 다시 시도해주세요."
+                optionTitle = "댓글을 등록하지 못했어요"
+                optionMessage = error.moyeoUserMessage(fallback: "댓글을 등록하지 못했어요. 잠시 후 다시 시도해주세요.")
               }
               isSendingComment = false
             }
@@ -529,6 +636,8 @@ struct FeedDetailView: View {
         }
         .buttonStyle(.plain)
         .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        // ENV-006: 라벨이 없으면 VoiceOver 가 영어 시스템 문구(「Send」)로 읽는다.
+        .accessibilityLabel("댓글 올리기")
         .accessibilityIdentifier("feed.comment.send")
       }
       .padding(.horizontal, 16)
@@ -550,11 +659,16 @@ struct FeedDetailView: View {
     .navigationDestination(item: $commentsPost) { target in
       FeedCommentsView(post: target)
     }
+    // 14 코스 상세. `courseId` 만 아는 진입이라 빈 껍데기를 넘기고
+    // 그 화면이 `GET /travel-courses/{courseId}` 로 다시 채운다 (다른 진입점과 같은 방식).
+    .navigationDestination(item: $courseRoute) { courseID in
+      CourseDetailView(course: ServerCourseMapper.stubCourse(serverCourseID: courseID))
+    }
     .task(id: post.serverFeedID) {
       await loadPreviewComments()
     }
     .alert(
-      "피드 옵션",
+      optionTitle,
       isPresented: Binding<Bool>(
         get: { optionMessage != nil },
         set: { isPresented in
@@ -594,56 +708,10 @@ struct FeedDetailView: View {
         let liked = !displayLiked
         likeOverride = (liked, max(displayLikeCount + (liked ? 1 : -1), 0))
       } catch {
-        optionMessage = (error as? LocalizedError)?.errorDescription
-          ?? "좋아요를 처리하지 못했어요. 잠시 후 다시 시도해주세요."
+        optionTitle = "좋아요를 처리하지 못했어요"
+        optionMessage = error.moyeoUserMessage(fallback: "좋아요를 처리하지 못했어요. 잠시 후 다시 시도해주세요.")
       }
     }
-  }
-}
-
-/// 23 상세에 펼치는 댓글 한 줄 — 아바타 · 닉네임 · 본문. 안드로이드 `FeedDetailScreen` 과 같은 구성이다.
-/// 좋아요·답글 같은 행동은 23-1 에서만 한다.
-private struct FeedPreviewCommentRow: View {
-  let comment: ServerFeedComment
-
-  private var authorImageURL: URL? {
-    MoyeoImageURL.resolve(comment.author?.profileImageUrl)
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(spacing: 8) {
-        // 서버가 프로필 이미지를 주면 반드시 이미지다 — 없을 때만 마스코트로 떨어진다.
-        if let authorImageURL {
-          CachedRemoteImage(url: authorImageURL) { image in
-            image
-              .resizable()
-              .scaledToFill()
-          } placeholder: {
-            MoyeoTheme.leaf
-          }
-          .frame(width: 30, height: 30)
-          .clipShape(Circle())
-        } else {
-          MascotAvatar(
-            mascot: comment.author.flatMap {
-              MoyeoNicknameAnimal.emoji(forNickname: $0.nickname)
-            } ?? MoyeoNicknameAnimal.unknown,
-            size: 30,
-            background: MoyeoTheme.leaf
-          )
-        }
-        Text(comment.author?.nickname ?? "")
-          .font(.caption.weight(.heavy))
-          .foregroundStyle(MoyeoTheme.ink)
-      }
-      Text(comment.content ?? "")
-        .font(.caption)
-        .foregroundStyle(MoyeoTheme.ink)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.leading, 38)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -668,7 +736,17 @@ private struct FeedPostCard: View {
   let onOpenPost: () -> Void
   /// 30-2 신고 시트를 연다. 상세(23)의 `...` 와 같은 동작이다.
   let onReport: () -> Void
+  /// 24-6 내 피드 수정·삭제 시트를 연다 (내 글일 때만 그려진다).
+  let onOpenMyActions: () -> Void
   let onOpenAuthor: () -> Void
+  /// 이 화면에서 눌러 **성공한** 좋아요 결과. 없으면 서버가 준 값 그대로 그린다.
+  var likeState: FeedLikeState?
+  var isLiking = false
+  var likeErrorMessage: String?
+  var onToggleLike: () -> Void = {}
+
+  private var displayLiked: Bool { likeState?.liked ?? post.serverLiked }
+  private var displayLikeCount: Int { likeState?.count ?? post.likeCount }
 
   /// 상세(23)와 **같은 규칙**을 쓴다 (`FeedPost.canReport`) — 두 곳에 따로 적으면 갈린다.
   private var canReport: Bool { post.canReport }
@@ -699,6 +777,17 @@ private struct FeedPostCard: View {
             // 예전에는 `Button` 이 아니라 그냥 `Image` 였다 — **눌러도 아무 일도 없었다.**
             // 피드 상세(23)의 `...` 와 같은 동작·같은 조건을 쓴다: 신고 시트를 열고,
             // 자기 피드에는 두지 않는다(서버가 400 `40039` 로 거절한다).
+            if post.canEditOrDelete {
+              Button(action: onOpenMyActions) {
+                Image(systemName: "ellipsis")
+                  .foregroundStyle(MoyeoTheme.muted)
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("내 피드 더보기")
+              .accessibilityIdentifier("feed.post.\(post.id).myMore")
+            }
             if canReport {
               Button(action: onReport) {
                 Image(systemName: "ellipsis")
@@ -741,14 +830,6 @@ private struct FeedPostCard: View {
               .padding(.top, 5)
               .accessibilityIdentifier("feed.post.\(post.id).subtitle")
           }
-
-          // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
-          if post.hasFeedPhoto {
-            FeedPhotoPreview(post: post, height: feedTimelineMediaHeight)
-              .frame(height: feedTimelineMediaHeight)
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-              .padding(.top, 12)
-          }
         }
         .contentShape(Rectangle())
       }
@@ -756,14 +837,68 @@ private struct FeedPostCard: View {
       .accessibilityLabel(post.feedTitle)
       .accessibilityIdentifier("feed.post.\(post.id)")
 
+      // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
+      //
+      // 결정 ⑪ — 사진은 **위 `Button` 바깥**에 둔다. 여러 장이면 상세와 같은 페이저로
+      // 좌우로 넘긴다. `Button` 안에 `TabView(.page)` 를 넣으면 탭이 삼켜져
+      // 카드를 눌러도 상세로 가지 않는다. 대신 사진 탭은 `onTap` 으로 직접 받아
+      // **누르면 상세로 가는 동작은 그대로** 둔다.
+      if post.hasFeedPhoto {
+        Group {
+          if post.photoURLs.count > 1 {
+            FeedCardPhotoPager(
+              photoURLs: post.photoURLs,
+              height: feedTimelineMediaHeight,
+              identifierPrefix: "feed.post.\(post.id)",
+              onTap: onOpenPost
+            )
+          } else {
+            // 사진이 1장(또는 목데이터 타일)이면 페이저도 배지도 만들지 않는다.
+            FeedPhotoPreview(post: post, height: feedTimelineMediaHeight)
+              .contentShape(Rectangle())
+              .onTapGesture(perform: onOpenPost)
+          }
+        }
+        .frame(height: feedTimelineMediaHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.top, 12)
+      }
+
       HStack(spacing: 16) {
-        Label("\(post.likeCount)", systemImage: "heart")
+        // 목록에서도 좋아요를 **누를 수 있다** — 웹·안드와 같다(결정 ⑥, 파리티 2026-09-15).
+        // 예전에는 표시 전용이라 상세에 들어가야만 누를 수 있었다.
+        // 상세와 같은 규칙으로 **성공한 뒤에만** 하트·숫자를 바꾼다(낙관적 갱신 없음).
+        if post.isServerBacked {
+          Button(action: onToggleLike) {
+            Label("\(displayLikeCount)", systemImage: displayLiked ? "heart.fill" : "heart")
+              .foregroundStyle(displayLiked ? MoyeoTheme.coral : MoyeoTheme.text700)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .disabled(isLiking)
+          .accessibilityLabel("좋아요 \(displayLikeCount)개")
+          .accessibilityIdentifier("feed.post.\(post.id).likes")
+        } else {
+          // 목데이터 카드는 서버에 보낼 대상이 없다 — 표시 전용 그대로 둔다.
+          Label("\(post.likeCount)", systemImage: post.serverLiked ? "heart.fill" : "heart")
+            .accessibilityIdentifier("feed.post.\(post.id).likes")
+        }
         Label("\(post.commentCount)", systemImage: "bubble.right")
           .accessibilityIdentifier("feed.post.\(post.id).comments")
       }
       .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
       .foregroundStyle(MoyeoTheme.text700)
       .padding(.top, 12)
+
+      // 실패는 **그 카드 자리에** 적는다 — 목록 전체를 오류로 덮지 않는다.
+      if let likeErrorMessage {
+        Text(likeErrorMessage)
+          .font(MoyeoTypography.font(size: 11, relativeTo: .caption2))
+          .foregroundStyle(MoyeoTheme.coral)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 6)
+          .accessibilityIdentifier("feed.post.\(post.id).likeError")
+      }
     }
     .padding(.bottom, 18)
     .padding(.top, 14)

@@ -23,6 +23,8 @@ nonisolated struct TourismPlacePage: Sendable {
 protocol TourismContentProviding: Sendable {
     /// 17-1a 검색 — 검색어는 서버가 제목·기본주소·상세주소로 매칭한다. 화면에서 다시 거르지 않는다.
     func places(keyword: String, contentTypeID: Int?) async throws -> TourismPlacePage
+    /// 같은 검색의 `page` 쪽(1부터). 목데이터 서비스는 한 장이 전부라 기본 구현이 빈 쪽을 준다.
+    func places(keyword: String, contentTypeID: Int?, page: Int) async throws -> TourismPlacePage
     func place(id: String) async throws -> TourismPlace
     func contentTypes() async throws -> [ServerTourismContentType]
     /// 실서버 목록인지 — 목데이터 서비스는 false 다. 결과가 0건이어도 판별이 흔들리면 안 된다.
@@ -32,6 +34,12 @@ protocol TourismContentProviding: Sendable {
 extension TourismContentProviding {
     /// 목데이터 서비스는 서버 타입 목록을 주지 않는다 — 화면은 기존 3종 필터를 유지한다
     func contentTypes() async throws -> [ServerTourismContentType] { [] }
+
+    /// 쪽 개념이 없는 서비스는 첫 쪽만 주고 그 뒤는 비운다 — 없는 결과를 지어내지 않는다.
+    func places(keyword: String, contentTypeID: Int?, page: Int) async throws -> TourismPlacePage {
+        guard page <= 1 else { return TourismPlacePage(places: [], totalElements: nil) }
+        return try await places(keyword: keyword, contentTypeID: contentTypeID)
+    }
 
     var providesServerContent: Bool { false }
 }
@@ -73,7 +81,17 @@ final class TourismAPIClient: TourismContentProviding, @unchecked Sendable {
     /// 17-1a 검색·타입 필터 — 검색어와 타입을 모두 서버로 넘긴다.
     /// 검색어가 비면 파라미터를 보내지 않는다(전체 조회). 결과 0건은 정상 응답이라 폴백하지 않는다.
     func places(keyword: String, contentTypeID: Int?) async throws -> TourismPlacePage {
-        var query = [URLQueryItem(name: "size", value: "100")]
+        try await places(keyword: keyword, contentTypeID: contentTypeID, page: 1)
+    }
+
+    /// 서버 `page` 는 **1부터**고 `size` 는 100 이 상한이다(`TourismContentController:25-27`).
+    /// 예전에는 `size=100` 한 번만 불러서, 「3,115곳」이라고 적어 놓고 **100번째에서 목록이
+    /// 끝났다** — 더 볼 길도, 끝이 아니라는 표시도 없었다 (IOS-F91).
+    func places(keyword: String, contentTypeID: Int?, page: Int) async throws -> TourismPlacePage {
+        var query = [
+            URLQueryItem(name: "size", value: "\(Self.pageSize)"),
+            URLQueryItem(name: "page", value: "\(max(1, page))")
+        ]
         let normalized = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalized.isEmpty {
             query.append(URLQueryItem(name: "keyword", value: normalized))
@@ -84,6 +102,8 @@ final class TourismAPIClient: TourismContentProviding, @unchecked Sendable {
         let data = try await get(path: "/api/v1/tourism-contents", query: query)
         return try TourismAPIResponseParser.page(from: data)
     }
+
+    static let pageSize = 100
 
     func place(id: String) async throws -> TourismPlace {
         let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
@@ -258,7 +278,9 @@ enum TourismAPIResponseParser {
             phone: string(object, keys: ["phone", "tel", "telephone"]),
             phoneLabel: string(object, keys: ["phoneLabel", "telName", "telephoneName"]),
             homepage: TourismHomepageText.displayText(from: string(object, keys: ["homepage", "homePage", "website"])),
-            summary: string(object, keys: ["summary", "overview", "description"]),
+            // `overview` 는 HTML 조각으로 온다 — 태그·스타일을 걷어내고 문단만 남긴다.
+            // 예전에는 원문 그대로 담아 `<div class="…">` 와 CSS 가 화면에 글자로 보였다.
+            summary: TourismRichText.plainText(from: string(object, keys: ["summary", "overview", "description"])),
             imageLabels: imageURLs.indices.map { "장소 사진 \($0 + 1)" },
             menuImageLabels: menuURLs.indices.map { "메뉴판 \($0 + 1)" },
             imageURLs: imageURLs,
@@ -325,7 +347,11 @@ enum TourismAPIResponseParser {
 
 @MainActor
 final class TourismPlaceSearchModel: ObservableObject {
-    @Published private(set) var places = TourismPlaceCatalog.places
+    /// 목록. **번들 카탈로그로 미리 채우지 않는다** — 서버 응답 전에는 아무것도 없다.
+    /// 예전에는 초기값이 `TourismPlaceCatalog.places` 라, 첫 진입에서 번들 예시가
+    /// 실서버 결과인 것처럼 보이고 그 행을 누르면 실제로 없는 장소가 열렸다
+    /// (정본 NO-MOCK-CANON R1 위반 · TC PLACE-002·PLACE-017).
+    @Published private(set) var places: [TourismPlace] = []
     @Published private(set) var isLoading = false
     @Published private(set) var fallbackMessage: String?
     /// 서버 타입 목록 — 비어 있으면 화면은 기존 3종 필터를 유지한다 (17-1a)
@@ -339,6 +365,11 @@ final class TourismPlaceSearchModel: ObservableObject {
 
     private(set) var keyword = ""
     private var hasLoaded = false
+    /// 지금까지 받은 쪽 번호(1부터). 다음에 부를 쪽은 `loadedPage + 1` 이다.
+    private var loadedPage = 0
+    /// 더 받을 것이 남았는가. 서버가 빈 쪽을 주거나 `totalElements` 에 닿으면 false 다.
+    @Published private(set) var hasMorePages = false
+    @Published private(set) var isLoadingMore = false
 
     /// 검색어 한 글자마다 서버를 부르지 않도록 잠깐 기다린다
     static let searchDebounceNanoseconds: UInt64 = 300_000_000
@@ -375,17 +406,49 @@ final class TourismPlaceSearchModel: ObservableObject {
         defer { isLoading = false }
         do {
             // 결과 0건은 정상 응답이다 — 목데이터로 되돌리지 않고 빈 목록 그대로 둔다
-            let page = try await service.places(keyword: keyword, contentTypeID: selectedContentTypeID)
+            let page = try await service.places(keyword: keyword, contentTypeID: selectedContentTypeID, page: 1)
             places = page.places
             totalElements = page.totalElements
+            loadedPage = 1
+            hasMorePages = Self.hasMore(loaded: page.places.count, total: page.totalElements, received: page.places.count)
             fallbackMessage = nil
             isServerBacked = service.providesServerContent
         } catch {
-            places = TourismPlaceCatalog.places
+            // 실패를 **예시 장소로 덮지 않는다** (NO-MOCK-CANON R1) — 빈 목록과
+            // 실패 안내를 그려, 사용자가 「결과가 없다」와 「못 받았다」를 구분하게 한다.
+            places = []
             totalElements = nil
-            selectedContentTypeID = nil
+            loadedPage = 0
+            hasMorePages = false
             isServerBacked = false
-            fallbackMessage = "관광 API를 불러오지 못해 저장된 예시 장소를 보여드려요."
+            fallbackMessage = "방문지를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
         }
+    }
+
+    /// 목록 끝에 닿으면 다음 쪽을 잇는다. 예전에는 100번째에서 그냥 끝났다 (IOS-F91).
+    func loadNextPageIfNeeded() async {
+        guard isServerBacked, hasMorePages, !isLoading, !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        let next = loadedPage + 1
+        guard let page = try? await service.places(
+            keyword: keyword, contentTypeID: selectedContentTypeID, page: next
+        ) else {
+            // 못 받았으면 **끝이라고 말하지 않는다** — 다음 스크롤에서 다시 해 본다.
+            return
+        }
+        loadedPage = next
+        // 서버가 같은 것을 다시 줄 수 있어 id 로 거른다.
+        let known = Set(places.map(\.id))
+        places.append(contentsOf: page.places.filter { !known.contains($0.id) })
+        if let total = page.totalElements { totalElements = total }
+        hasMorePages = Self.hasMore(loaded: places.count, total: totalElements, received: page.places.count)
+    }
+
+    /// 받은 쪽이 비었거나 전체 수에 닿았으면 끝이다.
+    private static func hasMore(loaded: Int, total: Int?, received: Int) -> Bool {
+        guard received > 0 else { return false }
+        guard let total else { return received >= TourismAPIClient.pageSize }
+        return loaded < total
     }
 }

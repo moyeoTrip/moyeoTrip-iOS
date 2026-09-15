@@ -143,7 +143,7 @@ struct AuthFlowView: View {
     private var showsBackButton: Bool {
         guard !allowsDismissal else { return true }
         switch viewModel.stage {
-        case .splash, .profileImage:
+        case .splash, .profileImage, .sessionRestoreFailed:
             return false
         case .onboarding:
             return onboardingIndex > 0
@@ -176,6 +176,19 @@ struct AuthFlowView: View {
                     }
                 }
             }
+        case .sessionRestoreFailed:
+            AuthSessionRestoreFailedView(
+                message: viewModel.errorMessage,
+                isRetrying: viewModel.isRestoringSession,
+                retryAction: {
+                    Task {
+                        if await viewModel.retrySessionRestore() {
+                            completeFlow()
+                        }
+                    }
+                },
+                useAnotherAccountAction: { viewModel.discardSessionAndSignInAgain() }
+            )
         case .emailLogin, .emailRegistration:
             // 로그인/가입을 따로 고르지 않는다 — 한 번 시도하고 계정이 없으면 그대로 만든다.
             AuthEmailCredentialsView(
@@ -194,15 +207,15 @@ struct AuthFlowView: View {
                 email: $email,
                 isSubmitting: viewModel.isSubmittingEmail,
                 errorMessage: viewModel.errorMessage,
-                successMessage: viewModel.passwordResetMessage
-            ) {
-                Task { await viewModel.resetPassword(email: email) }
-            }
+                hasSent: viewModel.passwordResetThrottle.sendCount > 0,
+                resendMessage: viewModel.passwordResetMessage,
+                resendCooldownRemaining: { viewModel.passwordResetCooldownRemaining },
+                submitAction: { Task { await viewModel.resetPassword(email: email) } }
+            )
         case .nickname:
             AuthNicknameView(
                 nickname: $nickname,
-                provider: viewModel.nicknameProvider,
-                initialResponse: viewModel.nicknameResponse
+                viewModel: viewModel.nicknameViewModel
             ) { nickname, selectionToken in
                 viewModel.prepareSignup(nickname: nickname, selectionToken: selectionToken)
             }
@@ -286,7 +299,7 @@ struct AuthFlowView: View {
     /// 뒤로 갈 단계. `nil` 이면 플로우를 닫는다.
     nonisolated private static func previousStage(before stage: AuthFlowStage) -> AuthFlowStage? {
         switch stage {
-        case .splash, .onboarding, .profileImage: nil
+        case .splash, .onboarding, .profileImage, .sessionRestoreFailed: nil
         case .login: .onboarding
         case .emailLogin: .login
         case .emailRegistration, .passwordReset: .emailLogin
@@ -318,7 +331,8 @@ struct AuthFlowView: View {
 
     private var headerProgress: AuthHeaderProgress? {
         switch viewModel.stage {
-        case .splash:
+        case .splash, .sessionRestoreFailed:
+            // 가입 8단계 밖의 화면이다 — 안드로이드도 이 화면에서는 진행 라벨을 감춘다.
             return nil
         case .onboarding:
             return AuthHeaderProgress(label: "온보딩", current: onboardingIndex + 1, total: 8)
@@ -359,17 +373,20 @@ private struct AuthFlowHeader: View {
             HStack {
                 if showsBackButton {
                     Button(action: backAction) {
+                        // ENV-009 — 화살표 그림 크기는 그대로 두고 누를 넓이만 44x44 로 넓힌다
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(MoyeoTheme.ink)
-                            .frame(width: 38, height: 38)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("이전")
                     .accessibilityIdentifier("auth.back")
                 } else {
+                    // ENV-009 — 뒤로 버튼과 같은 44 로 맞춰 가운데 정렬을 유지한다
                     Color.clear
-                        .frame(width: 38, height: 38)
+                        .frame(width: 44, height: 44)
                 }
 
                 Spacer()
@@ -379,11 +396,13 @@ private struct AuthFlowHeader: View {
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(MoyeoTheme.muted)
                         .buttonStyle(.plain)
-                        .frame(height: 38)
+                        // ENV-009 — 글자 크기는 그대로, 누를 높이만 44 로
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityIdentifier("auth.skip")
                 } else {
                     Color.clear
-                        .frame(width: 38, height: 38)
+                        .frame(width: 44, height: 44)
                 }
             }
 

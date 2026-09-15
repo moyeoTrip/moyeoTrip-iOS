@@ -49,9 +49,10 @@ extension ChatRoomWriteAPIClient {
         request: ServerUpdateChatRoomRequest,
         thumbnail: MoyeoMultipartFile? = nil
     ) async throws {
-        // 서버는 수정된 방을 돌려준다. 화면은 다시 읽어 그리므로 응답은 버린다.
-        struct Ignored: Decodable {}
-        let _: Ignored = try await api.sendMultipart(
+        // 서버는 **204 No Content** 다 — 본문이 없다.
+        // 예전에는 빈 본문을 디코딩해서 저장이 됐는데도 「서버 응답을 이해하지 못했어요」가 떴고,
+        // 다시 누르게 되어 시스템 메시지가 겹쳐 쌓였다 (IOS-F112, 2026-09-12).
+        try await api.sendMultipartVoid(
             "/api/v1/chat-rooms/\(roomID)",
             method: "PATCH",
             jsonPartName: "request",

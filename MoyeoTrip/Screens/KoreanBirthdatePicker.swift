@@ -3,9 +3,41 @@ import SwiftUI
 enum KoreanBirthdatePolicy {
     static let calendar = Calendar(identifier: .gregorian)
 
+    /// 가입 최소 연령. **서버 상수를 따른다** — `AuthService.MINIMUM_SIGNUP_AGE` ·
+    /// `UserService.MINIMUM_PROFILE_AGE` 가 정본이고, 모자라면
+    /// `40011 만 19세 이상만 가입할 수 있습니다.` 로 막힌다.
+    ///
+    /// 2026-09-14 BE-06 결정으로 20 → 19 가 되었다. 또 바뀔 수 있으니 **서버를 먼저 보고**
+    /// 이 값 하나만 고친다 — 연·월·일 상한과 약관 확인 항목이 모두 여기를 본다.
+    static let minimumSignupAge = 19
+
+    /// 최소 연령에 닿는 마지막 날. 이 날보다 뒤에 태어났으면 가입할 수 없다.
+    static func latestAllowedBirthdate(today: Date = Date()) -> Date {
+        calendar.date(byAdding: .year, value: -minimumSignupAge, to: calendar.startOfDay(for: today))
+            ?? calendar.startOfDay(for: today)
+    }
+
+    /// 고를 수 있는 연도. 예전에는 1900…**올해**를 전부 줘서, 오늘보다 뒤인 날짜도,
+    /// 최소 연령이 안 되는 해도 고를 수 있었고 **가입 마지막 단계에서야** 거절됐다 (IOS-F58·F100).
     static func years(through date: Date = Date()) -> [Int] {
-        let currentYear = calendar.component(.year, from: date)
-        return Array((1900...currentYear).reversed())
+        let lastYear = calendar.component(.year, from: latestAllowedBirthdate(today: date))
+        return Array((1900...max(1900, lastYear)).reversed())
+    }
+
+    /// 그 해에 고를 수 있는 월. 한도가 걸린 해에는 한도 달까지만 준다.
+    static func months(year: Int, today: Date = Date()) -> [Int] {
+        let limit = latestAllowedBirthdate(today: today)
+        guard year == calendar.component(.year, from: limit) else { return Array(1...12) }
+        return Array(1...calendar.component(.month, from: limit))
+    }
+
+    /// 그 달에 고를 수 있는 일. 한도가 걸린 달에는 한도 날까지만 준다.
+    static func selectableDays(year: Int, month: Int, today: Date = Date()) -> [Int] {
+        let limit = latestAllowedBirthdate(today: today)
+        let total = days(year: year, month: month)
+        guard year == calendar.component(.year, from: limit),
+              month == calendar.component(.month, from: limit) else { return Array(1...total) }
+        return Array(1...min(total, calendar.component(.day, from: limit)))
     }
 
     static func days(year: Int, month: Int) -> Int {
@@ -112,7 +144,8 @@ private struct KoreanBirthdatePickerSheet: View {
 
     private let calendar = KoreanBirthdatePolicy.calendar
     private var availableYears: [Int] { KoreanBirthdatePolicy.years() }
-    private var availableDays: [Int] { Array(1...daysInSelectedMonth) }
+    private var availableMonths: [Int] { KoreanBirthdatePolicy.months(year: year) }
+    private var availableDays: [Int] { KoreanBirthdatePolicy.selectableDays(year: year, month: month) }
 
     init(initialDate: Date, onDone: @escaping (Date) -> Void) {
         let calendar = Calendar(identifier: .gregorian)
@@ -150,11 +183,20 @@ private struct KoreanBirthdatePickerSheet: View {
 
             HStack(spacing: 0) {
                 componentPicker(title: "년", selection: $year, values: availableYears)
-                componentPicker(title: "월", selection: $month, values: Array(1...12))
+                componentPicker(title: "월", selection: $month, values: availableMonths)
                 componentPicker(title: "일", selection: $day, values: availableDays)
             }
             .frame(height: 230)
             .padding(.horizontal, 10)
+
+            // 나이 기준을 **고르기 전에** 알린다. 예전에는 아무 해나 고르게 두고
+            // 가입 마지막 단계에서 서버 `40011` 로 거절했다 (IOS-F100).
+            Text("만 \(KoreanBirthdatePolicy.minimumSignupAge)세 이상만 가입할 수 있어요.")
+                .font(MoyeoTypography.cardMeta)
+                .foregroundStyle(MoyeoTheme.muted)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 4)
+                .accessibilityIdentifier("auth.basic.birthdate.ageRule")
 
             Text("입력한 생년월일은 연령 확인과 여행 추천에만 사용해요.")
                 .font(MoyeoTypography.cardMeta)
@@ -163,8 +205,9 @@ private struct KoreanBirthdatePickerSheet: View {
                 .padding(.bottom, 18)
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
-        .onChange(of: year) { _, _ in clampDay() }
-        .onChange(of: month) { _, _ in clampDay() }
+        .onChange(of: year) { _, _ in clampToAllowedRange() }
+        .onChange(of: month) { _, _ in clampToAllowedRange() }
+        .onAppear { clampToAllowedRange() }
     }
 
     private func componentPicker(title: String, selection: Binding<Int>, values: [Int]) -> some View {
@@ -190,7 +233,17 @@ private struct KoreanBirthdatePickerSheet: View {
         KoreanBirthdatePolicy.days(year: year, month: month)
     }
 
-    private func clampDay() {
+    /// 고른 값이 허용 범위를 벗어나면 범위 안으로 당긴다.
+    /// 달을 바꿔 없는 날이 되는 경우(2월 31일)와, 최소 연령 한도를 넘는 월·일을
+    /// 함께 막는다 — 예전에는 날짜 길이만 봤다 (IOS-F58).
+    private func clampToAllowedRange() {
+        if let newestYear = availableYears.first, year > newestYear { year = newestYear }
+        let months = availableMonths
+        if let last = months.last, month > last { month = last }
+        if let first = months.first, month < first { month = first }
+        let days = availableDays
+        if let last = days.last, day > last { day = last }
+        if let first = days.first, day < first { day = first }
         day = min(day, daysInSelectedMonth)
     }
 }

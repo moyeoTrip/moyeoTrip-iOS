@@ -267,7 +267,10 @@ final class MoyeoTripUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["모여트립 in 경북"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["추천"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["home.weatherHero"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["맑음 · 경주 첨성대"].exists)
+        // 날씨 칩은 서버 지점(`locationName`)이 있을 때만 `맑음 · <지점>` 이고,
+        // 없으면 `맑음` 만 적는다. 시안 랜드마크(`경주 첨성대`)를 지어내지 않는다
+        // (NO-MOCK-CANON R1) — 그 문구가 다시 나타나면 이 단언이 깨진다.
+        XCTAssertFalse(app.staticTexts["맑음 · 경주 첨성대"].exists)
         XCTAssertTrue(app.staticTexts["지금 떠나기 좋은 코스"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["인기 코스 TOP 3"].exists)
         XCTAssertTrue(app.staticTexts["주왕산 & 주산지 힐링 트레킹"].exists)

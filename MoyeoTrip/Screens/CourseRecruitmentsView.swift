@@ -23,6 +23,8 @@ struct CourseRecruitmentsView: View {
     @State private var didFail = false
     @State private var isLoading = true
     @State private var favoriteOverrides: [Int64: Bool] = [:]
+    /// 찜이 실패한 까닭. 목록 위에 한 줄로 적는다 (TC DETAIL-004 · 탐색과 같은 모양).
+    @State private var favoriteErrorMessage: String?
     @State private var selectedTrip: TripRecruitment?
 
     var body: some View {
@@ -70,6 +72,10 @@ struct CourseRecruitmentsView: View {
                 accessibilityIdentifier: "courseRecruitments.failed"
             )
         } else if let rooms, !rooms.isEmpty {
+            if let favoriteErrorMessage {
+                MoyeoInlineErrorText(
+                    message: favoriteErrorMessage, identifier: "courseRecruitments.favorite.error")
+            }
             ForEach(rooms) { room in
                 ServerRoomSearchResultRow(
                     room: room,
@@ -106,11 +112,19 @@ struct CourseRecruitmentsView: View {
         }
     }
 
+    /// 찜 토글. 서버 응답이 와야 하트를 바꾼다 — 서버와 다른 상태를 확정하지 않는다.
+    ///
+    /// 예전에는 `try?` 로 실패를 삼켜 **하트도 그대로, 안내도 없었다** (TC DETAIL-004).
     private func toggleFavorite(_ room: ServerChatRoomSummary) {
         Task {
-            // 실패하면 화면 값을 바꾸지 않는다 — 서버 응답만 신뢰한다.
-            if let favorite = try? await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId) {
-                favoriteOverrides[room.roomId] = favorite
+            do {
+                favoriteOverrides[room.roomId] =
+                    try await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId)
+                favoriteErrorMessage = nil
+            } catch {
+                favoriteErrorMessage = error.moyeoUserMessage(
+                    fallback: "찜을 바꾸지 못했어요. 잠시 후 다시 시도해주세요."
+                )
             }
         }
     }

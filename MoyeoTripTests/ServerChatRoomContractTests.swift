@@ -208,7 +208,7 @@ struct ServerChatRoomContractTests {
 
         let multiline = ServerChatRoomNotice(
             noticeId: 5, content: "집합 안내\n07:50 정문 앞", pinned: false,
-            authorNickname: "호스트", createdAt: "2026-08-24T01:12:20.560012"
+            authorNickname: "호스트", createdAt: "2026-08-24T01:12:20.560012", updatedAt: nil
         )
         let mapped = ServerTripMapper.notice(from: multiline)
         #expect(mapped.body == "집합 안내\n07:50 정문 앞")
@@ -488,6 +488,8 @@ struct ServerChatRoomCreateRequestContractTests {
     @Test func customCourseNeedsTwoServerPlacesAndTags() throws {
         var draft = dayTripDraft()
         draft.source = .custom
+        // 코스 이름은 17-1a 에디터에서 적는다 — 서버 `title` 이 @NotBlank 라 없으면 요청을 만들지 않는다
+        draft.customCourseTitle = "주왕산 단풍길 하루 코스"
         draft.itinerary = [
             ItineraryStop(id: "a", day: 1, order: 1, time: "09:00", name: "주왕산", memo: "", placeID: "2017064"),
             ItineraryStop(id: "b", day: 1, order: 2, time: "14:00", name: "주산지", memo: "", placeID: "2599344")
@@ -495,6 +497,7 @@ struct ServerChatRoomCreateRequestContractTests {
         let value = try #require(
             ServerChatRoomCreateRequestBuilder.customCourse(from: draft, tagIDs: [4, 7])
         )
+        #expect(value.title == "주왕산 단풍길 하루 코스")
         #expect(value.places.count == 2)
         #expect(value.places.first?.contentId == 2_017_064)
         #expect(value.places.first?.visitTime == "09:00")
@@ -502,6 +505,17 @@ struct ServerChatRoomCreateRequestContractTests {
 
         // 태그 ID가 없으면 보내지 않는다 (서버 필수 조건)
         #expect(ServerChatRoomCreateRequestBuilder.customCourse(from: draft, tagIDs: []) == nil)
+
+        // 코스 이름이 비어도 보내지 않는다 — 서버 `CreateCustomCourseRequest.title` 이 @NotBlank 다.
+        // 예전에는 `draft.course.title`(커스텀에서는 늘 빈 값)을 그대로 실어 보내려 했다 (IOS-F124).
+        var untitled = draft
+        untitled.customCourseTitle = "   "
+        // 모집 이름은 앞 단계에서 이미 채워진다 — 여기서 보고 싶은 것은 **코스 이름** 검사다.
+        untitled.recruitmentName = "문경새재 하루 산책 같이 가요"
+        #expect(ServerChatRoomCreateRequestBuilder.customCourse(from: untitled, tagIDs: [4]) == nil)
+        #expect(
+            ServerChatRoomCreateRequestBuilder.validationError(for: untitled, tagIDs: [4]) == "코스 이름을 적어 주세요."
+        )
 
         // 서버 방문지 ID가 없는 항목은 제외되므로 2개를 못 채우면 보내지 않는다
         var localOnly = draft

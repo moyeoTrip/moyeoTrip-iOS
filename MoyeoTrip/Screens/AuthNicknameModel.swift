@@ -104,6 +104,20 @@ final class AuthNicknameViewModel: ObservableObject {
         !isLoading
     }
 
+    /// 새 가입 흐름이 시작될 때 서버가 준 첫 후보 묶음을 받아 적는다.
+    ///
+    /// 화면(`AuthNicknameView`)이 이 객체를 다시 만들지 않고 계속 쓰기 때문에
+    /// 「다음 → 뒤로」로 돌아와도 마지막 후보 묶음과 그에 딸린 `selectionToken` 이 남는다.
+    /// 재추천으로 무효화된 첫 토큰이 되살아나면 마지막 가입 요청이 서버에서 거절된다 (IOS-F57).
+    func adopt(_ response: AuthNicknameCandidatesResponse) {
+        guard !isLoading else { return }
+        candidates = response.candidates
+        selectionToken = response.selectionToken
+        selectedNickname = ""
+        errorMessage = nil
+        refreshCount = 0
+    }
+
     func selectNickname(_ nickname: String) {
         guard !isLoading else { return }
         selectedNickname = nickname

@@ -240,3 +240,89 @@ struct OSSLicenseCatalogTests {
         #expect(!mit.contains("Copyright (c)"))
     }
 }
+
+/// 403 과 429 는 **사용자가 해야 할 일이 정반대**다 — 429 는 기다리면 되고,
+/// 403 은 다시 눌러도 달라지지 않는다. 예전에는 둘 다 같은 문구였다 (웹 교차 발견 2026-09-14).
+@Suite("상태 코드별 실패 문구")
+struct MoyeoAPIStatusMessageTests {
+    @Test func splitsForbiddenAndTooManyRequests() {
+        #expect(MoyeoAPIStatusMessage.fallback(for: 403) == "이 작업을 할 권한이 없어요. 다시 시도해도 달라지지 않아요.")
+        #expect(MoyeoAPIStatusMessage.fallback(for: 429) == "요청이 너무 잦아요. 잠시 뒤 다시 시도해 주세요.")
+        #expect(MoyeoAPIStatusMessage.fallback(for: 403) != MoyeoAPIStatusMessage.fallback(for: 429))
+    }
+
+    /// 나머지는 **가르지 않는다** — 지금 문구 그대로다.
+    @Test func leavesOtherStatusCodesOnTheGenericMessage() {
+        for statusCode in [400, 404, 409, 500, 503] {
+            #expect(MoyeoAPIStatusMessage.fallback(for: statusCode) == MoyeoAPIStatusMessage.generic)
+        }
+    }
+
+    /// **서버가 준 한국어 까닭이 우선이다.** 화면 헬퍼가 일반 문구로 덮으면 안 된다.
+    @Test func serverReasonSurvivesTheScreenHelper() {
+        let error = MoyeoAPIError.server(
+            statusCode: 403,
+            code: 40301,
+            message: "이미 나간 채팅방이에요."
+        )
+        #expect(error.moyeoUserMessage(fallback: "공지를 올리지 못했어요.") == "이미 나간 채팅방이에요.")
+    }
+
+    /// 본문 없는 403·429 가 **화면 문구까지** 갈라져 도착하는지.
+    ///
+    /// 예전에는 API 계층이 상태 코드와 무관하게 한국어 기본 문구를 붙였고,
+    /// 그 문구가 한국어라서 `MoyeoUserFacingError` 의 「서버 문구는 그대로 쓴다」 분기를
+    /// 통과해 버렸다 — **화면 쪽만 고쳤다면 예전 문구가 그대로 나왔을 자리다.**
+    @Test func bodylessFailuresReachTheScreenWithDifferentText() {
+        let forbidden = MoyeoAPIError.server(
+            statusCode: 403, code: nil, message: MoyeoAPIStatusMessage.fallback(for: 403)
+        )
+        let throttled = MoyeoAPIError.server(
+            statusCode: 429, code: nil, message: MoyeoAPIStatusMessage.fallback(for: 429)
+        )
+        let fallback = "공지를 올리지 못했어요."
+        #expect(forbidden.moyeoUserMessage(fallback: fallback) == MoyeoAPIStatusMessage.forbidden)
+        #expect(throttled.moyeoUserMessage(fallback: fallback) == MoyeoAPIStatusMessage.tooManyRequests)
+        #expect(forbidden.moyeoUserMessage(fallback: fallback) != throttled.moyeoUserMessage(fallback: fallback))
+    }
+
+    /// 앱이 붙인 일반 문구는 **화면이 더 나은 말을 갖고 있으면 양보한다**
+    /// (채팅방 접근 상실은 「이 채팅방을 더 이상 볼 수 없어요.」가 더 정확하다).
+    @Test func recognisesGeneratedMessagesSoScreensCanOverrideThem() {
+        #expect(MoyeoAPIStatusMessage.isGenerated(MoyeoAPIStatusMessage.forbidden))
+        #expect(MoyeoAPIStatusMessage.isGenerated(MoyeoAPIStatusMessage.tooManyRequests))
+        #expect(MoyeoAPIStatusMessage.isGenerated(MoyeoAPIStatusMessage.generic))
+        #expect(!MoyeoAPIStatusMessage.isGenerated("이미 나간 채팅방이에요."))
+    }
+}
+
+/// 경북 경계 — 안드로이드 `GyeongbukBoundsTest` 와 **같은 표본**으로 고정한다.
+///
+/// 처음 쓴 사각형(`35.4...37.2` · `127.7...129.6`)은 **울릉도와 독도를 둘 다 뺐다.**
+/// 둘 다 행정구역상 경상북도 울릉군이고, 이 서비스에는 울릉도 코스가 실제로 있다 —
+/// 그대로 뒀다면 울릉도에 있는 사용자가 「경상북도 밖이에요」라는 **틀린 안내**를 받았다.
+@Suite("경상북도 경계 (IOS-F24)")
+struct MoyeoGyeongbukRegionTests {
+    private func coordinate(_ latitude: Double, _ longitude: Double) -> MoyeoMapCoordinate {
+        MoyeoMapCoordinate(latitude: latitude, longitude: longitude)
+    }
+
+    @Test func includesMainlandGyeongbuk() {
+        #expect(MoyeoGyeongbukRegion.contains(coordinate(36.0190, 129.3435)))  // 포항시청
+        #expect(MoyeoGyeongbukRegion.contains(coordinate(36.5684, 128.7294)))  // 안동시청
+        #expect(MoyeoGyeongbukRegion.contains(coordinate(36.5866, 128.1867)))  // 문경시청
+        #expect(MoyeoGyeongbukRegion.contains(coordinate(35.8562, 129.2247)))  // 경주
+    }
+
+    /// **울릉군이 빠지면 안 된다.** 이 두 줄이 이번 수정의 이유다.
+    @Test func includesUlleungCounty() {
+        #expect(MoyeoGyeongbukRegion.contains(coordinate(37.4845, 130.9057)))  // 울릉도
+        #expect(MoyeoGyeongbukRegion.contains(coordinate(37.2428, 131.8664)))  // 독도
+    }
+
+    @Test func excludesOtherRegions() {
+        #expect(!MoyeoGyeongbukRegion.contains(coordinate(37.5665, 126.9780)))  // 서울시청
+        #expect(!MoyeoGyeongbukRegion.contains(coordinate(35.1151, 129.0416)))  // 부산역
+        #expect(!MoyeoGyeongbukRegion.contains(coordinate(33.5104, 126.4914)))  // 제주공항
+    }
+}

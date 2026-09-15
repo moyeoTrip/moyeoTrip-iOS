@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 struct RoomNotificationView: View {
     let roomID: Int64
@@ -30,6 +31,12 @@ struct RoomNotificationView: View {
     @State private var serverEnabled: Bool?
     @State private var loadState: TripCompanionsState = .loading
     @State private var route: SupportRoute?
+    /// OS 알림 권한이 꺼져 있는지. 꺼져 있으면 이 모임 알림을 켜 두어도 기기에는 오지 않는다 —
+    /// 서버 값만 보여 주면 「켜 뒀는데 왜 안 와요」가 된다 (TC NOTIF-016,
+    /// `OS-NOTIFICATION-BLOCK-CANON.md`). 문구·자리는 29-2 와 같은 것을 쓴다.
+    @State private var isSystemNotificationDenied = false
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ScrollView {
@@ -50,6 +57,13 @@ struct RoomNotificationView: View {
                     .background(MoyeoTheme.card)
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(MoyeoTheme.softLine))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+
+                // 토글 **위**에 놓는다 — 누르기 전에 읽혀야 한다 (정본 「문구·자리」).
+                // OS 가 막고 있지 않으면 이 줄은 아예 그리지 않는다.
+                if isSystemNotificationDenied {
+                    MoyeoSystemNotificationDeniedNotice { openNotificationSettings() }
+                        .padding(.top, 14)
                 }
 
                 toggleSection
@@ -93,7 +107,25 @@ struct RoomNotificationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $route) { SupportDestinationView(route: $0) }
         .task { await load() }
+        .task { await refreshSystemNotificationState() }
+        .onChange(of: scenePhase) { _, phase in
+            // iOS 설정에서 권한을 바꾸고 돌아오면 즉시 반영한다.
+            guard phase == .active else { return }
+            Task { await refreshSystemNotificationState() }
+        }
         .accessibilityIdentifier("screen.roomNotification")
+    }
+
+    /// OS 알림 권한이 꺼져 있는지 확인한다. `denied` 일 때만 안내를 띄운다 —
+    /// `notDetermined` 는 아직 물어보지 않은 것이라 「막혔다」고 말하면 거짓말이 된다 (29-2 와 같은 판정).
+    private func refreshSystemNotificationState() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        isSystemNotificationDenied = settings.authorizationStatus == .denied
+    }
+
+    private func openNotificationSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        openURL(url)
     }
 
     /// 진입점이 아는 이름이 우선이고, 없으면 서버에서 받은 값을 쓴다.

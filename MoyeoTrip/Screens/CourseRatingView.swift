@@ -22,6 +22,8 @@ struct CourseRatingView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var score = 0
     @State private var resolvedRoomID: Int64?
+    /// 서버가 준 내 별점을 한 번만 채웠는지 — 다시 불러오기로 사용자의 선택을 덮지 않는다.
+    @State private var didApplyMyRating = false
     @State private var roomCourse: ServerRoomCourse?
     @State private var loadState: TripCompanionsState = .loading
     @StateObject private var sendState = AttachComposerSendState()
@@ -106,11 +108,14 @@ struct CourseRatingView: View {
             loadState = .empty
             return
         }
-        guard let targetRoomID = await resolveRoomID() else {
+        // 방을 넘겨받았어도 목록을 읽는다 — **내가 이미 준 별점(`myCourseRating`)이 여기에만 있다.**
+        let rooms = try? await ChatRoomAPIClient.shared.myRooms()
+        guard let targetRoomID = resolveRoomID(in: rooms) else {
             loadState = .empty
             return
         }
         resolvedRoomID = targetRoomID
+        applyMyRating(from: rooms, roomID: targetRoomID)
         guard let loaded = try? await TravelCourseAPIClient.shared.roomCourse(roomID: targetRoomID) else {
             loadState = .failed
             return
@@ -121,11 +126,22 @@ struct CourseRatingView: View {
 
     /// 진입점이 방을 넘겨주면 그 방이다. 아니면 27-1 과 같은 기준 —
     /// 가장 최근에 끝난 내 모임을 쓴다. 끝난 여행이 없으면 평가할 것이 없다.
-    private func resolveRoomID() async -> Int64? {
+    private func resolveRoomID(in rooms: [ServerMyChatRoom]?) -> Int64? {
         if let roomID { return roomID }
-        guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else { return nil }
+        guard let rooms else { return nil }
         // 불발된 방은 평가할 여행이 아니다 — 확정된 여행을 먼저 고른다.
         return ServerTripMapper.latestCompletedRoom(in: rooms)?.roomId
+    }
+
+    /// 내가 이미 준 별을 다시 그린다. **서버가 준 값이 있을 때만** 채운다 —
+    /// 값이 없으면(아직 평가 전이거나 서버가 이 필드를 아직 주지 않으면) 빈 별 그대로 둔다.
+    /// 이미 고른 별이 있으면 덮지 않는다(다시 불러오기로 사용자의 선택이 지워지면 안 된다).
+    private func applyMyRating(from rooms: [ServerMyChatRoom]?, roomID: Int64) {
+        guard score == 0, !didApplyMyRating else { return }
+        guard let mine = rooms?.first(where: { $0.roomId == roomID })?.myCourseRating else { return }
+        guard (1...5).contains(mine) else { return }
+        score = mine
+        didApplyMyRating = true
     }
 
     private func submit() {

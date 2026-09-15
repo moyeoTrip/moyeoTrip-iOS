@@ -68,7 +68,8 @@ struct MeetingInfoEditView: View {
                 content: MoyeoMapContent(center: coordinate, level: 16, fitsContent: false),
                 draggablePin: true,
                 onPinMove: { moved in self.coordinate = moved },
-                fallback: { MoyeoTheme.mapGreen }
+                // 이 화면에는 장소 검색이 없다 — 없는 기능을 안내하지 않는다.
+                fallback: { MoyeoMapUnavailableView(message: "지도를 불러오지 못했어요. 아래 안내 문구에 만날 곳을 적어 주세요.") }
             )
             .frame(height: 168)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -81,7 +82,7 @@ struct MeetingInfoEditView: View {
             // 값 자체는 그대로 저장돼 채팅방 지도 카드·길 찾기에 쓰인다.
         }
 
-        AttachFieldLabel(text: "안내 문구").padding(.top, 18)
+        AttachFieldLabel(text: "안내 문구", isFirst: true).padding(.top, 18)
         AttachTextField(
             placeholder: "만나는 위치를 자세히 남겨주세요 (예: 터미널 정문 앞)",
             text: $meetingDetails,

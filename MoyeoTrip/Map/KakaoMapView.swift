@@ -22,13 +22,45 @@ struct MoyeoMapView<Fallback: View>: View {
     @ViewBuilder var fallback: () -> Fallback
 
     @State private var liveMapUnavailable = false
+    /// 「다시 시도」를 누를 때마다 올라간다. `.id` 로 붙어 있어 지도 컨트롤러를 **새로 만든다** —
+    /// 같은 인스턴스를 다시 그리면 실패한 상태 그대로다.
+    @State private var retryToken = 0
 
     var body: some View {
         if MoyeoMapRuntime.rendersLiveMap, !liveMapUnavailable {
-            liveMap
+            liveMap.id(retryToken)
         } else {
+            // 지도를 못 불러왔을 때 **안내만 있고 다시 해 볼 길이 없었다.**
+            // 통신이 잠깐 끊긴 것뿐이어도 화면을 나갔다 들어와야 했다 (웹 교차 발견 2026-09-14).
+            // `liveMapUnavailable` 이 true 일 때만 붙인다 — 애초에 실지도를 안 그리는
+            // 환경(캡처·UI 테스트)에서는 다시 시도할 것이 없다.
             fallback()
+                .overlay(alignment: .bottom) {
+                    if liveMapUnavailable {
+                        mapRetryButton
+                    }
+                }
         }
+    }
+
+    private var mapRetryButton: some View {
+        Button {
+            liveMapUnavailable = false
+            retryToken += 1
+        } label: {
+            Label("다시 시도", systemImage: "arrow.clockwise")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(MoyeoTheme.forest)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(MoyeoTheme.card)
+                .overlay(Capsule().stroke(MoyeoTheme.line))
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 10)
+        .accessibilityIdentifier("map.retry")
     }
 
     @ViewBuilder
@@ -104,6 +136,9 @@ final class KakaoMapHostController: UIViewController {
     private var cameraHandler: (any DisposableEventHandler)?
     /// 놓으면 핸들러가 바로 해제된다 — 레이어를 다시 만들 때마다 갱신한다.
     private var markerTapHandler: (any DisposableEventHandler)?
+    /// 핀 드래그 지도에서 **우리가 화면에 알려 준** 중심.
+    /// 이 좌표로 되돌아온 `content` 는 방금 사용자가 끈 결과라 카메라를 다시 잡지 않는다.
+    private var reportedCenter: MoyeoMapCoordinate?
 
     /// 스크롤 안의 핀 드래그 지도는 부모 스크롤보다 먼저 손가락을 잡아야 한다.
     private lazy var mapPanRecognizer: UIPanGestureRecognizer = {
@@ -194,6 +229,8 @@ final class KakaoMapHostController: UIViewController {
         super.viewDidDisappear(animated)
         cameraHandler = nil
         appliedContent = nil
+        // 지도를 다시 만들면 중심도 `content` 에서 새로 잡는다 — 지난 화면의 값을 남기지 않는다.
+        reportedCenter = nil
         engine?.resetEngine()
     }
 
@@ -215,6 +252,9 @@ final class KakaoMapHostController: UIViewController {
         guard let map = mapView else { return }
         registerCameraHandler(on: map)
         guard appliedContent != content else { return }
+        // 핀 드래그 지도에서 중심이 **화면 쪽에서** 바뀌었는지. 사용자가 핀을 끌어 우리가
+        // 알려 준 좌표면 false 다 — `appliedContent` 를 갈아끼우기 전에 판단한다.
+        let centerChangedByScreen = tracksCenter && !isReportedCenter(content.center)
         appliedContent = content
 
         map.poiClickable = false
@@ -225,9 +265,20 @@ final class KakaoMapHostController: UIViewController {
         drawMarkers(on: map)
         drawPolyline(on: map)
         // 핀 드래그 지도는 사용자의 제스처가 기준이라 카메라를 다시 잡지 않는다.
-        if !tracksCenter {
+        // 다만 화면이 좌표를 **갈아끼웠을 때**(집합 장소 검색 결과 선택 등)는 따라가야 한다.
+        // 예전에는 이 경우에도 카메라가 그대로라, 저장되는 좌표와 지도가 어긋난 채
+        // 「핀을 끌어 위치를 조정하세요」라고 말했다 (안드로이드 QA 3회차 AND-112 와 같은 구조).
+        if !tracksCenter || centerChangedByScreen {
             moveCamera(on: map)
         }
+    }
+
+    /// 지도가 방금 알려 준 중심과 같은 자리인지.
+    /// 카메라 정지 좌표는 목표값과 소수점 끝자리가 달라질 수 있어 약 1m(1e-5도) 안이면 같다고 본다.
+    private func isReportedCenter(_ coordinate: MoyeoMapCoordinate) -> Bool {
+        guard let reportedCenter else { return false }
+        return abs(reportedCenter.latitude - coordinate.latitude) < 1e-5
+            && abs(reportedCenter.longitude - coordinate.longitude) < 1e-5
     }
 
     private func drawMarkers(on map: KakaoMap) {
@@ -347,9 +398,13 @@ final class KakaoMapHostController: UIViewController {
     }
 
     private func reportCenterCoordinate() {
-        guard let map = mapView, let onCenterChange else { return }
+        guard let map = mapView else { return }
         let coordinate = map.getPosition(CGPoint(x: view.bounds.midX, y: view.bounds.midY)).wgsCoord
-        onCenterChange(MoyeoMapCoordinate(latitude: coordinate.latitude, longitude: coordinate.longitude))
+        let center = MoyeoMapCoordinate(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        // 화면에 알려 주지 않는 지도라도 기억해 둔다 — 이 값이 있어야 되돌아온 좌표를
+        // 「사용자가 끈 결과」와 「화면이 갈아끼운 값」으로 가를 수 있다.
+        reportedCenter = center
+        onCenterChange?(center)
     }
 }
 
@@ -386,3 +441,32 @@ extension KakaoMapHostController: MapControllerDelegate {
 }
 
 #endif
+
+/// 지도를 그리지 못할 때 그 자리에 놓는 자리표시.
+///
+/// 예전에는 여덟 곳 모두 `MoyeoTheme.mapGreen` **단색 사각형**이었다. 그래서 지도가
+/// 카카오 인증에 실패했는지, 아직 타일을 받는 중인지, 원래 저런 화면인지 구분할 수 없었다
+/// (사용자 지적 2026-09-12 — 「지도도 방금 제대로 렌더링 안됐었어」).
+/// 실패를 「없음」처럼 보이게 두지 않는다 — 무슨 일이 있었는지 한 줄로 말한다.
+struct MoyeoMapUnavailableView: View {
+    /// 지도 대신 보여 줄 한 줄. 화면마다 맥락이 달라 호출부가 정한다.
+    var message = "지도를 불러오지 못했어요."
+
+    var body: some View {
+        ZStack {
+            MoyeoTheme.mapGreen
+            VStack(spacing: 6) {
+                Image(systemName: "map")
+                    .font(.title3)
+                    .foregroundStyle(MoyeoTheme.muted)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 12)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(message)
+    }
+}

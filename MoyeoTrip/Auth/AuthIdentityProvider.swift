@@ -36,12 +36,12 @@ struct MockAuthIdentityProvider: AuthIdentityProviding {
 
     func sendPasswordReset(to email: String) async throws {
         try await Task.sleep(nanoseconds: delayNanoseconds)
-        guard email.contains("@") else { throw AuthIdentityError.invalidEmail }
+        guard EmailCredentialsPolicy.isValidEmail(email) else { throw AuthIdentityError.invalidEmail }
     }
 
     private func mockEmailToken(email: String, password: String, operation: String) async throws -> String {
         try await Task.sleep(nanoseconds: delayNanoseconds)
-        guard email.contains("@") else { throw AuthIdentityError.invalidEmail }
+        guard EmailCredentialsPolicy.isValidEmail(email) else { throw AuthIdentityError.invalidEmail }
         guard password.count >= 6 else { throw AuthIdentityError.weakPassword }
         return "demo-firebase-id-token-email-\(operation)"
     }

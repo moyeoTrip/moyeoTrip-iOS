@@ -145,6 +145,9 @@ struct ApplicationSheet: View {
                 )
             }
         }
+        // `.sheet` 가 아니라 화면 위에 겹쳐 그리는 오버레이라 UIKit 이 모달로 쳐 주지 않는다 —
+        // 스크린리더가 시트 밖(뒤 화면)까지 계속 읽었다. 직접 모달이라고 알려 준다 (TC ENV-007).
+        .accessibilityAddTraits(.isModal)
         .task {
             guard MoyeoServerSync.isEnabled, myProfile == nil else { return }
             myProfile = try? await UserProfileAPIClient.shared.myProfile()
@@ -282,6 +285,15 @@ struct ApplicationSheet: View {
 
     private var submitButton: some View {
         VStack(spacing: 8) {
+            // 유효성 오류를 **적는다.** 예전에는 `validationMessage` 를 계산만 하고 아무 데도
+            // 그리지 않아, 버튼은 활성인데 눌러도 아무 일이 없었다 (IOS-F01).
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.coral)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("application.sheet.validation")
+            }
             if let submitErrorMessage {
                 Text(submitErrorMessage)
                     .font(.caption.weight(.semibold))
@@ -302,8 +314,9 @@ struct ApplicationSheet: View {
                                 didSubmit = true
                             }
                         } catch {
-                            submitErrorMessage = (error as? LocalizedError)?.errorDescription
-                                ?? "신청을 보내지 못했어요. 잠시 후 다시 시도해주세요."
+                            submitErrorMessage = error.moyeoUserMessage(
+                                fallback: "신청을 보내지 못했어요. 잠시 후 다시 시도해주세요."
+                            )
                         }
                         isSubmitting = false
                     }
@@ -320,10 +333,13 @@ struct ApplicationSheet: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(MoyeoTheme.forest.opacity(isSubmitting ? 0.6 : 1))
+                .background(
+                    MoyeoTheme.forest.opacity(isSubmitting || validationMessage != nil ? 0.6 : 1)
+                )
                 .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
             }
             .buttonStyle(.plain)
+            .disabled(validationMessage != nil || isSubmitting)
             .accessibilityIdentifier("application.sheet.submit")
         }
     }

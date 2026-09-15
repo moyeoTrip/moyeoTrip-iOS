@@ -13,10 +13,13 @@ struct HostManageNavigationBar: View {
                 Button {
                     dismiss()
                 } label: {
+                    // NAV-017 · ENV-009 — 44x44 틀은 있었지만 `contentShape` 가 없어
+                    // 실제로는 화살표 그림(9x14pt)에만 반응했다. 그림 크기는 그대로 둔다.
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(MoyeoTheme.ink)
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("뒤로")
@@ -217,20 +220,72 @@ struct HostCompactApplicantRow: View {
     }
 }
 
+/// 18 승인된 동행자 줄의 아바타 한 칸. 서버 모임은 **프로필 사진**을, 목데이터 스레드는
+/// 마스코트 이모지를 그린다. 둘 다 없으면 잎 색 원만 남긴다(없는 값을 지어내지 않는다).
+struct HostCompanionAvatar: Hashable {
+    var imageURL: URL?
+    var emoji: String
+
+    init(imageURL: URL? = nil, emoji: String = "") {
+        self.imageURL = imageURL
+        self.emoji = emoji
+    }
+}
+
+extension HostCompanionAvatar {
+    /// 승인된 동행자 아바타 묶음.
+    ///
+    /// 서버 모임은 멤버 목록의 **프로필 사진**을 쓰고, 목데이터 스레드는 마스코트 이모지를 쓴다.
+    /// 서버 멤버를 아직 못 받았으면 사진 없이 인원 수만큼 빈 원을 둔다 — 예전에는 서버 모임이
+    /// **항상** 빈 문자열이라 사진이 있어도 빈 원만 그렸다(사용자 지적 2026-09-12).
+    static func approved(
+        usesServer: Bool,
+        serverMembers: [ServerChatRoomMember],
+        fallbackCount: Int,
+        mockEmojis: [String]
+    ) -> [HostCompanionAvatar] {
+        guard usesServer else { return mockEmojis.map { HostCompanionAvatar(emoji: $0) } }
+        guard !serverMembers.isEmpty else {
+            return Array(repeating: HostCompanionAvatar(), count: fallbackCount)
+        }
+        // 호스트를 앞에 둔다 — 기획 18 의 아바타 무리도 호스트가 먼저다.
+        return serverMembers
+            .sorted { lhs, rhs in lhs.host && !rhs.host }
+            .map { HostCompanionAvatar(imageURL: $0.profileImageURL) }
+    }
+}
+
 struct HostApprovedCompanionsRow: View {
-    let avatars: [String]
+    let avatars: [HostCompanionAvatar]
     let count: Int
 
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: -7) {
                 ForEach(Array(avatars.prefix(4).enumerated()), id: \.offset) { _, avatar in
-                    Text(avatar)
-                        .font(.body)
-                        .frame(width: 34, height: 34)
-                        .background(MoyeoTheme.leaf)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(MoyeoTheme.card, lineWidth: 2))
+                    Group {
+                        // 예전에는 이 줄이 **이모지 문자열만** 받았다. 서버 모임은 마스코트를 주지 않아
+                        // 빈 문자열을 넣었고, 그래서 **빈 원 네 개**만 그려졌다 — 서버가 주는
+                        // `profileImageUrl` 은 20-1 모임 정보에서 멀쩡히 쓰고 있었는데 여기만 안 썼다
+                        // (사용자 지적 2026-09-12).
+                        if let url = avatar.imageURL {
+                            CachedRemoteImage(url: url) { image in
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                            } placeholder: {
+                                MoyeoTheme.leaf
+                            }
+                        } else if !avatar.emoji.isEmpty {
+                            Text(avatar.emoji).font(.body)
+                        } else {
+                            MoyeoTheme.leaf
+                        }
+                    }
+                    .frame(width: 34, height: 34)
+                    .background(MoyeoTheme.leaf)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(MoyeoTheme.card, lineWidth: 2))
                 }
             }
             Spacer()
@@ -288,4 +343,67 @@ struct HostApplicant: Identifiable, Hashable {
     /// 서버 신청 목록을 못 받았을 때의 자리. 목 신청자를 채우지 않는다 (NO-MOCK-CANON R1).
     static let noPending: [HostApplicant] = []
     static let noApproved: [HostApplicant] = []
+}
+
+/// 18 모집 관리의 호스트 동작 묶음 — 18-4 여행 확정 / 18-5 집합 정보 수정 / 18-6 모집 내용 수정.
+///
+/// 앞의 둘은 **나란한 버튼**이다(기획·웹이 그렇다). 셋째는 폭이 달라 아래 줄에 따로 둔다.
+/// 세 화면 모두 **모집 중일 때만** 의미가 있다 — 확정 뒤에는 서버가 거절한다.
+/// 18-6 은 화면이 완성돼 있는데도 `SupportRoute.recruitEdit` 를 부르는 곳이 UI 테스트 코드
+/// 하나뿐이라 **앱에서 갈 길이 없었다**(웹 W-05 · 안드와 같은 구멍 · QA 2026-09-12).
+struct HostManageHostActions: View {
+    let isRecruitmentClosed: Bool
+    /// 서버가 말하는 지금 상태가 `RECRUITING` 인지. 확정·불발이 끝난 방에서는 세 화면 모두
+    /// 서버가 400 으로 거절한다 — 눌리는 채로 두면 눌러 봐야 알 수 있다 (IOS-F127).
+    var isRecruiting = true
+    let hasServerRoom: Bool
+    let onTripStatus: () -> Void
+    let onMeetingEdit: () -> Void
+    let onRecruitEdit: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                actionButton("여행 확정하기", identifier: "hostManage.tripStatus", action: onTripStatus)
+                actionButton("집합 정보 수정", identifier: "hostManage.meetingEdit", action: onMeetingEdit)
+            }
+            if !isRecruitmentClosed {
+                actionButton("모집 내용 수정", identifier: "hostManage.recruitEdit", action: onRecruitEdit)
+            }
+            if !isRecruiting {
+                // 왜 잠겼는지 적는다. 「모집 취소됨」 배지만으로는 버튼이 회색인 이유를 알 수 없다.
+                Text("모집이 끝난 방이라 확정·집합 정보·모집 내용은 더는 고칠 수 없어요.")
+                    .font(MoyeoTypography.tinyMeta)
+                    .foregroundStyle(MoyeoTheme.text400)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("hostManage.actionsLockedReason")
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 18)
+    }
+
+    private func actionButton(
+        _ title: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        // 잠긴 버튼은 **잠긴 것처럼 보여야 한다** — 초록 테두리 그대로 두면 눌러 봐야 안다.
+        let isEnabled = hasServerRoom && isRecruiting
+        return Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.heavy))
+                .foregroundStyle(isEnabled ? MoyeoTheme.brandText : MoyeoTheme.text400)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(isEnabled ? MoyeoTheme.forest : MoyeoTheme.line)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasServerRoom || !isRecruiting)
+        .accessibilityIdentifier(identifier)
+    }
 }

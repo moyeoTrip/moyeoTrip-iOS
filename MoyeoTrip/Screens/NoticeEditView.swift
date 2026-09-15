@@ -79,6 +79,13 @@ struct NoticeEditView: View {
     @State private var otherPinnedNotices: [ServerChatRoomNotice] = []
     /// 삭제는 되돌릴 수 없다 — 확인 시트를 거친 뒤에만 서버를 부른다.
     @State private var showsDeleteConfirmation = false
+    /// 이 화면을 열 때 서버에 있던 내용. 저장 직전에 다시 읽어 이 값과 견준다 —
+    /// 그 사이 누가 먼저 고쳤으면 **말없이 덮어쓰지 않는다** (TC NOTICE-021).
+    @State private var baselineContent: String
+    /// 이 화면이 읽은 공지의 `updatedAt` (BE-30). 저장할 때 `expectedUpdatedAt` 으로 같이 보내면
+    /// 그 사이 남이 고친 경우 서버가 409 `40923` 으로 막는다 — 재조회 가드가 못 잡는 **마지막
+    /// 한 순간**(재조회와 PUT 사이)까지 닫힌다. 서버 배포 전에는 nil 이라 보내지 않는다.
+    @State private var baselineUpdatedAt: String?
     @StateObject private var sendState = AttachComposerSendState()
 
     /// 서버 `UpdateChatRoomNoticeRequest` 와 같은 한도.
@@ -90,6 +97,8 @@ struct NoticeEditView: View {
         self.onChanged = onChanged
         _noticeText = State(initialValue: notice.content ?? "")
         _isPinned = State(initialValue: notice.pinned)
+        _baselineContent = State(initialValue: notice.content ?? "")
+        _baselineUpdatedAt = State(initialValue: notice.updatedAt)
     }
 
     private var trimmedNotice: String {
@@ -111,7 +120,7 @@ struct NoticeEditView: View {
             identifier: "noticeEdit",
             onSend: save
         ) {
-            AttachFieldLabel(text: "공지 내용", isRequired: true)
+            AttachFieldLabel(text: "공지 내용", isRequired: true, isFirst: true)
             editor
 
             AttachToggleRow(
@@ -218,6 +227,9 @@ struct NoticeEditView: View {
         let pinned = isPinned
         let previouslyPinned = otherPinnedNotices
         sendState.send(fallbackMessage: "공지를 수정하지 못했어요.") {
+            // ① 저장 직전에 다시 읽어 내용이 바뀌었는지 견준다. 이것만으로는 **경합 창이 좁아질 뿐**이다 —
+            //    재조회와 PUT 사이에 남이 고치면 여전히 덮어쓴다 (TC NOTICE-021).
+            try await checkNotEditedByOthers()
             // 고정은 하나만 남긴다 — 서버가 막지 않으므로 클라가 먼저 기존 고정을 푼다 (R5-1)
             if pinned {
                 for old in previouslyPinned {
@@ -226,9 +238,20 @@ struct NoticeEditView: View {
                     )
                 }
             }
-            try await ChatRoomWriteAPIClient.shared.updateNotice(
-                roomID: roomID, noticeID: notice.noticeId, notice: content, pinned: pinned
-            )
+            // ② 창을 닫는 것은 서버다 — 내가 읽은 `updatedAt` 을 실어 보내고, 그 사이 남이 고쳤으면
+            //    서버가 409 `40923` 으로 거절한다 (BE-30). 서버 배포 전에는 nil 이라 예전과 같다.
+            do {
+                try await ChatRoomWriteAPIClient.shared.updateNotice(
+                    roomID: roomID, noticeID: notice.noticeId, notice: content, pinned: pinned,
+                    expectedUpdatedAt: baselineUpdatedAt
+                )
+            } catch let error as MoyeoAPIError
+                where error.serverCode == MoyeoServerErrorCode.noticeUpdateConflict {
+                // 서버 `errorMessage` 를 그대로 쓰지 않는다 — 문구는 클라가 소유한다(결정 ⑩).
+                // 재조회 가드가 쓰던 것과 **같은 문장**을 쓴다: 사용자에게는 같은 상황이다.
+                await adoptLatestAfterServerConflict()
+                throw NoticeConflictError.edited
+            }
         } onSuccess: {
             onChanged()
             dismiss()
@@ -243,6 +266,58 @@ struct NoticeEditView: View {
         } onSuccess: {
             onChanged()
             dismiss()
+        }
+    }
+}
+
+// MARK: - 저장 직전 충돌 확인
+
+private extension NoticeEditView {
+    /// 저장 직전에 서버 공지를 다시 읽어, 그 사이 남이 고쳤거나 지웠으면 **저장을 멈춘다**.
+    /// 다시 읽기 자체가 실패하면(통신 불가) 막지 않는다 — 읽지 못한 것을 충돌로 단정하지 않는다.
+    func checkNotEditedByOthers() async throws {
+        guard MoyeoServerSync.isEnabled else { return }
+        guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else { return }
+        guard let latest = history.allNotices.first(where: { $0.noticeId == notice.noticeId }) else {
+            throw NoticeConflictError.removed
+        }
+        guard (latest.content ?? "") != baselineContent else { return }
+        // 최신 내용을 화면에 올려 두고 멈춘다 — 무엇이 달라졌는지 보고 다시 저장하게 한다.
+        adopt(latest)
+        throw NoticeConflictError.edited
+    }
+
+    /// 서버가 409 `40923` 으로 거절했을 때 — 최신 공지를 읽어 입력칸에 올린다.
+    /// **덮어쓰기를 다시 시도하지 않는다.** 다시 읽지 못하면 입력을 건드리지 않고 안내만 한다
+    /// (읽지 못한 것을 근거로 사용자가 쓴 글을 지우지 않는다).
+    func adoptLatestAfterServerConflict() async {
+        guard MoyeoServerSync.isEnabled,
+              let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID),
+              let latest = history.allNotices.first(where: { $0.noticeId == notice.noticeId })
+        else { return }
+        adopt(latest)
+    }
+
+    /// 서버 최신값을 화면과 기준값에 함께 올린다 — 다음 저장은 이 버전 위에서 시작한다.
+    func adopt(_ latest: ServerChatRoomNotice) {
+        noticeText = latest.content ?? ""
+        baselineContent = latest.content ?? ""
+        baselineUpdatedAt = latest.updatedAt
+        isPinned = latest.pinned
+    }
+}
+
+/// 저장하려는 순간 공지가 이미 바뀌어 있던 경우. 오류가 아니라 **다시 보라는 안내**다.
+private enum NoticeConflictError: LocalizedError {
+    case edited
+    case removed
+
+    var errorDescription: String? {
+        switch self {
+        case .edited:
+            return "다른 사람이 먼저 이 공지를 고쳤어요. 최신 내용을 불러왔으니 확인하고 다시 저장해주세요."
+        case .removed:
+            return "이 공지는 이미 삭제됐어요."
         }
     }
 }

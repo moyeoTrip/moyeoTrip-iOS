@@ -30,8 +30,14 @@ struct AttachPhotoComposerView: View {
         (photoData?.count ?? 0) > ServerChatShareLimits.maximumPhotoBytes
     }
 
+    /// 한 줄 설명이 한도를 넘었는지. 안드로이드와 같이 **자르지 않고** 넘쳤다는 것만 보여주고
+    /// 보내기를 막는다 — 사용자가 쓴 글을 말없이 지우지 않는다 (TC ATTACH-016).
+    private var isCaptionOverLimit: Bool {
+        caption.count > ServerChatShareLimits.maximumPhotoCaptionLength
+    }
+
     private var canSend: Bool {
-        photoData != nil && !isOversize && !sendState.isSending
+        photoData != nil && !isOversize && !isCaptionOverLimit && !sendState.isSending
     }
 
     var body: some View {
@@ -96,6 +102,18 @@ struct AttachPhotoComposerView: View {
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .accessibilityIdentifier("attachPhoto.caption")
+                if !caption.isEmpty {
+                    Text(
+                        isCaptionOverLimit
+                            ? "\(caption.count)/\(ServerChatShareLimits.maximumPhotoCaptionLength) · "
+                                + "\(caption.count - ServerChatShareLimits.maximumPhotoCaptionLength)자 넘었어요"
+                            : "\(caption.count)/\(ServerChatShareLimits.maximumPhotoCaptionLength)"
+                    )
+                    .font(MoyeoTypography.tinyMeta)
+                    .foregroundStyle(isCaptionOverLimit ? MoyeoTheme.warningText : MoyeoTheme.muted)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("attachPhoto.captionCount")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 16)
@@ -117,7 +135,7 @@ struct AttachPhotoComposerView: View {
             guard let item else { return }
             loadPhoto(item)
         }
-        .attachComposerFailureAlert(sendState)
+        .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
     /// R2 — 고른 사진을 크게 먼저. 아직 고르지 않았으면 자리를 지어내지 않는다.

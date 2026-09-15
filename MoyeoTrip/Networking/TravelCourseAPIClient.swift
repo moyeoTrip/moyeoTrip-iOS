@@ -47,6 +47,9 @@ struct ServerTravelCourseDetail: Decodable, Hashable, Identifiable {
     let title: String
     let description: String?
     let creatorNickname: String?
+    /// 작성자 userId (BE-29, 2026-09-15 실서버 확인 — 코스 207 은 121, 176 은 null).
+    /// 닉네임·사진과 **같은 공개 조건**을 따른다 — 공개하지 않았으면 null 이고, 그때는 누를 수 없다.
+    let creatorUserId: Int64?
     /// 작성자 프로필 이미지 (2026-09-02 서버 추가, 실서버 확인 — 코스 81·61·21 모두 URL 이 온다).
     /// 작성자 비공개·탈퇴·이미지 없음이면 `null` 이다 — 그때만 닉네임 아바타로 떨어진다.
     let creatorProfileImageUrl: String?
@@ -70,6 +73,12 @@ struct ServerTravelCourseDetail: Decodable, Hashable, Identifiable {
 
 /// 찜한 코스 (`travel-courses/me/favorites`) — 26 마이 `찜한 코스` 탭.
 /// 목록 응답보다 좁다: 소요 시간·거리·평점이 없다. 없는 값을 카드에 두지 않는다.
+/// `POST /travel-courses/{courseId}/favorite` 의 응답 — `{"favorite":true,"favoriteCount":1}`.
+struct ServerCourseFavorite: Decodable, Hashable {
+    let favorite: Bool
+    let favoriteCount: Int
+}
+
 struct ServerLikedCourse: Decodable, Hashable, Identifiable {
     let courseId: Int64
     let title: String
@@ -155,6 +164,14 @@ final class TravelCourseAPIClient: @unchecked Sendable {
     /// 응답(`LikedTravelCourseResponse`)은 목록 카드보다 좁다 — 소요 시간·거리·평점이 없다.
     func likedCourses() async throws -> [ServerLikedCourse] {
         try await api.get("/api/v1/travel-courses/me/favorites")
+    }
+
+    /// 14 코스 찜 토글 — `POST /travel-courses/{courseId}/favorite`.
+    /// **누를 때마다 켜고 끄는 토글**이다(별도 DELETE 가 없다). 서버가 바뀐 상태와
+    /// 총 찜 수를 돌려준다 — 화면은 이 값을 그린다(로컬 토글로 흉내내지 않는다, IOS-F14·F93).
+    @discardableResult
+    func toggleFavorite(courseID: Int64) async throws -> ServerCourseFavorite {
+        try await api.send("/api/v1/travel-courses/\(courseID)/favorite", method: "POST")
     }
 
     func tags() async throws -> [ServerCourseTag] {
@@ -279,6 +296,7 @@ enum ServerCourseMapper {
                 travelerAvatar: MoyeoNicknameAnimal.emoji(forNickname: nickname)
                     ?? MoyeoNicknameAnimal.unknown,
                 travelerAvatarURL: MoyeoImageURL.resolve(detail.creatorProfileImageUrl),
+                travelerUserID: detail.creatorUserId,
                 publishedAt: travelPeriodText(
                     startDate: detail.creatorTravelStartDate,
                     endDate: detail.creatorTravelEndDate

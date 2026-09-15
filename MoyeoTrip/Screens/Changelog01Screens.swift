@@ -89,14 +89,39 @@ struct RecruitmentDraft: Hashable {
     )
     var capacity = 5
     var minimumParticipants = 3
+    /// 직접 만든 코스의 이름. 서버 `CreateCustomCourseRequest.title` 이 `@NotBlank @Size(max = 100)` 이라 **필수**다.
+    /// 등록 코스를 고를 때 채워지는 `course` 는 커스텀 경로에서 늘 `.empty` 라 이름을 담을 자리가 없었고,
+    /// 그래서 커스텀 코스로는 요청을 조립할 수조차 없었다 (IOS-F124). 웹 `custom-course-title`·
+    /// 안드 `RecruitmentDraft.customCourseTitle` 과 같은 값이다.
+    var customCourseTitle = ""
+    /// 직접 만든 코스의 태그 ID. 서버 `createCustomCourse` 가 `tagIds` 로 태그를 하나도 못 찾으면
+    /// `TRAVEL_COURSE_TAG_NOT_FOUND` 로 거절한다 — 즉 **1개 이상**이 필수다.
+    var customCourseTagIDs: [Int64] = []
     var recruitmentName = ""
-    var estimatedCost = "0원"
-    var minimumAge = 25
-    var maximumAge = 35
+    /// 호스트가 **적었을 때만** 값이 생긴다 — 기본은 미정(빈 문자열)이다.
+    /// 예전에는 `"0원"` 이 미리 박혀 있어 손대지 않은 모집도 「1인 0원」으로 열렸다.
+    var estimatedCost = ""
+    /// 나이 제한은 **호스트가 정했을 때만** 건다. 기본은 제한 없음(`nil`)이다.
+    /// 예전에는 `25~35` 가 기본이라, 호스트가 손대지 않아도 25세 미만·35세 초과가
+    /// 전부 막힌 채로 모집이 열렸다 (사용자 지적 2026-09-13). 서버도 둘 다 nullable 이다.
+    var minimumAge: Int?
+    var maximumAge: Int?
     var genderRestriction = "성별 무관"
     var note = ""
     /// 17-5 신청 승인 방식. 화면기획 기본값은 자동 승인이고, 서버 요청의 `joinApprovalMode` 가 된다.
     var approvalMode = RecruitmentApprovalMode.automatic
+
+    /// 화면에 적는 코스 이름. 등록 코스는 1단계에서 고른 코스 이름, 직접 만든 코스는 에디터에서 적은 이름이다.
+    /// 커스텀의 `course` 는 늘 `.empty` 라, 예전에는 17-5 코스 줄과 17-6 요약 카드가 **빈 채로** 그려졌다.
+    var displayCourseTitle: String {
+        source == .custom ? customCourseTitle : course.title
+    }
+
+    /// 나이 제한 표기. 정하지 않았으면 「제한 없음」이라고 분명히 말한다.
+    var ageRangeText: String {
+        guard let minimumAge, let maximumAge else { return "나이 제한 없음" }
+        return "\(minimumAge) ~ \(maximumAge)세"
+    }
 
     static let preview = RecruitmentDraft()
 
@@ -184,6 +209,11 @@ struct RecruitmentCreationFlowView: View {
     @State private var creationErrorMessage: String?
     /// 커스텀 코스의 `tagIds` 근거. 서버 태그 목록에서 초안 태그 이름과 일치하는 것만 쓴다.
     @State private var serverCourseTags: [ServerCourseTag] = []
+    /// 5단계에서 호스트가 고른 대표 사진. 서버 `thumbnail` 파트는 **필수**다.
+    ///
+    /// 예전에는 고르는 단계가 없어서, 앱이 내장 「이미지 없음」 일러스트를 대신 올렸다 —
+    /// 목록에 회색 자리표시자가 진짜 사진인 양 걸려 사진이 정말 없는 방과 구분되지 않았다.
+    @State private var roomThumbnail: UIImage?
 
     init(
         courseID: String,
@@ -262,8 +292,12 @@ struct RecruitmentCreationFlowView: View {
                 case 4: RecruitmentDetailView(draft: $draft)
                 default: RecruitmentSummaryView(
                     draft: $draft,
+                    thumbnail: $roomThumbnail,
                     errorMessage: creationErrorMessage,
                     isSubmitting: isCreatingOnServer,
+                    // 「이전」이 빈 클로저라 **5단계에서 뒤로 갈 수 없었다** — 앞 단계 값을
+                    // 고치려면 화면을 나갔다 처음부터 다시 와야 했다 (2026-09-13).
+                    onBack: goBack,
                     onCreate: createRecruitment
                 )
                 }
@@ -272,18 +306,38 @@ struct RecruitmentCreationFlowView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if step < 5 {
-                CreationFooter(
-                    backTitle: step == 1 ? "" : "이전",
-                    nextTitle: nextTitle,
-                    back: goBack
-                ) {
-                    advance()
+                VStack(spacing: 0) {
+                    // 왜 다음으로 못 가는지 **버튼 바로 위에** 적는다. 예전에는 마감일을 여행
+                    // 시작일 뒤로 잡아도 5단계까지 그냥 넘어간 뒤 서버 400 으로 튕겼다 (IOS-F141).
+                    if let stepBlockingReason {
+                        Text(stepBlockingReason)
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.dangerRed)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 10)
+                            .accessibilityIdentifier("createRecruitment.blockingReason")
+                    }
+                    CreationFooter(
+                        backTitle: step == 1 ? "" : "이전",
+                        nextTitle: nextTitle,
+                        back: goBack,
+                        next: { advance() },
+                        isNextEnabled: stepBlockingReason == nil
+                    )
                 }
+                .background(MoyeoTheme.card)
             }
         }
         .sheet(isPresented: $showCustomEditor) {
             NavigationStack {
-                CustomCourseEditorView(stops: $draft.itinerary) {
+                CustomCourseEditorView(
+                    stops: $draft.itinerary,
+                    courseTitle: $draft.customCourseTitle,
+                    selectedTagIDs: $draft.customCourseTagIDs,
+                    tags: serverCourseTags
+                ) {
                     showCustomEditor = false
                     withAnimation(.easeInOut(duration: 0.2)) { step = 2 }
                 }
@@ -292,6 +346,8 @@ struct RecruitmentCreationFlowView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationBarBackButtonHidden()
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다 — 화면마다 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
         .task {
             // 커스텀 코스 요청에는 서버 태그 ID가 필요하다. 실패하면 서버 전송을 시도하지 않는다.
             guard MoyeoServerSync.isEnabled, serverCourseTags.isEmpty else { return }
@@ -300,6 +356,39 @@ struct RecruitmentCreationFlowView: View {
         .accessibilityIdentifier(
             "screen.createRecruitment.\(courseID).step\(step)\(showsMeetingPoint ? ".meetingPoint" : "")"
         )
+    }
+
+    /// 이 단계에서 「다음」을 왜 못 누르는지. 누를 수 있으면 nil 이다.
+    /// 지금은 2단계 일정만 본다 — 날짜 규칙을 여기서 못 잡으면 5단계까지 간 뒤 서버가 거절한다.
+    private var stepBlockingReason: String? {
+        // 집합 장소 화면은 **이름 없이 통과**했다 — 핀만 찍고 넘어가면 참가자에게 「」이 보였다 (IOS-F36).
+        if step == 2, showsMeetingPoint {
+            return draft.meeting.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "집합 장소를 검색해 이름을 정해 주세요." : nil
+        }
+        guard step == 2, !showsMeetingPoint else { return nil }
+        guard let start = ServerChatRoomCreateRequestBuilder.isoDate(from: draft.schedule.startDate) else {
+            return "여행 날짜를 정해 주세요."
+        }
+        guard let deadline = ServerChatRoomCreateRequestBuilder.isoDate(from: draft.deadline) else {
+            return "모집 마감일을 정해 주세요."
+        }
+        if deadline > start { return "모집 마감일은 여행 날짜보다 앞이어야 해요." }
+        if draft.schedule.kind == .overnight,
+           let end = ServerChatRoomCreateRequestBuilder.isoDate(from: draft.schedule.endDate), end <= start {
+            return "종료 날짜는 여행 시작 날짜보다 뒤여야 해요."
+        }
+        // 당일치기 시각 역전도 **여기서** 막는다. 날짜 3종은 2단계에서 막는데 시각만
+        // 5단계 「모집 열기」까지 통과해, 09:30 출발에 06:00 종료인 요약을 세 화면이나
+        // 지나 보고 나서야 거절당했다 (TC CREATE-029).
+        // 규칙 문구는 전송 직전 검사(`ServerChatRoomCreateRequestBuilder`)와 **같은 말**을 쓴다.
+        if draft.schedule.kind == .dayTrip,
+           let startTime = ServerChatRoomCreateRequestBuilder.isoTime(from: draft.schedule.startTime),
+           let endTime = ServerChatRoomCreateRequestBuilder.isoTime(from: draft.schedule.endTime),
+           startTime >= endTime {
+            return "여행 종료 시각은 시작 시각보다 뒤여야 해요."
+        }
+        return nil
     }
 
     private var nextTitle: String {
@@ -311,6 +400,10 @@ struct RecruitmentCreationFlowView: View {
     }
 
     private func advance() {
+        // 단계를 옮기면 앞 단계의 실패 문구를 지운다. 예전에는 지우는 곳이 「모집 열기」
+        // 직전 한 곳뿐이라, 원인을 고치고 돌아와도 옛 경고가 그대로 붙어 있었다
+        // (IOS-F144. 대비: 수정 화면 `RecruitEditView.swift:88` 은 `onChange` 마다 지운다).
+        creationErrorMessage = nil
         if step == 1, draft.source == .custom {
             showCustomEditor = true
             return
@@ -326,6 +419,7 @@ struct RecruitmentCreationFlowView: View {
     }
 
     private func goBack() {
+        creationErrorMessage = nil
         if step == 2, showsMeetingPoint {
             withAnimation(.easeInOut(duration: 0.2)) { showsMeetingPoint = false }
         } else if step == 1 {
@@ -335,37 +429,77 @@ struct RecruitmentCreationFlowView: View {
         }
     }
 
-    /// 초안 태그 이름 → 서버 태그 ID. 서버 목록에 없는 이름은 버린다(없는 ID를 지어내지 않는다).
+    /// 서버로 보낼 코스 태그 ID.
+    ///
+    /// 커스텀 코스는 **에디터에서 호스트가 직접 고른 ID**를 쓴다 — 예전에는 `draft.course.tags`(이름)를
+    /// 서버 목록과 맞췄는데, 커스텀의 `draft.course` 는 늘 `.empty` 라 결과가 항상 비어 있었다 (IOS-F124).
+    /// 서버 목록에 없는 ID는 버린다(없는 ID를 지어내지 않는다).
     private var serverTagIDs: [Int64] {
-        serverCourseTags.filter { draft.course.tags.contains($0.name) }.map(\.tagId)
+        switch draft.source {
+        case .custom:
+            let known = Set(serverCourseTags.map(\.tagId))
+            return draft.customCourseTagIDs.filter(known.contains)
+        case .linked:
+            return serverCourseTags.filter { draft.course.tags.contains($0.name) }.map(\.tagId)
+        }
     }
 
     private func createRecruitment() {
         guard !isCreatingOnServer else { return }
-        if MoyeoServerSync.isEnabled,
-           let selection = ServerChatRoomCreateRequestBuilder.courseSelection(
-               for: draft, tagIDs: serverTagIDs
-           ),
-           let request = ServerChatRoomCreateRequestBuilder.request(from: draft, course: selection) {
-            createOnServer(request)
+        // 서버를 쓰는 중이면 **서버에 만들거나, 왜 못 만드는지 말하거나** 둘 중 하나다.
+        // 예전에는 요청을 조립하지 못하면 조용히 `createLocalRecruitment()` 로 떨어져
+        // 이 기기 안에만 있는 가짜 모집이 만들어졌다 — 호스트는 모집을 연 줄 알지만
+        // 서버에는 없어 아무도 신청할 수 없었다 (2026-09-13).
+        guard MoyeoServerSync.isEnabled else {
+            createLocalRecruitment()
             return
         }
-        createLocalRecruitment()
+        if let invalid = ServerChatRoomCreateRequestBuilder.validationError(for: draft, tagIDs: serverTagIDs) {
+            creationErrorMessage = invalid
+            return
+        }
+        guard
+            let selection = ServerChatRoomCreateRequestBuilder.courseSelection(for: draft, tagIDs: serverTagIDs),
+            let request = ServerChatRoomCreateRequestBuilder.request(from: draft, course: selection)
+        else {
+            creationErrorMessage = "모집을 만들 수 없어요. 앞 단계의 값을 다시 확인해 주세요."
+            return
+        }
+        // 대표 사진은 서버 필수 파트다. 없으면 **자리표시자를 대신 올리지 않고** 여기서 멈춘다.
+        // (요약 화면이 이미 버튼을 잠그지만, 다른 진입로로 들어온 초안도 같은 규칙으로 막는다.)
+        guard let thumbnail = thumbnailPart() else {
+            creationErrorMessage = "대표 사진을 한 장 골라 주세요. 목록에 이 사진이 보여요."
+            return
+        }
+        createOnServer(request, thumbnail: thumbnail)
     }
 
-    private func createOnServer(_ request: ServerCreateChatRoomRequest) {
+    /// 고른 사진을 multipart 파트로. JPEG 로 줄여 보낸다 — 서버가 저장 전에 FHD WebP 로 다시 바꾼다
+    /// (18-6 모집 내용 수정과 같은 방식).
+    private func thumbnailPart() -> MoyeoMultipartFile? {
+        guard let data = roomThumbnail?.jpegData(compressionQuality: 0.9) else { return nil }
+        return MoyeoMultipartFile(
+            partName: "thumbnail",
+            fileName: "thumbnail.jpg",
+            mimeType: "image/jpeg",
+            data: data
+        )
+    }
+
+    private func createOnServer(_ request: ServerCreateChatRoomRequest, thumbnail: MoyeoMultipartFile) {
         isCreatingOnServer = true
         creationErrorMessage = nil
         Task {
             do {
-                let response = try await ChatRoomAPIClient.shared.create(request: request)
+                let response = try await ChatRoomAPIClient.shared.create(request: request, thumbnail: thumbnail)
                 createdServerTrip = ServerTripMapper.placeholderTrip(
                     roomID: response.roomId,
                     title: draft.recruitmentName
                 )
             } catch {
-                creationErrorMessage = (error as? LocalizedError)?.errorDescription
-                    ?? "모집을 만들지 못했어요. 잠시 후 다시 시도해주세요."
+                creationErrorMessage = error.moyeoUserMessage(
+                    fallback: "모집을 만들지 못했어요. 잠시 후 다시 시도해주세요."
+                )
             }
             isCreatingOnServer = false
         }
@@ -387,7 +521,7 @@ struct RecruitmentCreationFlowView: View {
             minimumAge: draft.minimumAge, maximumAge: draft.maximumAge,
             genderRestriction: draft.genderRestriction,
             routeEditState: draft.source == .custom ? .editable : .linkedLocked,
-            serverCourseTitle: draft.course.title
+            serverCourseTitle: draft.displayCourseTitle
         )
         var thread = trip.createdChatThread(profile: .empty)
         thread.tripID = id
@@ -407,8 +541,10 @@ private struct CreationHeader: View {
     var body: some View {
         HStack {
             Button(action: back) {
+                // ENV-009 — 44x44 틀은 있었지만 `contentShape` 가 없어 화살표 그림에만 반응했다
                 Image(systemName: "chevron.left")
                     .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("뒤로")
             Spacer()
@@ -470,24 +606,37 @@ struct CreationFooter: View {
         HStack(spacing: 14) {
             if !backTitle.isEmpty {
                 // "코스 바꾸기"처럼 긴 라벨이 두 줄로 접히지 않게 폭을 내용에 맞춘다
-                Button(backTitle, action: back)
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 6)
-                    .frame(minWidth: 56)
-                    .frame(height: MoyeoTheme.ctaHeight)
+                Button(action: back) {
+                    Text(backTitle)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 56)
+                        .frame(height: MoyeoTheme.ctaHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            Button(nextTitle, action: next)
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: MoyeoTheme.ctaHeight)
-                .background(isNextEnabled ? MoyeoTheme.primary400 : MoyeoTheme.text400)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius))
-                .disabled(!isNextEnabled)
-                .accessibilityIdentifier(nextIdentifier)
+            // 꾸밈은 **버튼 라벨 안**에 둔다. 예전에는 `Button(nextTitle, action:)` 바깥에
+            // `.frame`·`.background`·`.clipShape` 를 걸어, 초록 알약은 화면 폭만큼 그려지는데
+            // **누를 수 있는 영역이 그 안에 생기지 않아** 눌러도 아무 일이 없었다.
+            // 모집 만들기 1단계의 「이 코스로 다음」·「코스 만들러 가기」가 둘 다 죽어 있어
+            // 이 화면에서 한 발짝도 나갈 수 없었다 (2026-09-14 기기에서 발견).
+            Button(action: next) {
+                Text(nextTitle)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: MoyeoTheme.ctaHeight)
+                    .background(isNextEnabled ? MoyeoTheme.primary400 : MoyeoTheme.text400)
+                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!isNextEnabled)
+            .accessibilityIdentifier(nextIdentifier)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
@@ -733,15 +882,37 @@ private struct SourceCard: View {
 struct CustomCourseEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding private var stops: [ItineraryStop]
+    /// 코스 이름·태그는 서버 `customCourse` 의 **필수** 값이다. 예전에는 이 화면에 둘 다 없어서
+    /// 커스텀 코스로 만든 모집이 요청 조립 단계에서 조용히 멈췄다 (IOS-F124).
+    @Binding private var courseTitle: String
+    @Binding private var selectedTagIDs: [Int64]
+    /// `GET /travel-courses/tags` 로 받아 둔 서버 태그. 못 받았으면 **없는 태그를 지어내지 않고**
+    /// 「불러오지 못했어요」를 적는다(웹·안드와 같은 규칙 — `CustomCourseTagPicker`).
+    private let tags: [ServerCourseTag]
     private let onContinue: () -> Void
-    @State private var search = ""
-    @State private var includesNextDay = false
+    /// 코스가 몇 날로 나뉘어 있는지. 예전에는 `includesNextDay: Bool` 이라 **둘째 날까지만** 되고,
+    /// 그나마도 **일차 구역을 만들지 않아** 화면에는 「Day 1」 하나만 남았다. 그런데 새로 담는
+    /// 방문지에는 `day: 2` 가 붙어 서버로 갔다 — **사용자가 보지 못한 일정이 저장됐다**(QA IOS-F104).
+    /// 웹·안드로이드와 같은 구조(일차 수 + 담을 일차 선택)로 맞춘다.
+    @State private var dayCount = 1
+    @State private var activeDay = 1
+    /// 방문 시각을 고치는 중인 방문지. 예전에는 고칠 길이 아예 없어 전부 `17:00` 으로 저장됐다.
+    @State private var editingTimeStop: EditingStopTime?
+
+    /// 일정은 최대 10일까지. 방문지 상한(20)보다 커질 이유가 없다 — 안드 `MAX_COURSE_DAYS` 와 같은 값이다.
+    private static let maxDayCount = 10
 
     init(
         stops: Binding<[ItineraryStop]> = .constant([]),
+        courseTitle: Binding<String> = .constant(""),
+        selectedTagIDs: Binding<[Int64]> = .constant([]),
+        tags: [ServerCourseTag] = [],
         onContinue: @escaping () -> Void = {}
     ) {
         _stops = stops
+        _courseTitle = courseTitle
+        _selectedTagIDs = selectedTagIDs
+        self.tags = tags
         self.onContinue = onContinue
     }
 
@@ -751,9 +922,11 @@ struct CustomCourseEditorView: View {
                 Button {
                     dismiss()
                 } label: {
+                    // ENV-009 — 44x44 틀은 있었지만 `contentShape` 가 없어 화살표 그림에만 반응했다
                     Image(systemName: "chevron.left")
                         .foregroundStyle(MoyeoTheme.ink)
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("뒤로")
@@ -767,18 +940,20 @@ struct CustomCourseEditorView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     RouteSchematic(stops: stops)
                     NavigationLink {
-                        PlaceSearchView { place in
-                            add(place)
-                        }
+                        // 「N곳 담김」은 **지금 코스에 담긴 수**여야 한다 — 검색 화면이 따로 세면
+                        // 담기지 않은 것(중복·20개 초과)까지 세어 카운터가 거짓말을 한다 (IOS-F120).
+                        PlaceSearchView(onAdd: { place in add(place) }, addedCount: stops.count)
                     } label: {
                         HStack(spacing: 9) {
                             Image(systemName: "magnifyingglass")
-                            Text(search.isEmpty ? "방문지 검색" : search)
+                            // 검색어를 여기 되비추던 분기는 아무도 `search` 를 채우지 않아
+                            // 늘 죽은 코드였다. 검색은 아래 시트 안에서 한다.
+                            Text("방문지 검색")
                             Spacer()
                             Image(systemName: "chevron.right")
                         }
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(search.isEmpty ? MoyeoTheme.muted : MoyeoTheme.ink)
+                        .foregroundStyle(MoyeoTheme.muted)
                         .padding(.horizontal, 13)
                         .frame(height: 48)
                         .background(MoyeoTheme.card)
@@ -787,25 +962,88 @@ struct CustomCourseEditorView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("customCourse.placeSearch")
-                    HStack {
-                        Text("Day 1").font(.subheadline.weight(.heavy))
+                    // 코스 이름·태그 — 서버가 둘 다 필수로 받는다. 없으면 모집을 만들 수 없다.
+                    CustomCourseTitleField(title: $courseTitle)
+                    CustomCourseTagPicker(tags: tags, selectedTagIDs: $selectedTagIDs)
+                    HStack(alignment: .center) {
+                        if dayCount == 1 {
+                            Text("Day 1").font(.subheadline.weight(.heavy))
+                        } else {
+                            // 일차가 둘 이상이면 **어느 날에 담을지 골라야 한다.** 웹·안드도 같은 칩이다.
+                            HStack(spacing: 6) {
+                                ForEach(1...dayCount, id: \.self) { day in
+                                    Button { activeDay = day } label: {
+                                        Text("Day \(day)")
+                                            .font(.caption.weight(.heavy))
+                                            .foregroundStyle(day == activeDay ? Color.white : MoyeoTheme.brandText)
+                                            .padding(.horizontal, 10)
+                                            .frame(height: 28)
+                                            .background(day == activeDay ? MoyeoTheme.forest : MoyeoTheme.leaf)
+                                            .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("customCourse.day\(day)")
+                                    .accessibilityValue(day == activeDay ? "선택됨" : "")
+                                }
+                            }
+                        }
                         Spacer()
                         Text("\(stops.count)개 방문지 · 최소 2개").font(.caption).foregroundStyle(MoyeoTheme.muted)
                     }
-                    ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
-                        ItineraryStopRow(stop: stop, canRemove: stops.count > 2,
-                                         moveUp: { move(index, -1) }, moveDown: { move(index, 1) },
-                                         remove: { stops.remove(at: index); normalize() })
+                    // 방문지를 **일차별로 나눠 그린다.** 예전에는 한 덩어리라, 담은 방문지가 몇 일차에
+                    // 들어갔는지 화면에서 알 수 없었다.
+                    ForEach(1...dayCount, id: \.self) { day in
+                        let indices = stops.indices.filter { stops[$0].day == day }
+                        if dayCount > 1 {
+                            Text("Day \(day)")
+                                .font(.caption.weight(.heavy))
+                                .foregroundStyle(MoyeoTheme.muted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if indices.isEmpty {
+                            Text("아직 담은 방문지가 없어요.")
+                                .font(.caption)
+                                .foregroundStyle(MoyeoTheme.muted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        ForEach(indices, id: \.self) { index in
+                            ItineraryStopRow(stop: stops[index], canRemove: stops.count > 2,
+                                             moveUp: { move(index, -1) }, moveDown: { move(index, 1) },
+                                             remove: { stops.remove(at: index); normalize() },
+                                             editTime: { editingTimeStop = EditingStopTime(id: stops[index].id) })
+                        }
                     }
-                    Button { addStop() } label: { Label("방문지 추가", systemImage: "plus") }
-                        .buttonStyle(DesignOutlineButtonStyle(dashed: true))
-                        .disabled(stops.count >= 20)
-                        .accessibilityIdentifier("customCourse.addStop")
+                    if !outOfOrderDays.isEmpty {
+                        DesignInfoBox(
+                            icon: "clock.badge.exclamationmark",
+                            text: "\(outOfOrderDays.map { "Day \($0)" }.joined(separator: " · ")) 의 방문 시각이 순서와 어긋나요. "
+                                + "되짚어 가는 일정이면 그대로 두셔도 돼요."
+                        )
+                    }
+                    // 「방문지 추가」도 **장소 검색으로 보낸다.** 예전에는 여기서 contentId 없는
+                    // 빈 「새 방문지」(UUID)를 만들었는데, 이름을 채울 길이 화면에 없어
+                    // **어떤 경로로도 유효하게 만들 수 없는 방문지**가 생겼고, 마지막 「모집 열기」에서만
+                    // 「방문지 검색에서 고른 곳이 아니라 보낼 수 없어요」로 막혔다 (IOS-F140).
+                    NavigationLink {
+                        PlaceSearchView(onAdd: { place in add(place) }, addedCount: stops.count)
+                    } label: {
+                        Label("방문지 추가", systemImage: "plus")
+                    }
+                    .buttonStyle(DesignOutlineButtonStyle(dashed: true))
+                    .disabled(stops.count >= 20)
+                    .accessibilityIdentifier("customCourse.addStop")
                     // 글자에 이미 '+'가 있으니 아이콘을 겹쳐 두지 않는다
-                    Button { includesNextDay.toggle() } label: {
-                        Text(includesNextDay ? "Day 2가 추가됐어요" : "+ 다음 날 추가 (1박 이상일 때)")
+                    // 마지막 일차만 늘린다 — 중간 일차를 지우면 남은 방문지의 일차가 어긋난다(웹과 같은 규칙).
+                    Button {
+                        guard dayCount < Self.maxDayCount else { return }
+                        dayCount += 1
+                        activeDay = dayCount
+                    } label: {
+                        Text(dayCount >= Self.maxDayCount ? "일정은 최대 10일까지예요" : "+ 다음 날 추가 (1박 이상일 때)")
                     }
                     .buttonStyle(DesignOutlineButtonStyle())
+                    .disabled(dayCount >= Self.maxDayCount)
+                    .accessibilityIdentifier("customCourse.addDay")
                     // 문구는 화면기획 17-1 을 그대로 쓴다 — 웹·안드로이드와 한 글자도 달라선 안 된다.
                     DesignInfoBox(icon: "sparkles", text: "직접 만든 코스는 여행이 확정되기 전까지 호스트가 언제든 고칠 수 있어요. 수정하면 채팅방 멤버 모두에게 알림이 가요.")
                 }
@@ -813,44 +1051,117 @@ struct CustomCourseEditorView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            CreationFooter(
-                backTitle: "취소",
-                nextTitle: "이 코스로 계속하기",
-                back: { dismiss() },
-                next: {
-                    dismiss()
-                    onContinue()
-                },
-                // 방문지가 **두 곳 이상**이어야 코스가 성립한다 (서버도 `places` 최소 2개를 요구한다).
-                // 예전에는 늘 눌릴 수 있어서, 방문지 0개인 상태에서도 초록으로 활성이었다 —
-                // 웹·안드로이드는 잠그는데 iOS 만 열려 있었다 (17-1, 사용자 지적 2026-09-09).
-                isNextEnabled: stops.count >= 2
-            )
+            VStack(spacing: 0) {
+                // 왜 못 누르는지 **버튼 바로 위에** 적는다. 잠가만 두면 화면을 뒤져도 이유를 알 수 없다.
+                if let blockingReason {
+                    Text(blockingReason)
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.dangerRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .accessibilityIdentifier("customCourse.blockingReason")
+                }
+                CreationFooter(
+                    backTitle: "취소",
+                    nextTitle: "이 코스로 계속하기",
+                    back: { dismiss() },
+                    next: {
+                        dismiss()
+                        onContinue()
+                    },
+                    // 방문지 2곳 이상 + 코스 이름 + 태그 1개 이상 — 셋 다 **서버가 요구하는 값**이다.
+                    // 예전에는 방문지 수만 봤고, 이름·태그는 입력할 곳조차 없어서 다음 단계로 보낸 뒤
+                    // 마지막 「모집 열기」에서 생성이 멈췄다 (IOS-F124).
+                    isNextEnabled: blockingReason == nil
+                )
+            }
+            .background(MoyeoTheme.card)
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationBarBackButtonHidden()
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다 — 화면마다 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
         .accessibilityIdentifier("screen.customCourse")
+        .onAppear { restoreDayCount() }
+        .sheet(item: $editingTimeStop) { editing in
+            ItineraryTimeSheet(
+                initial: stops.first { $0.id == editing.id }?.time ?? "10:00",
+                onPick: { setTime($0, for: editing.id) }
+            )
+        }
     }
 
-    private func addStop() {
-        guard stops.count < 20 else { return }
-        stops.append(ItineraryStop(id: UUID().uuidString, day: includesNextDay ? 2 : 1,
-                                   order: stops.count + 1, time: "17:00", name: "새 방문지", memo: "메모를 입력하세요"))
+    /// 「이 코스로 계속하기」를 왜 못 누르는지 한국어 한 문장으로. 누를 수 있으면 nil 이다.
+    /// 안드 `customCourseEditorError()` 와 같은 순서·같은 규칙이다 — 이 화면에서 눈으로 볼 수 있는
+    /// 것만 본다(여행 일수와 코스 일차가 맞는지는 일정 단계를 지나야 알 수 있어 전송 직전에 본다).
+    private var blockingReason: String? {
+        if stops.count < 2 { return "방문지를 2곳 이상 담아 주세요." }
+        if courseTitle.trimmingCharacters(in: .whitespaces).isEmpty { return "코스 이름을 적어 주세요." }
+        if selectedTagIDs.isEmpty {
+            return tags.isEmpty
+                ? "코스 태그를 불러오지 못했어요. 잠시 후 다시 시도해 주세요."
+                : "코스 태그를 하나 이상 골라 주세요."
+        }
+        return nil
+    }
+
+    /// 화면을 열 때 **담겨 있는 방문지의 일차까지 일차 수를 늘린다.**
+    /// `dayCount` 가 늘 1 로 시작하던 탓에, Day 2 에 담아 둔 방문지가 있는 코스를 다시 열면
+    /// Day 2 구역도 Day 탭도 그려지지 않아 **그 방문지가 화면에서 사라졌다.** 그런데 상단 카운터와
+    /// 「모집 열기」 검사는 계속 세고 있어서, 보이지도 지울 수도 없는 방문지 때문에 모집이
+    /// 영구히 막혔다 (IOS-F140).
+    private func restoreDayCount() {
+        let maxDay = stops.map(\.day).max() ?? 1
+        dayCount = min(max(dayCount, maxDay), Self.maxDayCount)
+        activeDay = min(max(activeDay, 1), dayCount)
     }
 
     private func add(_ place: TourismPlace) {
         guard stops.count < 20, !stops.contains(where: { $0.name == place.title }) else { return }
+        let order = nextOrder(in: activeDay)
         stops.append(
             ItineraryStop(
                 id: place.id,
-                day: includesNextDay ? 2 : 1,
-                order: stops.count + 1,
-                time: "17:00",
+                day: activeDay,
+                order: order,
+                time: Self.defaultTime(forOrder: order),
                 name: place.title,
-                memo: place.type.rawValue
+                memo: place.type.rawValue,
+                // 서버로 보낼 때 쓰는 `contentId` 다. **여기에 담지 않으면** 요청 조립이
+                // 「방문지 검색에서 고른 곳이 아니에요」로 막혀 **커스텀 코스를 한 건도 못 만든다**
+                // (IOS-F134, 2026-09-13). `TourismPlace.id` 가 곧 `contentId` 다
+                // (`TourismAPIClient` 가 `contentId` 를 그대로 `id` 로 읽는다).
+                placeID: place.id,
+                latitude: place.latitude,
+                longitude: place.longitude
             )
         )
+    }
+
+    /// 담는 순서대로 **하루에 걸쳐 벌린다** — 10:00 부터 2시간 30분씩.
+    /// 예전에는 무엇을 담아도 `17:00` 이라, 하루 일정이 전부 같은 시각으로 저장됐다
+    /// (IOS-F121 · 웹 W-109 · 2026-09-12). 고칠 수단도 없었다.
+    static func defaultTime(forOrder order: Int) -> String {
+        let minutes = min(10 * 60 + (order - 1) * 150, 21 * 60)
+        return String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    /// 고른 시각을 그 방문지에 적는다.
+    private func setTime(_ time: String, for stopID: String) {
+        guard let index = stops.firstIndex(where: { $0.id == stopID }) else { return }
+        stops[index].time = time
+    }
+
+    /// 같은 일차 안에서 시각이 순서를 거스르면 알려 준다 — 막지는 않는다.
+    /// 되짚어 가는 일정도 있을 수 있으니 판단은 호스트에게 맡긴다.
+    private var outOfOrderDays: [Int] {
+        (1...max(dayCount, 1)).filter { day in
+            let times = stops.filter { $0.day == day }.sorted { $0.order < $1.order }.map(\.time)
+            return times != times.sorted()
+        }
     }
 
     private func move(_ index: Int, _ offset: Int) {
@@ -860,8 +1171,22 @@ struct CustomCourseEditorView: View {
         normalize()
     }
 
+    /// 같은 일차 안에서 다음 순서. 서버 `sequence` 는 **그 일차 안의 순번**이다
+    /// (`CustomCoursePlaceRequest.sequence` — 「같은 일차 안의 방문 순서. 1부터 시작합니다.」).
+    private func nextOrder(in day: Int) -> Int {
+        stops.filter { $0.day == day }.count + 1
+    }
+
+    /// 순서를 **일차별로** 다시 매긴다. 예전에는 `order = index + 1` 로 전역 번호를 넣어서,
+    /// Day 2 첫 방문지의 `sequence` 가 1 이 아니라 3 처럼 나갔다.
     private func normalize() {
-        for index in stops.indices { stops[index].order = index + 1 }
+        for day in 1...max(dayCount, 1) {
+            var order = 1
+            for index in stops.indices where stops[index].day == day {
+                stops[index].order = order
+                order += 1
+            }
+        }
     }
 }
 
@@ -1033,12 +1358,12 @@ private struct RecruitmentPeopleView: View {
                     DesignField(
                         label: "",
                         icon: "person.2",
-                        value: "\(draft.minimumAge) ~ \(draft.maximumAge)세",
+                        value: draft.ageRangeText,
                         action: { editor = .ageRange }
                     )
                     .accessibilityIdentifier("createPeople.ageRange")
                     // 화면기획 17-4 — 설명은 행 안이 아니라 행 아래 캡션이다
-                    Text("최소·최대 모두 20~100세 사이에서 정할 수 있어요. 조건에 맞지 않는 사용자에게는 신청 버튼이 비활성으로 보여요.")
+                    Text("최소·최대 모두 \(RoomConditionAgePolicy.rangeText)세 사이에서 정할 수 있어요. 조건에 맞지 않는 사용자에게는 신청 버튼이 비활성으로 보여요.")
                         .font(.caption)
                         .foregroundStyle(MoyeoTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1079,6 +1404,8 @@ private struct PeopleStepper: View {
                         .overlay(Circle().stroke(MoyeoTheme.line))
                 }
                 .buttonStyle(.plain)
+                // ENV-006: 라벨이 없으면 VoiceOver 가 심볼 이름(「minus」)을 그대로 읽는다.
+                .accessibilityLabel("\(label) 줄이기")
 
                 Text("\(value)명")
                     .font(.subheadline.weight(.heavy))
@@ -1095,6 +1422,8 @@ private struct PeopleStepper: View {
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
+                // ENV-006: 라벨이 없으면 VoiceOver 가 심볼 이름(「plus」)을 그대로 읽는다.
+                .accessibilityLabel("\(label) 늘리기")
             }
             .padding(.horizontal, 8)
             .frame(height: 48)
@@ -1113,18 +1442,19 @@ private struct PeopleStepper: View {
 
 struct RecruitmentMeetingView: View {
     @Binding var draft: RecruitmentDraft
-    @State private var search = ""
     /// 상세 안내는 호스트가 적는 값이다 — 미리 채워 두면 남이 적은 안내가 내 초안처럼 보인다.
     @State private var detail = ""
     /// 집합 시간을 고치는 시트. 예전에는 화살표만 있고 동작이 없었다.
     @State private var editor: RecruitmentFieldEditor?
+    /// 검색으로 이름을 정한 뒤 핀을 끌었는지. 끌었다면 이름·주소가 그 좌표를 가리키지 않는다 (IOS-F145).
+    @State private var didMovePinAfterPick = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 DesignHeading("집합 장소 정하기", subtitle: "검색하거나 지도의 핀을 움직여 정확한 위치를 알려주세요.")
                 ZStack(alignment: .top) {
-                    MeetingMapCard(meeting: $draft.meeting)
+                    MeetingMapCard(meeting: $draft.meeting, onMoved: pinDidMove)
                         .accessibilityIdentifier("createMeeting.map")
                         // 웹 · 안드로이드와 같은 자리(좌측 하단 14) · 같은 문구의 안내 칩이다.
                         .overlay(alignment: .bottomLeading) {
@@ -1139,7 +1469,9 @@ struct RecruitmentMeetingView: View {
                                 .padding(14)
                                 .accessibilityIdentifier("createMeeting.pinHint")
                         }
-                    LabelledSearchField(text: $search, prompt: "장소 검색")
+                    // 검색해 고른 장소는 이름·주소·좌표를 한꺼번에 초안에 넣는다.
+                    // 좌표가 바뀌면 위의 지도도 그 자리로 따라간다(`MoyeoMapView` 가 중심을 다시 잡는다).
+                    MeetingPlaceSearchField(onSelect: applyPickedPlace)
                         .padding(12)
                 }
                 // 장소 이름은 위의 검색·지도 핀이 정한다 — 이 줄은 그 결과를 보여주는 자리라
@@ -1148,6 +1480,14 @@ struct RecruitmentMeetingView: View {
                             value: draft.meeting.name,
                             placeholder: "지도에서 핀을 옮겨 정해주세요")
                     .accessibilityIdentifier("createMeeting.placeName")
+                // 핀을 옮기면 이름이 그 자리를 가리키지 않는다 — **말없이 두지 않고 적는다** (IOS-F145).
+                if didMovePinAfterPick {
+                    Text("핀을 옮겨서 「\(draft.meeting.name)」 위치와 달라졌어요. 이 이름 그대로 저장되니, 다른 곳이면 다시 검색해 주세요.")
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("createMeeting.pinMovedNotice")
+                }
                 // changeLog15 — 상세 안내는 추천 칩이 아니라 자유 텍스트 입력이다.
                 VStack(alignment: .leading, spacing: 7) {
                     Text("상세 안내")
@@ -1178,6 +1518,9 @@ struct RecruitmentMeetingView: View {
             }
             .padding(20)
         }
+        // 검색칸에 글자를 넣으면 키보드가 「집합 장소 *」를 가렸는데, 닫을 길이 없었다 (IOS-F136).
+        .scrollDismissesKeyboard(.interactively)
+        .moyeoKeyboardDismissable()
         .background(MoyeoTheme.background)
         .accessibilityIdentifier("screen.createMeeting")
         // 호스트가 적은 상세 안내를 초안에 담는다 — 예전에는 화면에만 남고 버려졌다.
@@ -1189,12 +1532,39 @@ struct RecruitmentMeetingView: View {
                 .presentationBackground(MoyeoTheme.card)
         }
     }
+
+    /// 검색으로 고른 장소를 집합 장소로 삼는다.
+    /// 좌표는 결과에 좌표가 있는 장소만 고를 수 있어(`MeetingPlaceSearchField`) 늘 채워진다.
+    private func applyPickedPlace(_ place: TourismPlace) {
+        draft.meeting.name = place.title
+        draft.meeting.address = place.address ?? ""
+        if let latitude = place.latitude, let longitude = place.longitude {
+            draft.meeting.latitude = latitude
+            draft.meeting.longitude = longitude
+        }
+        didMovePinAfterPick = false
+    }
+
+    /// 핀이 움직였다. 주소는 **확실히 틀린 값**이 되므로 지우고, 이름은 호스트가 판단하도록
+    /// 남겨 둔 채 달라졌다는 사실을 화면에 적는다 (IOS-F145).
+    private func pinDidMove() {
+        draft.meeting.address = ""
+        didMovePinAfterPick = !draft.meeting.name.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 }
 
 private struct RecruitmentDetailView: View {
     @Binding var draft: RecruitmentDraft
     /// 예상 비용을 고치는 시트. 예전에는 화살표만 있고 동작이 없었다.
     @State private var editor: RecruitmentFieldEditor?
+
+    /// 모집 이름 한도. **모집 내용 수정(18-6)의 `titleLimit` 과 같은 값**이어야 한다 —
+    /// 다르면 생성 때 지은 제목을 나중에 고칠 수 없다 (IOS-F123).
+    ///
+    /// **서버가 받는 값(`CreateChatRoomRequest.title` · `@Size(max = 100)`)과 같은 100 이다.**
+    /// 예전에는 24 로 막고 있어서, 서버가 받아 주는 제목을 앱이 미리 잘라 버렸다
+    /// (2026-09-14 결정 ②).
+    private static let recruitmentNameLimit = 100
 
     var body: some View {
         ScrollView {
@@ -1205,7 +1575,7 @@ private struct RecruitmentDetailView: View {
                 DesignField(
                     label: "코스",
                     icon: "lock.fill",
-                    value: draft.course.title,
+                    value: draft.displayCourseTitle,
                     detail: "Step 1에서 고른 코스 이름이에요. 여기서는 바꿀 수 없어요.",
                     detailBelowField: true
                 )
@@ -1217,6 +1587,19 @@ private struct RecruitmentDetailView: View {
                         .textInputAutocapitalization(.never)
                         .designInput()
                         .accessibilityIdentifier("createDetail.recruitmentName")
+                        // 여기에 한도가 없어서, 생성 때 지은 25자 이상 제목은 나중에
+                        // 모집 내용 수정(24자)에서 **한 글자도 고칠 수 없었다** (IOS-F123).
+                        .onChange(of: draft.recruitmentName) { _, value in
+                            if value.count > Self.recruitmentNameLimit {
+                                draft.recruitmentName = String(value.prefix(Self.recruitmentNameLimit))
+                            }
+                        }
+                    Text("\(draft.recruitmentName.count) / \(Self.recruitmentNameLimit)")
+                        .font(.caption2)
+                        .foregroundStyle(MoyeoTheme.text400)
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .accessibilityIdentifier("createDetail.recruitmentNameCounter")
                     Text("코스 이름과 별개로 여행 분위기를 담아요. 채팅방 이름으로도 쓰여요.")
                         .font(.caption)
                         .foregroundStyle(MoyeoTheme.muted)
@@ -1239,8 +1622,12 @@ private struct RecruitmentDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .accessibilityIdentifier("createDetail.noteCounter")
                 }
+                // 코스별 예상 비용을 주는 API가 없다 — "보통 4~5만원" 같은 근거 없는 금액 안내는 하지 않는다.
+                // 안내 문구는 기획·웹·안드로이드와 같은 문장이다.
                 DesignField(label: "예상 1인당 비용", icon: "wonsign.circle", value: draft.estimatedCost,
-                            placeholder: "금액 적기",
+                            detail: "정하지 않았으면 비워 두세요. 참고용으로만 보여줘요.",
+                            detailBelowField: true,
+                            placeholder: "비워 두면 참가비 없음",
                             action: { editor = .estimatedCost })
                     .accessibilityIdentifier("createDetail.estimatedCost")
                 // 화면기획은 세그먼트가 아니라 설명이 붙은 선택 카드 두 장이다
@@ -1257,6 +1644,9 @@ private struct RecruitmentDetailView: View {
             }
             .padding(20)
         }
+        // 키보드를 닫을 길을 준다 — 없으면 소개글을 쓴 뒤 참가비·승인 방식에 손이 닿지 않는다 (IOS-F136).
+        .scrollDismissesKeyboard(.interactively)
+        .moyeoKeyboardDismissable()
         .background(MoyeoTheme.background)
         .accessibilityIdentifier("screen.createDetail")
         .sheet(item: $editor) { field in
@@ -1270,10 +1660,18 @@ private struct RecruitmentDetailView: View {
 
 struct RecruitmentSummaryView: View {
     @Binding var draft: RecruitmentDraft
+    /// 대표 사진. 서버 `thumbnail` 파트가 필수라 **고르기 전에는 모집을 열 수 없다**.
+    @Binding var thumbnail: UIImage?
     /// 서버 생성이 실패했을 때만 채워진다 — 서버가 준 문구를 그대로 보여준다.
     var errorMessage: String?
     var isSubmitting = false
+    let onBack: () -> Void
     let onCreate: () -> Void
+
+    /// 왜 「모집 열기」를 못 누르는지. 누를 수 있으면 nil 이다.
+    private var blockingReason: String? {
+        thumbnail == nil ? "대표 사진을 한 장 골라 주세요. 목록에 이 사진이 보여요." : nil
+    }
 
     var body: some View {
         ScrollView {
@@ -1283,7 +1681,7 @@ struct RecruitmentSummaryView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(draft.recruitmentName).font(.subheadline.weight(.heavy))
-                            Label(draft.course.title, systemImage: "map.fill")
+                            Label(draft.displayCourseTitle, systemImage: "map.fill")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(MoyeoTheme.muted)
                         }
@@ -1300,7 +1698,7 @@ struct RecruitmentSummaryView: View {
                     SummaryRow("calendar", "일정", draft.scheduleSummary)
                     SummaryRow("mappin.and.ellipse", "집합", draft.meetingSummary)
                     SummaryRow("person.2", "인원", "최소 \(draft.minimumParticipants)명 · 최대 \(draft.capacity)명")
-                    SummaryRow("slider.horizontal.3", "조건", "\(draft.minimumAge)~\(draft.maximumAge)세 · \(draft.genderSummary)")
+                    SummaryRow("slider.horizontal.3", "조건", "\(draft.ageRangeText) · \(draft.genderSummary)")
                     SummaryRow("wonsign.circle", "비용", draft.estimatedCostSummary)
                     SummaryRow("clock", "마감", draft.deadlineSummary)
                 }
@@ -1315,23 +1713,48 @@ struct RecruitmentSummaryView: View {
                         : "서비스에 등록된 코스를 그대로 가져왔어요. **경로(방문지·순서)는 수정할 수 없고**, 일정·집합 장소·인원 조건은 마감 전까지 바꿀 수 있어요.",
                     neutral: draft.source == .linked
                 )
+                // 대표 사진 — 서버 필수 파트다. 웹 `create-room-thumbnail-pick` 과 같은 자리에 둔다.
+                RecruitmentThumbnailPicker(image: $thumbnail)
                 // 화면기획 17-7 — 두 번째 안내 카드는 아이콘 없이 텍스트만 둔다
                 DesignInfoBox(icon: nil, text: "최소 \(draft.minimumParticipants)명이 모이면 채팅방이 자동으로 열리고, 마감일까지 못 채우면 자연스럽게 소멸돼요.")
-                if let errorMessage {
-                    DesignInfoBox(icon: "exclamationmark.triangle.fill", text: errorMessage)
-                        .accessibilityIdentifier("createSummary.error")
-                }
             }
             .padding(20)
         }
         .safeAreaInset(edge: .bottom) {
-            CreationFooter(
-                backTitle: "이전",
-                nextTitle: isSubmitting ? "모집 여는 중" : "모집 열기",
-                back: {},
-                next: onCreate
-            )
-            .disabled(isSubmitting)
+            VStack(spacing: 0) {
+                // 실패 이유와 잠근 이유는 **버튼 바로 위**에 적는다. 예전에는 본문 끝에 둬서
+                // 스크롤 밖으로 밀렸고, 「모집 열기」를 눌러도 **아무 일도 안 일어나는 것처럼**
+                // 보였다 — 앱은 이유를 만들어 두고 보여 주지 못했다 (IOS-F134, 2026-09-13).
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.dangerRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .accessibilityIdentifier("createSummary.error")
+                }
+                if let blockingReason, errorMessage == nil {
+                    Text(blockingReason)
+                        .font(.caption)
+                        .foregroundStyle(MoyeoTheme.dangerRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .accessibilityIdentifier("createSummary.blockingReason")
+                }
+                CreationFooter(
+                    backTitle: "이전",
+                    nextTitle: isSubmitting ? "모집 여는 중" : "모집 열기",
+                    back: onBack,
+                    next: onCreate,
+                    isNextEnabled: blockingReason == nil && !isSubmitting
+                )
+                .disabled(isSubmitting)
+            }
+            .background(MoyeoTheme.card)
         }
         .accessibilityIdentifier("screen.createSummary")
     }
@@ -1344,6 +1767,14 @@ struct CourseRouteEditView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var stops: [ItineraryStop]
     @State private var showNoticeComposer = false
+    /// 18-5 집합 정보 수정으로 가는 길. 등록 코스라 경로는 못 고쳐도 집합은 고칠 수 있다.
+    @State private var showMeetingInfoEdit = false
+    /// 여행 일수는 모집 상세에만 있다(`GET /chat-rooms/{id}` 의 `tripDays`).
+    /// 서버 규칙을 저장 전에 같은 말로 검사하려면 이 값이 있어야 한다.
+    @State private var serverTripDays: Int?
+    @State private var isSaving = false
+    /// 저장을 막은 이유 또는 서버가 준 오류. 없으면 nil 이다.
+    @State private var saveError: String?
 
     /// 이 모임이 실제로 가진 집합 시간·장소만 잇는다. 없는 값은 지어내지 않는다.
     private var meetingSummary: String {
@@ -1356,10 +1787,13 @@ struct CourseRouteEditView: View {
         self.trip = trip
         self.state = state ?? trip.routeEditState
         self.onSaved = onSaved
+        // 일정(`itinerary`)이 없는 모임은 이름만 있는 `route` 로 행을 세운다.
+        // 방문 시각과 메모는 **서버가 준 값이 없으므로 비워 둔다** — 예전에는
+        // `09:00 · 10:30 · 14:00 · 16:30` 과 「방문 장소」를 지어내, 호스트가 정한 적 없는
+        // 시각이 화면에 떴다 (NO-MOCK-CANON R1 · R3).
         let route = trip.itinerary.isEmpty ? trip.route.enumerated().map {
             ItineraryStop(id: "\(trip.id)-\($0.offset)", day: 1, order: $0.offset + 1,
-                          time: ["09:00", "10:30", "14:00", "16:30"][safe: $0.offset] ?? "17:00",
-                          name: $0.element, memo: "방문 장소")
+                          time: "", name: $0.element, memo: "")
         } : trip.itinerary
         _stops = State(initialValue: route)
     }
@@ -1371,18 +1805,29 @@ struct CourseRouteEditView: View {
                 // 「AccentColor」 자산도 브랜드 초록으로 채웠지만, 상단바 아이콘은
                 // 기획·웹·안드로이드처럼 **글자색**이라 여기서 못박는다 (18-1, 2026-09-09).
                 Button { dismiss() } label: {
+                    // ENV-009 — 44x44 틀은 있었지만 `contentShape` 가 없어 화살표 그림에만 반응했다
                     Image(systemName: "chevron.left")
                         .foregroundStyle(MoyeoTheme.ink)
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                // ENV-006: 라벨이 없으면 VoiceOver 가 영어 시스템 문구(「Back」)로 읽는다.
+                .accessibilityLabel("뒤로")
                 Spacer()
                 Text("여행 경로").font(.headline.weight(.heavy))
                 Spacer()
                 if state == .editable {
-                    Button("저장") { save() }.font(.subheadline.weight(.heavy)).foregroundStyle(MoyeoTheme.primary300)
-                        .frame(width: 44)
+                    Button(isSaving ? "저장 중" : "저장") { save() }
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(isSaving ? MoyeoTheme.text400 : MoyeoTheme.primary300)
+                        .disabled(isSaving)
+                        .frame(width: 52)
                 } else {
-                    Image(systemName: "ellipsis").frame(width: 44)
+                    // 고칠 수 없는 방에는 **아무것도 두지 않는다** — 예전에는 이 자리에 ⋯ 아이콘이
+                    // 남아 있어 눌러도 아무 일이 없었고, 화면 낭독기에는 이름 없는 요소로 잡혔다
+                    // (TC HOST-034). 웹도 같은 이유로 이 자리를 비웠다(W-143). 여기서 열 메뉴가 없다.
+                    // 제목을 가운데로 유지하려고 뒤로 버튼과 같은 폭만 남긴다.
+                    Color.clear.frame(width: 44, height: 1)
                 }
             }
             .padding(.horizontal, 16)
@@ -1400,25 +1845,62 @@ struct CourseRouteEditView: View {
                     }
                     policyNotice
                     RouteSchematic(stops: stops)
-                    HStack {
-                        Text("Day 1").font(.subheadline.weight(.heavy))
-                        Spacer()
-                        if state != .editable {
-                            Label("수정 불가", systemImage: "lock")
-                                .font(.caption.weight(.heavy))
-                                .foregroundStyle(MoyeoTheme.muted)
-                                .accessibilityIdentifier("courseEdit.readOnlyBadge")
+                    // 일차마다 머리글을 두고 그 아래에 그 일차 방문지만 그린다. 예전에는 「Day 1」
+                    // 하나에 2일차 방문지까지 쏟아 넣고 번호도 통번호라, 2일차 첫 방문지가 화면엔
+                    // 「3」인데 서버엔 `sequence 1` 로 저장돼 어긋나 보였다.
+                    // 같은 파일의 코스 에디터(`screen.customCourse`)는 이미 이렇게 그린다.
+                    ForEach(dayNumbers, id: \.self) { day in
+                        HStack {
+                            Text("Day \(day)").font(.subheadline.weight(.heavy))
+                            Spacer()
+                            if state != .editable {
+                                Label("수정 불가", systemImage: "lock")
+                                    .font(.caption.weight(.heavy))
+                                    .foregroundStyle(MoyeoTheme.muted)
+                                    .accessibilityIdentifier("courseEdit.readOnlyBadge")
+                            }
+                        }
+                        let indices = stops.indices.filter { stops[$0].day == day }
+                        ForEach(indices, id: \.self) { index in
+                            ItineraryStopRow(
+                                // 번호는 일차별 1부터다 — 서버 `sequence` 가 그 일차 안의 순번이다.
+                                stop: numbered(stops[index], order: roomCourseDayOrder(stops, at: index)),
+                                canRemove: state == .editable && stops.count > 2,
+                                locked: state != .editable,
+                                // 순서 바꾸기는 **같은 일차 안에서만** 한다 — 일차 경계를 넘기면
+                                // 방문지의 `day` 가 화면에 보이는 자리와 어긋난다(웹·안드로이드와 같은 규칙).
+                                moveUp: { if index != indices.first { move(index, -1) } },
+                                moveDown: { if index != indices.last { move(index, 1) } },
+                                remove: { remove(at: index) }
+                            )
+                        }
+                        // 방문지 추가는 **일차마다** 둔다 — 어느 날에 담기는지 자리로 알 수 있고,
+                        // 순서 바꾸기가 일차 경계를 넘지 못하므로 담은 뒤에 날을 옮길 수도 없다.
+                        if state == .editable {
+                            NavigationLink {
+                                PlaceSearchView(onAdd: { place in add(place, to: day) }, addedCount: stops.count)
+                            } label: {
+                                Label("Day \(day)에 방문지 추가", systemImage: "plus")
+                            }
+                            .buttonStyle(DesignOutlineButtonStyle(dashed: true))
+                            .disabled(stops.count >= RoutePolicy.maximumStopCount)
+                            .accessibilityIdentifier("courseEdit.addPlace.day\(day)")
                         }
                     }
-                    ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
-                        ItineraryStopRow(stop: stop, canRemove: state == .editable && stops.count > 2,
-                                         locked: state != .editable,
-                                         moveUp: { move(index, -1) }, moveDown: { move(index, 1) },
-                                         remove: { stops.remove(at: index) })
+                    // 무엇이 모자라 저장이 막혔는지 그 자리에 적는다 — 400 을 받아
+                    // 「요청이 올바르지 않습니다」로 넘기지 않는다.
+                    if let saveError {
+                        Text(saveError)
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.dangerRed)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("courseEdit.saveError")
                     }
                     if state == .editable {
-                        Button { addStop() } label: { Label("방문지 추가", systemImage: "plus") }
-                            .buttonStyle(DesignOutlineButtonStyle(dashed: true))
+                        Text("방문지는 일차마다 2곳 이상, 모두 합쳐 \(RoutePolicy.maximumStopCount)곳까지 담을 수 있어요. 코스 이름과 소개는 「코스 이름 수정」에서 바꿔요.")
+                            .font(.caption)
+                            .foregroundStyle(MoyeoTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Text("집합 정보").font(.headline.weight(.heavy))
                     // 17-7 은 경로 편집 화면이다 — 집합 정보는 하단 「집합 정보 수정」이 고친다.
@@ -1434,16 +1916,31 @@ struct CourseRouteEditView: View {
         .safeAreaInset(edge: .bottom) {
             switch state {
             case .editable:
-                CreationFooter(backTitle: "취소", nextTitle: "저장하고 멤버에게 알리기", back: { dismiss() }, next: save)
-            case .linkedLocked:
-                // 경로는 못 바꾸지만 코스 교체와 집합 정보 수정은 열려 있다 (화면기획)
                 CreationFooter(
-                    backTitle: "코스 바꾸기",
+                    backTitle: "취소",
+                    nextTitle: isSaving ? "저장 중" : "저장하고 멤버에게 알리기",
+                    back: { dismiss() },
+                    next: save,
+                    isNextEnabled: !isSaving
+                )
+            case .linkedLocked:
+                // 「코스 바꾸기」는 **약속을 지킬 수 없는 이름**이었다 — 누르면 코스 선택 화면도
+                // 안내도 없이 직전 화면으로 되돌아갔다 (IOS-F118). 모집을 연 뒤에 등록 코스를
+                // 다른 코스로 갈아 끼우는 길은 앱에도 서버에도 없다
+                // (`updateRoomCourse` 는 `type == CUSTOM` 인 코스만 받는다).
+                // 그래서 **하는 일을 그대로 적고**, 왜 못 바꾸는지는 위 안내(`policyNotice`)가 말한다.
+                // 예전에는 이 버튼도 `dismiss()` 만 불러 **이름만 바뀐 거짓 약속**이었다 —
+                // 「집합 정보 수정」을 눌러도 모집 관리로 되돌아갈 뿐이었다 (TC HOST-035).
+                // 실제 편집 화면(18-5 `MeetingInfoEditView`)으로 보낸다.
+                CreationFooter(
+                    backTitle: "닫기",
                     nextTitle: "집합 정보 수정",
                     back: { dismiss() },
-                    next: { dismiss() }
+                    next: { showMeetingInfoEdit = true },
+                    isNextEnabled: trip.serverRoomID != nil
                 )
-            case .tripConfirmed:
+            // 불발도 확정과 **똑같이 잠긴 바닥**을 쓴다 — 이유 문구만 위쪽 안내에서 갈린다.
+            case .tripConfirmed, .tripCancelled:
                 // 화면기획 18-3 — 공지로 알리기(외곽선) + 비활성 경로 수정 두 버튼
                 HStack(spacing: 14) {
                     Button("공지로 알리기") { showNoticeComposer = true }
@@ -1474,9 +1971,18 @@ struct CourseRouteEditView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationBarBackButtonHidden()
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다 — 화면마다 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
+        .task { await loadTripDays() }
         .alert("채팅방 공지 작성", isPresented: $showNoticeComposer) {
             Button("확인") {}
         } message: { Text("확정된 여행의 변경 사항은 경로를 수정하지 않고 공지로 안내해요.") }
+        // 18-2 등록 코스 잠금 화면의 「집합 정보 수정」이 가는 곳 (18-5).
+        .navigationDestination(isPresented: $showMeetingInfoEdit) {
+            if let roomID = trip.serverRoomID {
+                MeetingInfoEditView(roomID: roomID)
+            }
+        }
         .accessibilityIdentifier("screen.courseEdit.\(state.rawValue)")
     }
 
@@ -1513,15 +2019,146 @@ struct CourseRouteEditView: View {
         case .editable:
             DesignInfoBox(icon: "sparkles", text: "마감 전까지 경로를 바꿀 수 있어요. 저장하면 채팅방에 변경 내역이 공지로 남고 멤버 모두에게 알림이 가요.")
         case .linkedLocked:
-            DesignInfoBox(icon: "lock.fill", text: "등록 코스의 방문지·순서·시간은 고정돼요. 집합 정보와 모집 조건은 수정할 수 있어요.")
+            // 「코스를 바꿀 수 있다」고 읽히지 않게, **바꾸려면 어떻게 해야 하는지**까지 적는다.
+            DesignInfoBox(
+                icon: "lock.fill",
+                text: "등록 코스의 방문지·순서·시간은 고정돼요. 집합 정보와 모집 조건은 수정할 수 있어요. "
+                    + "다른 코스로 떠나려면 그 코스로 모집을 새로 열어야 해요."
+            )
         case .tripConfirmed:
             DesignWarningBox(text: "여행이 확정돼 경로가 잠겼어요. 변경이 필요하면 채팅방 공지로 알려주세요.")
+        case .tripCancelled:
+            // 잠금은 확정과 같고 **이유만 다르다.** 떠나지 않을 여행을 확정됐다고 말하지 않는다.
+            DesignWarningBox(text: "모집이 불발돼 경로가 잠겼어요. 같은 코스로 다시 모집을 열 수 있어요.")
         }
     }
 
-    private func save() { onSaved(trip, stops); dismiss() }
-    private func addStop() { guard stops.count < 20 else { return }; stops.append(ItineraryStop(id: UUID().uuidString, day: 1, order: stops.count + 1, time: "17:00", name: "새 방문지", memo: "메모")) }
-    private func move(_ index: Int, _ offset: Int) { let target = index + offset; guard stops.indices.contains(target), state == .editable else { return }; stops.swapAt(index, target) }
+    /// 일차 머리글을 그릴 순서 — 작은 일차부터.
+    ///
+    /// 여행 일수(`tripDays`)를 알면 **1일차부터 마지막 일차까지 빠짐없이** 그린다.
+    /// 서버가 그렇게 요구하고(`validateCustomCourseSchedule`), 방문지를 다 지워 비어 버린 일차에도
+    /// 「방문지 추가」가 남아 있어야 다시 채울 수 있다.
+    private var dayNumbers: [Int] {
+        let fromStops = Set(stops.map(\.day))
+        guard let tripDays = serverTripDays, tripDays > 0 else { return fromStops.sorted() }
+        return Array(Set(1...tripDays).union(fromStops)).sorted()
+    }
+
+    /// 행에 보여 줄 번호만 일차별 순번으로 바꾼 사본이다.
+    /// `ItineraryStopRow` 는 `stop.order` 를 그대로 그리는데, 편집 중인 목록의 `order` 는
+    /// 지우기·순서 바꾸기 뒤에 어긋나 있어 화면에 보이는 자리로 다시 센다.
+    private func numbered(_ stop: ItineraryStop, order: Int) -> ItineraryStop {
+        var copy = stop
+        copy.order = order
+        return copy
+    }
+
+    private func remove(at index: Int) {
+        guard stops.indices.contains(index) else { return }
+        stops.remove(at: index)
+        saveError = nil
+    }
+
+    /// 서버 모임이면 **서버에 저장한다**. 예전에는 세션 메모리만 고쳐서 화면은 바뀌었는데
+    /// 서버 코스는 그대로였고, 다시 들어오면 고치기 전 경로가 다시 떴다.
+    private func save() {
+        // 역순 일정은 서버에 남기지 않는다 (IOS-F142).
+        if let day = reversedTimeDay {
+            saveError = "Day \(day) 의 방문 시각이 거꾸로 가요. 순서를 다시 맞춰 주세요."
+            return
+        }
+        guard let roomID = trip.serverRoomID, state == .editable else {
+            onSaved(trip, stops)
+            dismiss()
+            return
+        }
+        // 서버가 거절할 이유를 먼저 같은 말로 검사한다 — 400 을 받아
+        // 「요청이 올바르지 않습니다」로 넘기지 않는다.
+        guard let tripDays = serverTripDays else {
+            saveError = "모임 정보를 아직 읽지 못했어요. 잠시 뒤 다시 시도해 주세요."
+            return
+        }
+        if let blocked = roomCourseSaveError(stops, tripDays: tripDays) {
+            saveError = blocked
+            return
+        }
+        let places = roomCoursePlaceEdits(stops)
+        isSaving = true
+        saveError = nil
+        Task {
+            do {
+                // 이름·소개는 보내지 않는다 — `PATCH` 는 생략한 필드를 그대로 두고
+                // (BE `TravelCourse.updateInformation` 이 null 을 무시한다), 이름은 18-7 이 고친다.
+                try await TravelCourseAPIClient.shared.updateRoomCourse(roomID: roomID, places: places)
+                onSaved(trip, stops)
+                dismiss()
+            } catch {
+                saveError = error.moyeoUserMessage(fallback: "경로를 저장하지 못했어요.")
+            }
+            isSaving = false
+        }
+    }
+
+    /// 여행 일수를 받아 둔다 — 저장 전 검사(`roomCourseSaveError`)가 이 값을 쓴다.
+    private func loadTripDays() async {
+        guard let roomID = trip.serverRoomID, serverTripDays == nil else { return }
+        serverTripDays = try? await ChatRoomAPIClient.shared.detail(roomID: roomID).tripDays
+    }
+
+    /// 장소 검색에서 고른 곳만 담는다 — `contentId`·좌표가 함께 들어온다 (IOS-F140).
+    /// 시각은 코스 에디터와 **같은 기본 규칙**(첫 스톱 10:00, 2시간 30분 간격, 21:00 상한)이다.
+    ///
+    /// 서버 모임에서도 담을 수 있다 — `PATCH /travel-courses/chat-rooms/{roomId}` 는 `places` 를
+    /// **통째로 갈아 끼우므로**, 담은 뒤 저장하면 추가도 그대로 반영된다.
+    /// `placeID` 는 서버 `contentId` 그대로다(`TourismAPIClient.makePlace`) — 없으면 저장이 막힌다.
+    private func add(_ place: TourismPlace, to day: Int) {
+        guard stops.count < RoutePolicy.maximumStopCount,
+              !stops.contains(where: { $0.day == day && $0.name == place.title })
+        else { return }
+        let order = stops.filter { $0.day == day }.count + 1
+        // 시각은 **그 일차의 마지막 방문지 뒤**로 잡는다. 고정 시간표를 쓰면 이미 저장된
+        // 시각보다 이른 값이 나와 저장이 통째로 막혔다 (`nextRoomCourseStopTime` 주석).
+        let inserted = ItineraryStop(
+            id: place.id, day: day, order: order,
+            time: nextRoomCourseStopTime(
+                afterLast: stops.last { $0.day == day }?.time,
+                order: order
+            ),
+            name: place.title, memo: place.type.rawValue,
+            placeID: place.id, latitude: place.latitude, longitude: place.longitude
+        )
+        // 그 일차의 **맨 뒤**에 꽂는다. 목록은 일차·순서대로 세워져 있어야 저장할 때
+        // `sequence` 가 화면에 보이는 자리와 같아진다.
+        if let lastIndexOfDay = stops.lastIndex(where: { $0.day == day }) {
+            stops.insert(inserted, at: lastIndexOfDay + 1)
+        } else {
+            // 그 일차가 아직 비어 있으면 **다음 일차 앞**에 꽂는다 — 정렬을 새로 돌리면
+            // 같은 일차 안의 순서까지 흐트러질 수 있다.
+            stops.insert(inserted, at: stops.firstIndex { $0.day > day } ?? stops.count)
+        }
+        saveError = nil
+    }
+
+    /// 순서를 바꿔도 **방문 시각은 자리에 남는다.** 예전에는 시각이 장소에 붙어 따라다녀서,
+    /// 「위로 이동」 한 번에 `1번 12:30 · 2번 10:00` 같은 역순 일정이 만들어지고 그대로 서버에
+    /// 저장됐다. 이 화면에는 시각을 고칠 수단이 없어 호스트가 되돌릴 방법도 없었다 (IOS-F142).
+    private func move(_ index: Int, _ offset: Int) {
+        let target = index + offset
+        guard stops.indices.contains(target), state == .editable else { return }
+        let times = (stops[index].time, stops[target].time)
+        stops.swapAt(index, target)
+        stops[index].time = times.0
+        stops[target].time = times.1
+    }
+
+    /// 같은 일차 안에서 방문 시각이 거꾸로 가면 저장을 막는다 — 서버에 역순 일정을 남기지 않는다.
+    /// 시각이 비어 있는 방문지(서버가 시각을 주지 않은 옛 모임)는 견주지 않는다.
+    private var reversedTimeDay: Int? {
+        Set(stops.map(\.day)).sorted().first { day in
+            let times = stops.filter { $0.day == day && !$0.time.isEmpty }.map(\.time)
+            return times != times.sorted()
+        }
+    }
 }
 
 struct NoticeHistoryView: View {
@@ -1573,7 +2210,11 @@ struct NoticeHistoryView: View {
                             accessibilityIdentifier: "noticeHistory.empty"
                         )
                     } else {
-                        NoticeSectionTitle(title: "상단 고정 중")
+                        // 고정이 0개면 머리말만 남아 빈 자리가 생긴다 — 웹도
+                        // `serverPinned.length > 0 && …` 로 머리말째 감춘다.
+                        if notices.contains(where: \.isPinned) {
+                            NoticeSectionTitle(title: "상단 고정 중")
+                        }
                         ForEach(notices.filter(\.isPinned)) { notice in
                             NoticeCard(
                                 notice: notice,
@@ -1585,7 +2226,9 @@ struct NoticeHistoryView: View {
                                 }
                             )
                         }
-                        NoticeSectionTitle(title: "지난 공지")
+                        if notices.contains(where: { !$0.isPinned }) {
+                            NoticeSectionTitle(title: "지난 공지")
+                        }
                         ForEach(notices.filter { !$0.isPinned }) { notice in
                             NoticeCard(
                                 notice: notice,
@@ -1614,17 +2257,23 @@ struct NoticeHistoryView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다 — 화면마다 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // 화면기획은 하단 고정 CTA다 (툴바 + 아이콘이 아니라).
-            // 20-3은 호스트 시점 화면이라 기획·웹·안드로이드 모두 버튼을 항상 보여준다.
-            AuthPrimaryButton(title: "＋ 새 공지 작성 (호스트)", accessibilityIdentifier: "noticeHistory.create") {
-                showComposer = true
+            // **호스트에게만** 보여준다 — 참가자가 누르면 서버가 403 으로 거절할 뿐이다.
+            // 웹은 `{isHost && (…새 공지 작성 (호스트)…)}`, 안드로이드는
+            // `bottom = if (!isHost) null else { … }` 로 이미 감춘다 (TC NOTICE-020).
+            if isCurrentUserHost {
+                AuthPrimaryButton(title: "＋ 새 공지 작성 (호스트)", accessibilityIdentifier: "noticeHistory.create") {
+                    showComposer = true
+                }
+                .disabled(thread.serverRoomID == nil)
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 28)
+                .background(MoyeoTheme.card)
             }
-            .disabled(thread.serverRoomID == nil)
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            .padding(.bottom, 28)
-            .background(MoyeoTheme.card)
         }
         // 20-3 하단 CTA → 20-2f 공지 작성 (정본 ATTACH-COMPOSER-CANON.md §2).
         // 예전에는 알림창에서 "호스트 새 공지" 라는 가짜 공지를 만들어 목록에 끼워 넣었다.
@@ -1684,8 +2333,11 @@ struct NoticeHistoryView: View {
     }
 
     /// 화면 모델(`TripNotice`)에 대응하는 서버 공지 원본. 목데이터 공지면 nil 이고 수정할 수 없다.
+    /// 비호스트도 nil 이다 — 수정 화면 안에 삭제까지 들어 있어 진입 자체를 막아야 한다
+    /// (`NoticeEditView` 「이 공지 삭제하기」).
     private func serverNotice(for notice: TripNotice) -> ServerChatRoomNotice? {
         guard
+            isCurrentUserHost,
             thread.serverRoomID != nil,
             let noticeID = ServerTripMapper.noticeID(fromNoticeID: notice.id)
         else {
@@ -1694,9 +2346,25 @@ struct NoticeHistoryView: View {
         return serverNotices.first { $0.noticeId == noticeID }
     }
 
-    /// 서버 공지만 고정 토글을 보낼 수 있다.
+    /// 공지의 고정·수정·삭제와 새 공지 작성은 **호스트만** 할 수 있다.
+    /// 서버도 비호스트에게 403(`채팅방 호스트만 이 작업을 할 수 있습니다`)을 준다 —
+    /// 참가자에게 버튼을 보여주면 눌러야만 거절을 알게 되는 죽은 UI 가 된다.
+    /// 웹(`screens-additions.jsx` `isHost &&`)·안드로이드(`RecruitmentFlowScreens.kt:2417·2473`)는
+    /// 이미 호스트에게만 보여준다 — iOS 만 모두에게 열어 두고 있었다 (TC NOTICE-020).
+    ///
+    /// 판정은 이 화면이 이미 받아 둔 서버 상세의 `hostId` 로 한다. 상세를 아직 못 받았으면
+    /// 스레드가 들고 온 값을 쓰고, 그것도 없으면 **막는 쪽**으로 기운다(권한은 낙관하지 않는다).
+    private var isCurrentUserHost: Bool {
+        if let hostID = serverRoom?.hostId, let myID = MoyeoCurrentUser.id {
+            return hostID == myID
+        }
+        return thread.isCurrentUserHost
+    }
+
+    /// 서버 공지이고 내가 호스트일 때만 고정 토글을 보낼 수 있다.
     private func canTogglePin(_ notice: TripNotice) -> Bool {
         MoyeoServerSync.isEnabled
+            && isCurrentUserHost
             && thread.serverRoomID != nil
             && ServerTripMapper.noticeID(fromNoticeID: notice.id) != nil
     }
@@ -1733,7 +2401,7 @@ struct NoticeHistoryView: View {
                 }
             } catch {
                 pinFailureMessage =
-                    (error as? LocalizedError)?.errorDescription ?? "공지 고정을 바꾸지 못했어요."
+                    error.moyeoUserMessage(fallback: "공지 고정을 바꾸지 못했어요.")
             }
             pinningNoticeIDs.remove(notice.id)
         }
@@ -1773,10 +2441,13 @@ private struct NoticeHistoryNavigationBar: View {
                 .foregroundStyle(MoyeoTheme.ink)
             HStack {
                 Button(action: onBack) {
+                    // NAV-017 · ENV-009 — 44x44 틀은 있었지만 `contentShape` 가 없어
+                    // 실제로는 화살표 그림(9x14pt)에만 반응했다. 그림 크기는 그대로 둔다.
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(MoyeoTheme.ink)
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("뒤로")
@@ -1890,7 +2561,7 @@ private struct RouteSchematic: View {
                     polyline: markers.map(\.coordinate)
                 ),
                 isInteractive: false,
-                fallback: { MoyeoTheme.mapGreen }
+                fallback: { MoyeoMapUnavailableView(message: "지도를 불러오지 못했어요.") }
             )
             .frame(height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 9))
@@ -1903,6 +2574,9 @@ private struct RouteSchematic: View {
 /// 17-3 집합 장소 지정. 실지도에서는 중앙 핀을 고정하고 지도를 끌어 좌표를 잡는다.
 private struct MeetingMapCard: View {
     @Binding var meeting: MeetingPointDetails
+    /// 핀을 끌어 좌표가 바뀌었을 때. 이름·주소가 더 이상 이 좌표를 가리키지 않는다는 뜻이라
+    /// 부르는 쪽이 그 사실을 화면에 적는다 (IOS-F145·F36).
+    var onMoved: (() -> Void)?
 
     var body: some View {
         MoyeoMapView(
@@ -1913,15 +2587,19 @@ private struct MeetingMapCard: View {
             ),
             draggablePin: true,
             onPinMove: updateCoordinate,
-            fallback: { MoyeoTheme.mapGreen }
+            fallback: { MoyeoMapUnavailableView(message: "지도를 불러오지 못했어요.") }
         )
         .frame(height: 210).clipShape(RoundedRectangle(cornerRadius: 9))
         .accessibilityLabel("지도 핀, \(meeting.name)")
     }
 
+    /// 예전에는 위경도만 바꾸고 **이름·주소는 그대로 뒀다.** 「부산역」을 고른 뒤 핀을 산으로
+    /// 끌어도 집합 장소가 「부산역」으로 저장돼, 참가자가 엉뚱한 곳으로 갔다 (IOS-F145).
     private func updateCoordinate(_ coordinate: MoyeoMapCoordinate) {
+        let moved = meeting.latitude != coordinate.latitude || meeting.longitude != coordinate.longitude
         meeting.latitude = coordinate.latitude
         meeting.longitude = coordinate.longitude
+        if moved { onMoved?() }
     }
 }
 
@@ -1932,18 +2610,36 @@ private struct ItineraryStopRow: View {
     let moveUp: () -> Void
     let moveDown: () -> Void
     let remove: () -> Void
+    /// 방문 시각 고치기. 보기 전용 화면에서는 넘기지 않는다.
+    var editTime: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
             Menu {
                 Button("위로 이동", action: moveUp)
                 Button("아래로 이동", action: moveDown)
+                if let editTime {
+                    Button("방문 시각 바꾸기", action: editTime)
+                }
             } label: { Image(systemName: locked ? "lock.fill" : "line.3.horizontal").foregroundStyle(MoyeoTheme.muted).frame(width: 24, height: 44) }
             .disabled(locked)
+            // ENV-006: 라벨이 없으면 VoiceOver 가 영어 시스템 문구(「Drag」)로 읽는다.
+            .accessibilityLabel(locked ? "순서 이동 잠김" : "순서 이동 손잡이")
             // 잠긴 행의 순번 원은 화면기획의 중립 회색 톤이다
             Text("\(stop.order)").font(.caption.weight(.heavy)).foregroundStyle(.white).frame(width: 30, height: 30).background(locked ? MoyeoTheme.text400 : MoyeoTheme.primary300).clipShape(Circle())
             VStack(alignment: .leading, spacing: 3) {
-                HStack { Text(stop.time).foregroundStyle(MoyeoTheme.primary300); Text(stop.name).foregroundStyle(MoyeoTheme.ink) }.font(.caption.weight(.heavy))
+                HStack {
+                    if let editTime {
+                        Button(stop.time, action: editTime)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(MoyeoTheme.primary300)
+                            .accessibilityLabel("\(stop.name) 방문 시각 \(stop.time), 눌러서 바꾸기")
+                            .accessibilityIdentifier("itinerary.stop.time.\(stop.id)")
+                    } else {
+                        Text(stop.time).foregroundStyle(MoyeoTheme.primary300)
+                    }
+                    Text(stop.name).foregroundStyle(MoyeoTheme.ink)
+                }.font(.caption.weight(.heavy))
                 Text(stop.memo).font(.caption2).foregroundStyle(MoyeoTheme.muted)
             }
             Spacer()
@@ -2187,4 +2883,60 @@ private extension View {
 private extension Collection {
     subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
 }
+
+/// `sheet(item:)` 에 넘길 식별자 — `String` 은 `Identifiable` 이 아니다.
+private struct EditingStopTime: Identifiable {
+    let id: String
+}
+
+/// 방문 시각 고르기. 서버·화면 모두 `HH:mm` 을 쓴다.
+private struct ItineraryTimeSheet: View {
+    let initial: String
+    let onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var picked = Date()
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                DatePicker("방문 시각", selection: $picked, displayedComponents: .hourAndMinute)
+                    .datePickerStyle(.wheel)
+                    .labelsHidden()
+                    .environment(\.locale, Locale(identifier: "ko_KR"))
+                    .accessibilityIdentifier("itinerary.timeSheet.picker")
+                Spacer()
+            }
+            .padding(20)
+            .navigationTitle("방문 시각")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("확인") {
+                        onPick(Self.text(from: picked))
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("itinerary.timeSheet.confirm")
+                }
+            }
+        }
+        .presentationDetents([.height(320)])
+        .onAppear { picked = Self.date(from: initial) ?? Date() }
+    }
+
+    private static func formatter() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }
+
+    static func date(from text: String) -> Date? { formatter().date(from: String(text.prefix(5))) }
+
+    static func text(from date: Date) -> String { formatter().string(from: date) }
+}
+
 // swiftlint:enable file_length line_length

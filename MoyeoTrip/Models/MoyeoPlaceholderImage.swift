@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import UIKit
 
 /// 이미지가 필수인 자리에 실제 이미지가 없을 때 쓰는 공용 플레이스홀더.
 ///
@@ -37,31 +36,6 @@ enum MoyeoPlaceholderImage {
             return abs(ratio - 1.0) <= abs(ratio - 16.0 / 9.0) ? .square : .landscape
         }
     }
-
-    /// 채팅방 생성에 올리는 기본 썸네일.
-    ///
-    /// 2026-08-26 서버 변경으로 `POST /chat-rooms` 의 `thumbnail` 파트가 필수다(없으면 400 `40041`,
-    /// 이미지가 아니거나 20MB 초과면 400 `40042`). 서버가 저장 전에 비율 유지 FHD 축소 + WebP 변환을
-    /// 직접 하므로(2026-08-29 안내) 클라에서 리사이즈·변환하지 않는다.
-    /// 17 모집 만들기에 사진 선택 단계가 없어서 이 이미지를 올린다. 카드형 목록에 쓰이므로 16:9 다.
-    ///
-    /// JPEG 로 인코딩해 보낸다 — 서버는 PNG·WebP·HEIC·JPEG 를 모두 받지만(실서버 확인),
-    /// `UIImage` 에서 바로 얻을 수 있고 어느 백엔드에서나 안전한 포맷이 JPEG 다.
-    /// 에셋이 없으면 `nil` 을 돌려주고 서버가 400 으로 알려주게 둔다 — 조용히 성공한 척하지 않는다.
-    static func roomThumbnail() -> MoyeoMultipartFile? {
-        guard
-            let image = UIImage(named: landscapeAssetName),
-            let data = image.jpegData(compressionQuality: 0.85)
-        else {
-            return nil
-        }
-        return MoyeoMultipartFile(
-            partName: "thumbnail",
-            fileName: "placeholder-landscape.jpg",
-            mimeType: "image/jpeg",
-            data: data
-        )
-    }
 }
 
 /// URL 이 아예 없는 자리에 바로 그리는 플레이스홀더.
@@ -76,5 +50,8 @@ struct MoyeoPlaceholderImageView: View {
         Image(MoyeoPlaceholderImage.assetName(for: shape))
             .resizable()
             .scaledToFill()
+            // ENV-006: 장식용 대체 이미지다. 숨기지 않으면 VoiceOver 가 에셋 이름
+            // (「PlaceholderSquare」·「PlaceholderLandscape」)을 그대로 읽는다.
+            .accessibilityHidden(true)
     }
 }

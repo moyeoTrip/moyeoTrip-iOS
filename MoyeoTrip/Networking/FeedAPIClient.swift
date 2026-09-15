@@ -182,6 +182,35 @@ final class FeedAPIClient: @unchecked Sendable {
         )
     }
 
+    /// 23-1 댓글 신고 — `POST /api/v1/feeds/{feedId}/comments/{commentId}/reports` → 204.
+    ///
+    /// 사유 목록은 **피드 신고와 같은** `GET /api/v1/feeds/report-reasons` 다(2026-09-14 실서버 확인).
+    /// 예전에는 이 호출이 없어 댓글 더보기의 「신고」가 `ReportUnsupportedDialog`("아직 받지 못해요")로
+    /// 끝났다 — 서버에는 그때도 엔드포인트가 있었다.
+    ///
+    /// 오류: 본인 댓글 400 `40046` · 중복 409 `40922` · 없는 댓글 404 `40422` ·
+    /// 비공개 피드 403 `40306` · `details` 301자 400 `40000`.
+    func reportComment(
+        feedID: Int64,
+        commentID: Int64,
+        reason: String,
+        details: String? = nil
+    ) async throws {
+        struct ReportRequest: Encodable {
+            let reason: String
+            let details: String?
+        }
+        let trimmed = details?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try await api.sendVoid(
+            "/api/v1/feeds/\(feedID)/comments/\(commentID)/reports",
+            method: "POST",
+            body: ReportRequest(
+                reason: reason,
+                details: (trimmed?.isEmpty ?? true) ? nil : String(trimmed!.prefix(300))
+            )
+        )
+    }
+
     /// 23-1 댓글 목록 — id 커서 페이지네이션 (2026-09-02 서버 변경, 실서버 확인).
     ///
     /// `beforeCommentID` 는 **첫 요청에서 생략**한다. 응답의 `nextId` 를 그대로 다음 요청에 넣으면
@@ -324,7 +353,9 @@ enum ServerFeedMapper {
             distanceText: "",
             durationText: "",
             visitCountText: "\(feed.trip.places.count)곳",
-            photoCountText: feed.images.isEmpty ? "" : "1/\(feed.images.count)",
+            // 결정 ⑪ — 예전에는 「1/5」처럼 **언제나 1** 인 가짜 현재/전체였다.
+            // 목록 카드에 진짜 현재/전체 배지가 생겼으므로, 이 줄은 장수만 말한다.
+            photoCountText: feed.images.isEmpty ? "" : "사진 \(feed.images.count)장",
             authorAvatarURL: MoyeoImageURL.resolve(feed.author.profileImageUrl),
             photoURL: feed.images.min { $0.sequence < $1.sequence }
                 .flatMap { MoyeoImageURL.resolve($0.imageUrl) },
@@ -332,6 +363,7 @@ enum ServerFeedMapper {
                 .sorted { $0.sequence < $1.sequence }
                 .compactMap { MoyeoImageURL.resolve($0.imageUrl) },
             serverFeedID: feed.feedId,
+            serverCourseID: feed.trip.courseId,
             serverLiked: feed.liked,
             serverAuthorID: feed.author.userId
         )
@@ -348,33 +380,47 @@ enum ServerFeedMapper {
         }
     }
 
-    /// 피드·댓글의 작성 시각 표기.
+    /// 글 작성 시각 표기 — **상대 시각 정본** (`docs/alignment/RELATIVE-TIME-CANON.md`).
     ///
-    /// **상대 시각이다** — 기획(`screens-additions3.jsx` 의 `2시간 전`)과 웹
-    /// (`moyeo-api.js` 의 `formatRelative`)이 그렇게 쓴다. 예전에는 iOS·안드로이드만
-    /// `2026.09.07` 처럼 절대 날짜를 써서 4열 비교에서 두 앱만 달라 보였다
-    /// (2026-09-08 사용자 지적). 규칙과 경계값은 웹 `formatRelative` 를 그대로 옮겼다:
-    /// 1분 미만 `방금 전` · 60분 미만 `N분 전` · 24시간 미만 `N시간 전` ·
-    /// 1일 `어제` · 7일 미만 `N일 전` · 그 이상은 `YYYY.MM.DD`.
-    static func createdAtText(_ dateTime: String) -> String {
+    /// 1분 미만 `방금 전` · 60분 미만 `N분 전` · 24시간 미만 `N시간 전` · 1일 `어제` ·
+    /// 30일 미만 `N일 전` · 1년 미만 `N개월 전` · 그 밖에 `N년 전`.
+    ///
+    /// 전부 **버림**이다(90분은 `1시간 전`). `개월` = 경과 일수 / 30, `년` = 경과 일수 / 365 —
+    /// **달력 계산이 아니다.** 세 플랫폼이 같은 값을 내는 것이 정확한 달수보다 먼저다.
+    /// 개월/년의 갈림목은 **365일**이라, 정본 표본대로 364일은 `12개월 전` 이고
+    /// 365일부터 `1년 전` 이다(일수/30 만으로 가르면 364일이 `0년 전` 이 된다).
+    ///
+    /// 예전에는 7일이 넘으면 `2026.09.07` 로 떨어졌는데 사용자 결정(2026-09-14)으로
+    /// **절대 날짜로 떨어지지 않는다.** 미래 시각(시계 오차)은 `방금 전` 이다 —
+    /// 「-3분 전」 같은 문자열을 만들지 않는다.
+    ///
+    /// `now` 는 경계 테스트가 시각을 고정하려고 넣는 값이다. 화면은 기본값을 쓴다.
+    static func createdAtText(_ dateTime: String, now: Date = Date()) -> String {
         guard let then = Self.serverDate(dateTime) else {
             // 파싱 실패는 지어내지 않고 날짜 부분만 보여준다.
             guard let datePart = dateTime.split(separator: "T").first else { return dateTime }
             return datePart.replacingOccurrences(of: "-", with: ".")
         }
-        let minutes = Int(Date().timeIntervalSince(then) / 60)
-        if minutes < 1 { return "방금 전" }
+        let seconds = now.timeIntervalSince(then)
+        if seconds < 60 { return "방금 전" }
+        let minutes = Int(seconds / 60)
         if minutes < 60 { return "\(minutes)분 전" }
         let hours = minutes / 60
         if hours < 24 { return "\(hours)시간 전" }
         let days = hours / 24
         if days == 1 { return "어제" }
-        if days < 7 { return "\(days)일 전" }
-        return Self.absoluteFormatter.string(from: then)
+        if days < 30 { return "\(days)일 전" }
+        if days < 365 { return "\(days / 30)개월 전" }
+        return "\(days / 365)년 전"
     }
 
     /// 서버는 타임존 없는 `yyyy-MM-dd'T'HH:mm:ss[.SSSSSS]` 를 준다 — 기기 시간대로 읽는다.
-    private static func serverDate(_ dateTime: String) -> Date? {
+    ///
+    /// **읽을 수 있는 값인지 밖에서 먼저 확인해야 할 때**가 있어서 열어 뒀다. 못 읽는 값에
+    /// 자기 문구를 쓰려는 화면(강퇴 통지는 원문을 그대로 둔다)이 `createdAtText` 의
+    /// 실패 경로와 **같은 판정**을 써야 한다 — 다른 파서로 가르면 나노초가 붙은 실제 응답
+    /// (`2026-08-24T08:06:50.072025`)에서 한쪽만 실패한다.
+    static func serverDate(_ dateTime: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
@@ -383,11 +429,4 @@ enum ServerFeedMapper {
         }
         return nil
     }
-
-    private static let absoluteFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy.MM.dd"
-        return formatter
-    }()
 }

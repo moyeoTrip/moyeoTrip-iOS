@@ -20,10 +20,54 @@ extension ServerTripMapper {
         rooms.first { $0.ended && $0.status == "CONFIRMED" } ?? rooms.first(where: \.ended)
     }
 
+    /// 27-3 코스 공개의 대상 방. **서버가 준 자격(`coursePublicationAvailable`)을 본다.**
+    ///
+    /// 예전에는 「끝난 방 중 가장 최근 것」만 골라서, 남이 만든 공개 코스로 떠난 방도
+    /// 대상이 됐다. 되돌릴 수 없다는 경고와 최종 확인 **두 단계를 모두 지난 뒤에야**
+    /// 서버가 403(`해당 여행 코스를 공개할 호스트가 아닙니다.`)으로 거절했다 (TC AFTER-020).
+    nonisolated static func latestPublishableRoom(in rooms: [ServerMyChatRoom]) -> ServerMyChatRoom? {
+        let publishable = rooms.filter { $0.ended && $0.coursePublicationAvailable }
+        return publishable.first { $0.status == "CONFIRMED" } ?? publishable.first
+    }
+
+    /// 끝난 방은 있는데 공개할 자격이 있는 방이 하나도 없는지 — 안내 문구를 가르는 데 쓴다.
+    nonisolated static func hasCompletedButNotPublishableRoom(in rooms: [ServerMyChatRoom]) -> Bool {
+        rooms.contains(where: \.ended) && latestPublishableRoom(in: rooms) == nil
+    }
+
     /// 18 모집 관리 승인 대기 카드. 서버가 주지 않는 값(성별·나이·매너)은 표기를 뺀다.
     /// `mannerRating` 은 실서버에서 항상 null 이라 "매너 4.9" 를 지어내지 않는다.
+    /// 거절 기록 한 건 → 화면 모델 (`GET /chat-rooms/{roomId}/applications/rejected`).
+    /// 승인 대기와 같은 줄 모양을 쓴다 — 다른 값은 줄 아래 설명(거절 시각)뿐이다.
+    static func rejectedHostApplicant(from application: ServerRejectedJoinApplication) -> HostApplicant {
+        applicantRow(
+            applicationID: application.applicationId,
+            profile: application.applicant,
+            message: application.applicationMessage
+        )
+    }
+
+    /// 거절 시각 줄. 상대 시각 정본을 따른다(`ServerFeedMapper.createdAtText`) —
+    /// 「얼마 전에 거절했나」가 알고 싶은 값이라 강퇴 통지와 같은 성격의 자리다.
+    static func rejectedDetailText(from application: ServerRejectedJoinApplication) -> String {
+        let time = ServerFeedMapper.createdAtText(application.rejectedAt)
+        return time.isEmpty ? "거절한 신청" : "\(time) 거절"
+    }
+
     static func hostApplicant(from application: ServerJoinApplication) -> HostApplicant {
-        let profile = application.applicant
+        applicantRow(
+            applicationID: application.applicationId,
+            profile: application.applicant,
+            message: application.applicationMessage
+        )
+    }
+
+    /// 승인 대기·거절 기록이 **같은 줄 모양**을 쓰도록 한 곳에 모았다.
+    private static func applicantRow(
+        applicationID: Int64,
+        profile: ServerApplicantProfile,
+        message: String?
+    ) -> HostApplicant {
         var metaParts: [String] = []
         if let age = profile.age {
             metaParts.append("\(age)세")
@@ -37,12 +81,39 @@ extension ServerTripMapper {
         metaParts.append("여행 \(profile.completedTripCount)회")
 
         return HostApplicant(
-            id: "server-application-\(application.applicationId)",
+            id: "server-application-\(applicationID)",
             name: profile.nickname,
             avatar: "",
             meta: metaParts.joined(separator: " · "),
-            note: application.applicationMessage ?? "",
-            serverApplicationID: application.applicationId,
+            note: message ?? "",
+            serverApplicationID: applicationID,
+            serverUserID: profile.userId,
+            profileImageURL: profile.profileImageURL
+        )
+    }
+
+    /// 18 모집 관리 「대기열」 한 줄.
+    ///
+    /// `position` 은 **서버가 준 순번을 그대로** 쓴다 — 클라가 다시 매기지 않는다.
+    /// 1번이 자리가 나면 자동으로 합류할 사람이다.
+    static func waitlistApplicant(from entry: ServerWaitlistEntry) -> HostApplicant {
+        let profile = entry.applicant
+        var metaParts = ["대기 \(entry.position)번"]
+        if let age = profile.age {
+            metaParts.append("\(age)세")
+        }
+        if let genderText = applicantGenderText(profile.gender) {
+            metaParts.append(genderText)
+        }
+        metaParts.append("여행 \(profile.completedTripCount)회")
+
+        return HostApplicant(
+            id: "server-waitlist-\(entry.applicationId)",
+            name: profile.nickname,
+            avatar: "",
+            meta: metaParts.joined(separator: " · "),
+            note: entry.applicationMessage ?? "",
+            serverApplicationID: entry.applicationId,
             serverUserID: profile.userId,
             profileImageURL: profile.profileImageURL
         )

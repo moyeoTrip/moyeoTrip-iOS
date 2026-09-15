@@ -34,7 +34,6 @@ struct FeedWriteView: View {
     // 제목·본문은 사용자가 쓰는 값이다. 미리 채워 두면 남의 여행기가 내 글처럼 보인다.
     @State private var title = ""
     @State private var memo = ""
-    @State private var selectedCoverIndex = 0
     @State private var currentStep = 1
     @State private var isPublished = false
     /// 올리는 중 — 두 번 눌러 두 번 올라가지 않게 막는다.
@@ -47,6 +46,8 @@ struct FeedWriteView: View {
     /// (`27-3 검증 코스`)가 「어떤 여행을 기록할까요?」의 후보로 떴다.
     /// 취소된 방(`CANCELLED`)은 끝난 것이지 다녀온 것이 아니다 — 후보가 아니다.
     @State private var trips: [FeedWriteTripCandidate] = []
+    /// 다녀온 여행 후보 조회가 **실패**했는지. 빈 목록과 갈라야 한다.
+    @State private var tripsLoadFailed = false
     @State private var selectedRoomID: Int64?
     /// 고른 방의 동행자. **아직 못 받았으면 nil** 이고 멤버 카드를 그리지 않는다 —
     /// 빈 배열(`(0)`)은 "혼자 다녀왔다"는 사실이지 "못 받았다"가 아니다 (NO-MOCK R1).
@@ -60,6 +61,19 @@ struct FeedWriteView: View {
     /// 서버에는 제목 필드가 없다 — 제목은 **본문 첫 줄**로 올려 보낸다 (BE 요청 §8-7).
     private static let titleLimit = 60
     private static let bodyLimit = 500
+
+    /// 실제로 서버에 나가는 본문. 카운터도 입력 제한도 **이 길이**를 기준으로 삼는다 —
+    /// 제목 60 + 본문 500 을 따로 세면 합이 562자가 되어 서버(`content` 500자)가 거절한다.
+    /// 사용자에게는 「500자 안」으로 보이는데 게시가 실패하던 자리다 (2026-09-10).
+    private var composedContent: String {
+        Self.contentWithTitle(title.trimmingCharacters(in: .whitespacesAndNewlines), memo)
+    }
+
+    /// 제목이 차지한 만큼 줄어드는 본문 상한 (`제목` + 빈 줄 + `내용`).
+    private var memoLimit: Int {
+        let head = title.trimmingCharacters(in: .whitespacesAndNewlines).count
+        return max(0, Self.bodyLimit - (head > 0 ? head + 2 : 0))
+    }
 
     /// 고른 여행. 후보가 없으면 nil 이고 관련 섹션은 그리지 않는다.
     private var selectedTrip: FeedWriteTripCandidate? {
@@ -80,13 +94,6 @@ struct FeedWriteView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     stepIntro
                     stepContent
-                    if let publishError {
-                        Text(publishError)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(MoyeoTheme.coral)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("feedWrite.publishError")
-                    }
                 }
                 // 폭을 **끝까지 늘린다**. `ScrollView` 는 내용 폭이 좁으면 가로로 가운데 놓는다 —
                 // 그래서 카드가 안쪽으로 들어가고 좌우 여백이 서로 달라졌다
@@ -123,7 +130,13 @@ private extension FeedWriteView {
     /// 정렬 = 종료일(없으면 시작일) 내림차순 — 가장 최근에 다녀온 여행이 먼저다.
     func loadTrips() async {
         guard MoyeoServerSync.isEnabled, trips.isEmpty else { return }
-        guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else { return }
+        tripsLoadFailed = false
+        guard let rooms = try? await ChatRoomAPIClient.shared.myRooms() else {
+            // 조회 실패를 **빈 목록으로 그리지 않는다** — 다녀온 여행이 있어도
+            // 「아직 다녀온 여행 기록이 없어요.」로 읽혀 글을 못 쓰는 까닭을 알 수 없었다.
+            tripsLoadFailed = true
+            return
+        }
 
         let completed = rooms.filter {
             $0.ended && $0.status == ServerMyChatRoomFilter.confirmed.rawValue
@@ -197,6 +210,8 @@ private extension FeedWriteView {
                     .frame(width: 40, height: 44)
             }
             .buttonStyle(.plain)
+            // ENV-006: 라벨이 없으면 VoiceOver 가 영어 시스템 문구(「Close」)로 읽는다.
+            .accessibilityLabel("닫기")
 
             Spacer()
 
@@ -299,6 +314,8 @@ private extension FeedWriteView {
                 .frame(height: 40)
                 .onChange(of: title) { _, value in
                     if value.count > Self.titleLimit { title = String(value.prefix(Self.titleLimit)) }
+                    // 제목이 길어지면 본문 상한이 줄어든다 — 넘친 만큼 본문도 함께 줄인다.
+                    if memo.count > memoLimit { memo = String(memo.prefix(memoLimit)) }
                 }
                 .accessibilityIdentifier("feedWrite.title")
 
@@ -326,8 +343,11 @@ private extension FeedWriteView {
                     }
                 }
                 .accessibilityIdentifier("feedWrite.memo")
+                .onChange(of: memo) { _, value in
+                    if value.count > memoLimit { memo = String(value.prefix(memoLimit)) }
+                }
 
-            Text("\(min(memo.count, Self.bodyLimit)) / \(Self.bodyLimit.formatted(.number))")
+            Text("\(composedContent.count) / \(Self.bodyLimit.formatted(.number))")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(MoyeoTheme.text400)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -340,14 +360,15 @@ private extension FeedWriteView {
     var photoGrid: some View {
         LazyVGrid(columns: photoColumns, spacing: 8) {
             ForEach(Array(pickedPhotos.enumerated()), id: \.offset) { index, image in
+                // 결정 ⑪ — 「대표 사진」은 피드에 없는 개념이다. 서버 `FeedImage` 에는
+                // `sequence` 뿐이라 대표 플래그도 썸네일 컬럼도 없다. 타일을 눌러 대표를
+                // 고르는 동작도, 「대표」 배지도 두지 않는다 — **고른 순서가 곧 순서**다.
                 FeedWritePhotoTile(
                     image: image,
-                    isSelectedCover: selectedCoverIndex == index,
-                    accessibilityIndex: index + 1
+                    accessibilityIndex: index + 1,
+                    // 한 장씩 뺄 길이 **없었다** — 잘못 고르면 사진 고르기를 처음부터 다시 해야 했다 (IOS-F86).
+                    onRemove: { removePhoto(at: index) }
                 )
-                .onTapGesture {
-                    selectedCoverIndex = index
-                }
             }
 
             // 고른 사진이 없으면 이 타일만 남는다 — 색 타일로 자리를 채우지 않는다.
@@ -376,7 +397,16 @@ private extension FeedWriteView {
             }
         }
         pickedPhotos = images
-        selectedCoverIndex = min(selectedCoverIndex, max(images.count - 1, 0))
+    }
+
+    /// 사진 한 장을 뺀다. 남은 사진의 순서는 고른 순서 그대로다 (결정 ⑪).
+    func removePhoto(at index: Int) {
+        guard pickedPhotos.indices.contains(index) else { return }
+        pickedPhotos.remove(at: index)
+        // `pickedPhotoItems` 도 같이 줄여야 `onChange` 가 다시 돌 때 뺀 장이 되살아나지 않는다.
+        if pickedPhotoItems.indices.contains(index) {
+            pickedPhotoItems.remove(at: index)
+        }
     }
 
     var courseSelector: some View {
@@ -385,7 +415,13 @@ private extension FeedWriteView {
                 .font(.caption.weight(.heavy))
                 .foregroundStyle(MoyeoTheme.ink)
 
-            if trips.isEmpty {
+            if trips.isEmpty, tripsLoadFailed {
+                MoyeoEmptyStateView(
+                    message: MoyeoEmptyText.loadFailed,
+                    onRetry: { Task { await loadTrips() } },
+                    accessibilityIdentifier: "feed.write.course.failed"
+                )
+            } else if trips.isEmpty {
                 // 문구는 웹·안드로이드와 글자 그대로 같아야 한다 — 후보는 "공개 코스"가 아니라
                 // "내가 다녀온 여행"이다.
                 MoyeoEmptyStateView(
@@ -621,6 +657,31 @@ private extension FeedWriteView {
     }
 
     var bottomCTA: some View {
+        VStack(spacing: 8) {
+            // 실패 문구는 **누르는 버튼 바로 위**에 둔다. 예전에는 스크롤 본문 끝에 있어
+            // 게시가 실패해도 화면에 아무 변화가 없어 보였다 (IOS-F87).
+            if let publishError {
+                Text(publishError)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.coral)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .accessibilityIdentifier("feedWrite.publishError")
+            }
+            ctaRow
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .background(MoyeoTheme.background)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(MoyeoTheme.softLine)
+                .frame(height: 1)
+        }
+    }
+
+    private var ctaRow: some View {
         HStack(spacing: 14) {
             Button {
                 currentStep = max(1, currentStep - 1)
@@ -648,17 +709,10 @@ private extension FeedWriteView {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             .buttonStyle(.plain)
+            .disabled(isPublishing || isPublished)
             .accessibilityIdentifier(currentStep >= stepCount ? "feed.write.complete" : "feed.write.next")
         }
         .padding(.horizontal, 20)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
-        .background(MoyeoTheme.background)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(MoyeoTheme.softLine)
-                .frame(height: 1)
-        }
     }
 
     var nextTitle: String {
@@ -688,7 +742,7 @@ private extension FeedWriteView {
         case 1:
             return "어떤 여행을 기록할까요?"
         case 2:
-            return "대표 사진을 골라요"
+            return "사진을 골라요"
         case 3:
             return "여행 어땠어요?"
         case 4:
@@ -703,11 +757,16 @@ private extension FeedWriteView {
         case 1:
             return "방문 코스와 함께한 멤버를 먼저 확인해요."
         case 2:
-            return "사진과 지도 조합이 피드 첫 화면에 함께 보여요."
+            // 결정 ⑪ — 서버에 피드 대표 사진이 없다. 고른 순서가 곧 `sequence` 다.
+            return "최대 10장까지, 고른 순서대로 보여요."
         case 3:
             return "대부분 자동으로 채워졌어요. 한 줄만 남겨주세요."
         case 4:
-            return "친구에게만 공개하고 경로와 멤버 정보를 함께 보여줘요."
+            // **고른 공개 범위를 따라간다.** 예전에는 「친구에게만 공개…」로 고정이라
+            // 전체공개·나만 보기를 골라도 「친구에게만」이라고 적혔다 — 문구 문제가 아니라
+            // **공개 범위를 틀리게 알려 주는 것**이다(사용자가 전체공개로 올리면서 친구만
+            // 본다고 믿는다). 웹이 먼저 고쳤고 같은 조립 방식을 쓴다(웹 `visibilityHelper`).
+            return "\(selectedVisibility.helperText) 경로와 멤버 정보를 함께 보여줘요."
         default:
             return "사진, 경로, 멤버가 한 장의 피드처럼 구성됐어요."
         }
@@ -731,10 +790,38 @@ private extension FeedWriteView {
         }
 
         // 코스를 못 고른 상태에서 게시하면 코스 값을 지어내야 한다 — 그 전에는 게시하지 않는다.
-        guard let course else { return }
+        // 다만 **아무 말 없이 멈추지는 않는다** — 버튼을 눌렀는데 화면이 그대로면 고장으로 보인다.
+        guard let course else {
+            publishError = "여행을 먼저 고르면 게시할 수 있어요. STEP 1 로 돌아가 코스를 확인해주세요."
+            return
+        }
 
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = memo.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 서버 계약을 **보내기 전에** 같은 말로 검사한다. 예전에는 검증이 없어서 사진 0장·
+        // 빈 본문이 그대로 올라갔고, 화면 맨 아래에 서버 원문(「공백일 수 없습니다」)이 찍혔다
+        // (TC WRITE-011·WRITE-016). 웹·안드로이드는 이미 같은 자리에서 막는다
+        // (웹 `사진을 한 장 이상 골라주세요.` · 안드 `사진을 최소 한 장 골라 주세요.`).
+        //
+        // 근거: `CreateFeedRequest.content` 는 `@NotBlank @Size(max = 500)` 이고,
+        // 사진은 `images` 파트로 최소 1장이 필요하다.
+        guard !pickedPhotos.isEmpty else {
+            publishError = "사진을 한 장 이상 골라주세요."
+            return
+        }
+        let serverContent = Self.contentWithTitle(trimmedTitle, body)
+        guard !serverContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // 문구는 2026-09-14 결정 ⑧ 정본 그대로다 — 세 플랫폼이 같은 문장을 쓴다.
+            publishError = "제목이나 내용 중 하나는 써 주세요."
+            return
+        }
+        guard serverContent.count <= Self.bodyLimit else {
+            publishError = "본문은 \(Self.bodyLimit)자까지 올릴 수 있어요. "
+                + "지금 \(serverContent.count)자예요."
+            return
+        }
+
         let post = FeedPost(
             id: "feed-local-\(UUID().uuidString)",
             authorName: "",
@@ -756,7 +843,7 @@ private extension FeedWriteView {
             durationText: course.duration,
             visitCountText: "\(course.stops.count)곳",
             // 사진이 없으면 `1/0` 같은 배지를 만들지 않는다.
-            photoCountText: pickedPhotos.isEmpty ? "" : "1/\(pickedPhotos.count)"
+            photoCountText: pickedPhotos.isEmpty ? "" : "사진 \(pickedPhotos.count)장"
         )
 
         // **서버에 올린다.** 예전에는 이 자리에서 화면 안 목록에만 끼워 넣고 끝냈다 —
@@ -770,6 +857,8 @@ private extension FeedWriteView {
             return
         }
         isPublishing = true
+        // 다시 누르면 옛 실패 문구부터 지운다 — 원인을 고쳐도 남아 있으면 또 실패한 줄 안다.
+        publishError = nil
         Task {
             defer { isPublishing = false }
             do {
@@ -780,7 +869,9 @@ private extension FeedWriteView {
                     images: Self.multipartImages(from: pickedPhotos)
                 )
             } catch {
-                publishError = error.localizedDescription
+                publishError = error.moyeoUserMessage(
+                    fallback: "여행기록을 올리지 못했어요. 잠시 후 다시 시도해주세요."
+                )
                 return
             }
             isPublished = true
@@ -847,8 +938,8 @@ private extension FeedVisibility {
 private struct FeedWritePhotoTile: View {
     /// 사용자가 고른 실제 사진.
     let image: UIImage
-    let isSelectedCover: Bool
     let accessibilityIndex: Int
+    var onRemove: (() -> Void)?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -860,17 +951,22 @@ private struct FeedWritePhotoTile: View {
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            if isSelectedCover {
-                Text("대표")
-                    .font(.caption2.weight(.heavy))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7)
-                    .frame(height: 20)
-                    .background(MoyeoTheme.forest)
-                    .clipShape(Capsule())
-                    .padding(7)
+            if let onRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.black.opacity(0.45))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .accessibilityLabel("피드 사진 \(accessibilityIndex) 빼기")
+                .accessibilityIdentifier("feed.write.removePhoto.\(accessibilityIndex)")
             }
         }
+        .frame(height: 110)
         .accessibilityLabel("피드 사진 \(accessibilityIndex)")
     }
 }
@@ -878,8 +974,11 @@ private struct FeedWritePhotoTile: View {
 private struct FeedWriteAddPhotoTile: View {
     var body: some View {
         VStack(spacing: 6) {
+            // ENV-006: 옆의 「사진 추가」 글자가 이미 뜻을 준다 —
+            // 숨기지 않으면 VoiceOver 가 심볼 이름(「plus」)을 덧붙여 읽는다.
             Image(systemName: "plus")
                 .font(.caption.weight(.heavy))
+                .accessibilityHidden(true)
             Text("사진 추가")
                 .font(.caption2.weight(.semibold))
         }
@@ -962,7 +1061,7 @@ private struct FeedWriteRoutePreview: View {
                     polyline: markers.map(\.coordinate)
                 ),
                 isInteractive: false,
-                fallback: { MoyeoTheme.mapGreen }
+                fallback: { MoyeoMapUnavailableView(message: "지도를 불러오지 못했어요.") }
             )
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("여행 경로 지도, 방문지 \(stops.count)곳")

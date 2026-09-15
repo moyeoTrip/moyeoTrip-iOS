@@ -58,8 +58,8 @@ enum ServerTripMapper {
             route: [],
             participants: [],
             recruitmentDeadline: "",
-            minimumAge: 0,
-            maximumAge: 0,
+            minimumAge: nil,
+            maximumAge: nil,
             genderRestriction: "",
             serverRoomID: roomID
         )
@@ -118,8 +118,8 @@ enum ServerTripMapper {
             recruitmentDeadline: summary.recruitmentDeadlineDate.map {
                 deadlineText(deadlineDate: $0, dDay: summary.recruitmentDDay)
             } ?? "",
-            minimumAge: 0,
-            maximumAge: 0,
+            minimumAge: nil,
+            maximumAge: nil,
             genderRestriction: "",
             serverRoomID: summary.roomId,
             heroImageURL: summary.thumbnailURL,
@@ -197,14 +197,32 @@ enum ServerTripMapper {
                 deadlineDate: detail.recruitmentDeadlineDate,
                 dDay: detail.recruitmentDDay
             ),
-            minimumAge: detail.minimumAge ?? 0,
-            maximumAge: detail.maximumAge ?? 0,
+            minimumAge: detail.minimumAge,
+            maximumAge: detail.maximumAge,
             genderRestriction: genderText(detail.genderRestriction),
+            joinApprovalMode: detail.joinApprovalMode,
+            // 18-1 여행 경로를 고칠 수 있는지 — 서버가 받아 주는 조건 그대로다.
+            // BE `ChatRoomService.updateRoomCourse` 는 `status == RECRUITING` ·
+            // `course.type == CUSTOM` · `course.owner == 호스트` 셋이 다 맞아야 200 을 준다
+            // (코스 주인은 응답에 없지만, 이 방의 CUSTOM 코스는 호스트가 만든 것이다).
+            // 예전에는 기본값 `.linkedLocked` 이 그대로라 **직접 만든 코스인데도** 호스트 관리에서
+            // 언제나 「등록 코스라 고정」 잠금 화면이 떴다 — 1/5 단계·18-7 안내와 어긋났다.
+            routeEditState: routeEditState(detail: detail, course: course),
             serverRoomID: detail.roomId,
+            hostUserID: detail.hostId,
             heroImageURL: MoyeoImageURL.resolve(detail.thumbnail),
             hostProfileImageURL: MoyeoImageURL.resolve(detail.hostProfileImageUrl),
             serverCourseTitle: course?.title
         )
+    }
+
+    /// 18-1 경로 수정 가능 여부. 확정된 방도 불발된 방도 서버가 막으므로 **둘 다 잠긴다** —
+    /// 다만 불발은 확정이 아니므로 이유를 따로 말한다 (`tripCancelled`).
+    static func routeEditState(detail: ServerChatRoomDetail, course: ServerTravelCourse?) -> RouteEditState {
+        if detail.status == "CANCELLED" { return .tripCancelled }
+        if detail.status != "RECRUITING" { return .tripConfirmed }
+        let isHost = MoyeoCurrentUser.id == detail.hostId
+        return course?.type == "CUSTOM" && isHost ? .editable : .linkedLocked
     }
 
     static func status(from serverStatus: String) -> RecruitmentStatus {

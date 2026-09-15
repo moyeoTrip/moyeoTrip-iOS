@@ -15,6 +15,9 @@ import Foundation
 struct ServerCreateChatRoomRequest: Encodable, Equatable {
     let title: String
     let description: String?
+    /// **필수** — 서버가 `@NotNull` + `@Min(3)` 으로 검증한다. 빠뜨리면 400
+    /// 「minimumParticipants 필드는 필수입니다.」로 생성이 막힌다(2026-09-10 확인).
+    let minimumParticipants: Int
     let maxParticipants: Int
     /// `DAY_TRIP` | `OVERNIGHT`
     let tripType: String
@@ -68,22 +71,20 @@ extension ChatRoomAPIClient {
     /// 17 모집 만들기 — multipart(`request` 파트가 application/json). 응답의 `roomId` 로 15 모집 상세로 이동한다.
     ///
     /// 2026-08-26 서버 변경으로 `thumbnail` 파트가 **필수**다(없으면 400 `40041`
-    /// "채팅방 썸네일 이미지는 필수입니다"). 화면에 사진 선택 단계가 없어서,
-    /// 사진이 없을 때 쓰는 공용 플레이스홀더(16:9)를 올린다.
-    /// `thumbnail` 을 주지 않으면 공용 플레이스홀더를 만들어 올린다.
-    ///
-    /// 기본 인자 표현식으로 두지 않는다 — 기본 인자는 nonisolated 문맥에서 평가되는데
-    /// `roomThumbnail()` 은 `UIImage` 를 쓰는 MainActor 격리 함수라 경고가 난다.
+    /// "채팅방 썸네일 이미지는 필수입니다"). **호스트가 고른 사진만** 올린다 —
+    /// 예전에는 사진 고르는 단계가 없어 공용 플레이스홀더(「이미지 없음」 16:9 일러스트)를 대신 올렸고,
+    /// 그 결과 목록에 회색 자리표시자가 진짜 사진인 양 걸려 사진이 없는 방과 구분되지 않았다.
+    /// 사진이 없으면 파트를 보내지 않고 **서버가 400 으로 알려주게 둔다.**
     func create(
         request: ServerCreateChatRoomRequest,
-        thumbnail: MoyeoMultipartFile? = nil
+        thumbnail: MoyeoMultipartFile?
     ) async throws -> ServerCreateChatRoomResponse {
         try await api.sendMultipart(
             "/api/v1/chat-rooms",
             method: "POST",
             jsonPartName: "request",
             jsonPart: request,
-            file: thumbnail ?? MoyeoPlaceholderImage.roomThumbnail()
+            file: thumbnail
         )
     }
 }
@@ -153,6 +154,7 @@ enum ServerChatRoomCreateRequestBuilder {
         return ServerCreateChatRoomRequest(
             title: draft.recruitmentName,
             description: draft.note.isEmpty ? nil : draft.note,
+            minimumParticipants: max(3, draft.minimumParticipants),
             maxParticipants: draft.capacity,
             tripType: isDayTrip ? "DAY_TRIP" : "OVERNIGHT",
             startDate: startDate,
@@ -183,12 +185,15 @@ enum ServerChatRoomCreateRequestBuilder {
     ) -> ServerCreateCustomCourse? {
         var places: [ServerCreateCustomCoursePlace] = []
         for stop in draft.itinerary.sorted(by: { ($0.day, $0.order) < ($1.day, $1.order) }) {
+            // 여기까지 오기 전에 `validationError` 가 막는다 — 그래도 남으면 조용히 버리지 않고
+            // 요청 자체를 만들지 않는다. 예전에는 `continue` 로 건너뛰어 **담은 방문지가
+            // 소리 없이 빠진 코스**가 서버에 저장됐다.
             guard
                 let placeID = stop.placeID,
                 let contentID = Int64(placeID),
                 let visitTime = isoTime(from: stop.time)
             else {
-                continue
+                return nil
             }
             places.append(
                 ServerCreateCustomCoursePlace(
@@ -199,13 +204,102 @@ enum ServerChatRoomCreateRequestBuilder {
                 )
             )
         }
-        guard places.count >= 2, !tagIDs.isEmpty else { return nil }
+        // 코스 이름은 **코스 에디터에서 호스트가 적은 값**이다. 예전에는 `draft.course.title` 을 썼는데
+        // 커스텀 코스의 `draft.course` 는 늘 `.empty` 라 빈 제목이 나갔다 (IOS-F124).
+        let title = draft.customCourseTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard places.count >= 2, !tagIDs.isEmpty, !title.isEmpty else { return nil }
         return ServerCreateCustomCourse(
-            title: draft.course.title,
+            title: title,
             description: draft.note.isEmpty ? nil : draft.note,
             places: places,
             tagIds: tagIDs
         )
+    }
+
+    /// 서버로 보낼 수 없는 이유를 **한국어 한 문장**으로 돌려준다. 보낼 수 있으면 nil 이다.
+    ///
+    /// 예전에는 요청을 조립하지 못하면 조용히 `createLocalRecruitment()` 로 떨어져
+    /// **이 기기 안에만 있는 가짜 모집**이 만들어졌다 — 호스트는 모집을 연 줄 알지만
+    /// 서버에는 없고 아무도 신청할 수 없었다 (AND-85 조사 중 발견, 2026-09-13).
+    /// 안드로이드는 같은 상황에서 버튼을 잠갔고, iOS 는 만들어진 척을 했다.
+    static func validationError(for draft: RecruitmentDraft, tagIDs: [Int64]) -> String? {
+        if draft.recruitmentName.trimmingCharacters(in: .whitespaces).isEmpty { return "모집 이름을 적어 주세요." }
+        if isoDate(from: draft.schedule.startDate) == nil { return "여행 날짜를 정해 주세요." }
+        if isoDate(from: draft.deadline) == nil { return "모집 마감일을 정해 주세요." }
+        if isoTime(from: draft.meeting.meetingTime) == nil { return "집합 시간을 정해 주세요." }
+        // 서버 `ChatRoomService` 가 `recruitmentDeadlineDate <= startDate` 를 요구한다.
+        // 생성 화면에만 이 검사가 없어서 마감일을 여행 뒤로 잡아도 마지막 단계까지 통과한 뒤
+        // 서버 400 으로 튕겼다 — 모집 내용 수정 화면과 **같은 문구**로 맞춘다 (IOS-F141).
+        if let start = isoDate(from: draft.schedule.startDate),
+           let deadline = isoDate(from: draft.deadline), deadline > start {
+            return "모집 마감일은 여행 날짜보다 앞이어야 해요."
+        }
+        if let scheduleProblem = scheduleError(for: draft) { return scheduleProblem }
+        switch draft.source {
+        case .linked:
+            if draft.course.serverCourseID == nil { return "등록된 코스를 다시 골라 주세요." }
+        case .custom:
+            return customCourseError(for: draft, tagIDs: tagIDs)
+        }
+        return nil
+    }
+
+    /// 일정이 말이 되는지. 서버는 **날짜만** 보므로(`validateRoomDates` 가
+    /// `meetingDateTime.toLocalDate()` 만 비교한다) 시각의 앞뒤는 여기서 잡는다 —
+    /// 안 잡으면 「18:00 에 끝나는데 19:00 집합」 같은 모집이 그대로 열린다 (안드 AND-116).
+    private static func scheduleError(for draft: RecruitmentDraft) -> String? {
+        guard draft.schedule.kind == .dayTrip else {
+            return isoDate(from: draft.schedule.endDate) == nil ? "1박 이상이면 여행 종료 날짜를 정해 주세요." : nil
+        }
+        guard
+            let startTime = isoTime(from: draft.schedule.startTime),
+            let endTime = isoTime(from: draft.schedule.endTime)
+        else {
+            return "당일치기는 시작·종료 시각을 정해 주세요."
+        }
+        if startTime >= endTime { return "여행 종료 시각은 시작 시각보다 뒤여야 해요." }
+        if let meetingTime = isoTime(from: draft.meeting.meetingTime), meetingTime > endTime {
+            return "집합 시간이 여행 종료 시각보다 늦어요."
+        }
+        return nil
+    }
+
+    /// 직접 만든 코스가 서버 규칙을 못 맞추는 이유. 서버 `validateCustomCourseSchedule` 과 같은 규칙이다.
+    private static func customCourseError(for draft: RecruitmentDraft, tagIDs: [Int64]) -> String? {
+        let title = draft.customCourseTitle.trimmingCharacters(in: .whitespaces)
+        if title.isEmpty { return "코스 이름을 적어 주세요." }
+        // 서버 `@Size(max = 100)`. 에디터가 이미 100자에서 자르지만, 다른 경로로 들어온 초안도 막는다.
+        if title.count > 100 { return "코스 이름은 100자까지예요." }
+        if tagIDs.isEmpty { return "코스 태그를 하나 이상 골라 주세요." }
+        // 검색 결과에서 고르지 않은 방문지는 `contentId` 가 없어 서버로 보낼 수 없다.
+        let unsendable = draft.itinerary.filter { Int64($0.placeID ?? "") == nil }
+        if let first = unsendable.first {
+            return "‘\(first.name)’ 은(는) 방문지 검색에서 고른 곳이 아니라 보낼 수 없어요. 검색으로 다시 담아 주세요."
+        }
+        let dayCount = tripDayCount(for: draft)
+        let byDay = Dictionary(grouping: draft.itinerary, by: \.day)
+        for day in 1...max(dayCount, 1) {
+            let count = byDay[day]?.count ?? 0
+            if count < 2 { return "\(day)일차 방문지가 \(count)곳이에요. 일차마다 2곳 이상 담아 주세요." }
+        }
+        if let extra = byDay.keys.filter({ $0 > dayCount }).min() {
+            return "여행은 \(dayCount)일인데 코스에 \(extra)일차가 있어요. 일정이나 코스를 맞춰 주세요."
+        }
+        return nil
+    }
+
+    /// 여행 일수. 당일치기는 1일이고, 숙박은 시작·종료 날짜 사이의 날 수다(서버 `tripDays()` 와 같다).
+    static func tripDayCount(for draft: RecruitmentDraft) -> Int {
+        guard draft.schedule.kind != .dayTrip,
+              let start = isoDate(from: draft.schedule.startDate),
+              let end = isoDate(from: draft.schedule.endDate)
+        else { return 1 }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let startDate = formatter.date(from: start), let endDate = formatter.date(from: end) else { return 1 }
+        let days = Calendar(identifier: .gregorian).dateComponents([.day], from: startDate, to: endDate).day ?? 0
+        return max(1, days + 1)
     }
 
     /// 초안이 어떤 코스를 쓰는지 판단한다. 서버 근거(등록 코스 ID / 서버 방문지 ID + 태그 ID)가

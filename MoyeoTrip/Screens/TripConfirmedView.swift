@@ -9,6 +9,11 @@ struct TripConfirmedView: View {
   var participants: [ServerChatRoomDetail.ServerParticipant] = []
   var participantNicknamesByUserID: [Int64: String] = [:]
   @State private var selectedThread: ChatThread?
+  /// 20-5(여행 당일)로 보낼지 20(채팅방)으로 보낼지의 **유일한 근거**.
+  /// `GET /chat-rooms/{roomId}/roadmap/current` 의 `active` 가 참일 때만 여행 당일 화면이 의미가 있다 —
+  /// 서버가 진행 상황을 주지 않는 날에 20-5 를 열면 「오늘의 일정」이 빈 채로 떴다.
+  /// 예전에는 날짜와 무관하게 **늘** 20-5 를 열었다 (안드 AND-120 교차).
+  @State private var roadmapIsActive = false
 
   var body: some View {
     ZStack(alignment: .top) {
@@ -37,7 +42,6 @@ struct TripConfirmedView: View {
             participantNicknamesByUserID: participantNicknamesByUserID
           )
             .padding(.top, 20)
-          shareCard
             .padding(.top, 14)
           Text("확정 이후에는 경로가 잠겨요. 변경이 필요하면 채팅방 공지로 알려주세요.")
             .font(MoyeoTypography.font(size: 11, relativeTo: .caption2))
@@ -59,8 +63,28 @@ struct TripConfirmedView: View {
     .navigationTitle(trip.title)
     .navigationBarTitleDisplayMode(.inline)
     .navigationDestination(item: $selectedThread) { selectedThread in
-      TripDayView(thread: selectedThread)
+      // CTA 라벨이 「채팅방으로 가기」다 — 기본은 채팅방(20)이고,
+      // 서버가 오늘 일정을 진행 중이라고 말할 때만 20-5 로 보낸다.
+      if roadmapIsActive {
+        TripDayView(thread: selectedThread)
+      } else {
+        ChatRoomView(thread: selectedThread) { message in
+          onSendChatMessage(selectedThread, message)
+        }
+      }
     }
+    .task(id: thread?.serverRoomID) { await loadRoadmapActive() }
+  }
+
+  /// 로드맵이 진행 중인지 서버에 묻는다. 실패하면 **여행 당일로 보내지 않는다** —
+  /// 근거 없이 20-5 를 여는 것이 지금까지의 결함이었다.
+  private func loadRoadmapActive() async {
+    guard let roomID = thread?.serverRoomID else {
+      roadmapIsActive = false
+      return
+    }
+    let roadmap = try? await ChatRoomContentAPIClient.shared.currentRoadmap(roomID: roomID)
+    roadmapIsActive = roadmap?.active == true && !(roadmap?.places.isEmpty ?? true)
   }
 
   private var confirmedHero: some View {
@@ -99,38 +123,9 @@ struct TripConfirmedView: View {
     .lineSpacing(4)
   }
 
-  private var shareCard: some View {
-    Button {
-      // The image export service will attach here when the share contract is available.
-    } label: {
-      HStack(spacing: 11) {
-        Image(systemName: "camera.fill")
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MoyeoTheme.text700)
-          .frame(width: 38, height: 38)
-          .background(MoyeoTheme.subtleBackground)
-          .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        Text("확정 카드를 이미지로 저장해 공유할 수 있어요")
-          .font(MoyeoTypography.font(size: 12, relativeTo: .caption))
-          .foregroundStyle(MoyeoTheme.text700)
-          .multilineTextAlignment(.leading)
-        Spacer(minLength: 4)
-        Image(systemName: "square.and.arrow.up")
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(MoyeoTheme.muted)
-      }
-      .padding(13)
-      .background(MoyeoTheme.card)
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(MoyeoTheme.softLine, lineWidth: 1)
-      }
-    }
-    .buttonStyle(.plain)
-    .contentShape(Rectangle())
-    .accessibilityIdentifier("tripConfirmed.share")
-  }
+  // 결정 ⑬ — 「확정 카드를 이미지로 저장해 공유할 수 있어요」 카드를 뺐다.
+  // 누르면 아무 일도 하지 않는 빈 클로저였고(이미지 내보내기가 붙은 적이 없다),
+  // 공유 진입점 자체를 없애기로 했다. 없는 기능을 있는 것처럼 보이는 줄을 남기지 않는다.
 
   private var bottomAction: some View {
     Button {

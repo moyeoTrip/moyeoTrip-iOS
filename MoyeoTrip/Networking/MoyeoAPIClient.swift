@@ -30,6 +30,38 @@ enum MoyeoServerSync {
     }
 }
 
+/// 서버가 오류 본문을 주지 않았을 때 상태 코드로 고르는 문구.
+///
+/// **429 와 403 은 사용자가 해야 할 일이 정반대다** — 429 는 기다리면 되고,
+/// 403 은 다시 눌러도 달라지지 않는다. 예전에는 둘 다
+/// 「요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요.」 하나였다:
+/// 403 을 받은 사람에게 **소용없는 재시도를 권하고 있었다** (웹 교차 발견 2026-09-14).
+///
+/// **서버가 한국어 까닭을 주면 그것이 우선이다** — 여기 문구로 덮지 않는다.
+/// 503·404 등 나머지는 전부 가르지 않고 지금 문구 그대로 둔다.
+enum MoyeoAPIStatusMessage {
+    static let forbidden = "이 작업을 할 권한이 없어요. 다시 시도해도 달라지지 않아요."
+    static let tooManyRequests = "요청이 너무 잦아요. 잠시 뒤 다시 시도해 주세요."
+    static let generic = "요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
+
+    static func fallback(for statusCode: Int) -> String {
+        switch statusCode {
+        case 403: return forbidden
+        case 429: return tooManyRequests
+        default: return generic
+        }
+    }
+
+    /// 서버가 준 까닭이 아니라 **앱이 붙인 기본 문구**인가.
+    ///
+    /// 화면이 자기 맥락에 맞는 더 좋은 문구를 갖고 있을 때(예: 「이 채팅방을 더 이상 볼 수 없어요.」)
+    /// 일반 문구를 덮어쓸지 판단하는 데 쓴다.
+    static func isGenerated(_ message: String) -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [forbidden, tooManyRequests, generic].contains(trimmed)
+    }
+}
+
 enum MoyeoAPIError: LocalizedError, Equatable {
     case missingSession
     case transport(String)
@@ -43,7 +75,11 @@ enum MoyeoAPIError: LocalizedError, Equatable {
         case .missingSession:
             return "로그인 정보가 없어요. 다시 로그인해주세요."
         case .transport:
-            return "서버에 연결하지 못했어요. 네트워크 상태를 확인해주세요."
+            // 통신 실패 문구는 앱에 **하나**다 — 웹·안드와 같은 문장을 쓴다
+            // (`MoyeoUserFacingError.network`). 예전에는 이 자리와 `AuthClientError` 가
+            // 「서버에 연결하지 못했어요…」를, 화면 공통 경로가 다른 문장을 써서
+            // 같은 상황에 두 가지 말이 나왔다.
+            return MoyeoUserFacingError.network
         case .invalidResponse:
             return "서버 응답을 이해하지 못했어요. 잠시 후 다시 시도해주세요."
         case .server(_, _, let message):
@@ -75,8 +111,44 @@ enum MoyeoServerErrorCode {
     /// 권한 오류가 아니다 — 화면은 오류로 그리지 말고 해당 섹션을 숨긴다.
     nonisolated static let tripNotCompleted = 40915
     /// 같은 피드를 이미 신고했다 (409). **오류가 아니다** — 30-2 는 붉은 오류가 아니라
-    /// "이미 신고한 피드예요" 안내로 그린다 (정본 `REPORT-CANON.md` §2, 실서버 확인).
+    /// "이미 신고한 피드예요." 안내로 그린다 (정본 `REPORT-CANON.md` §2, 실서버 확인).
     nonisolated static let feedAlreadyReported = 40917
+
+    // MARK: 신고 오류 (2026-09-14 실서버 `ErrorCode.kt` 확인)
+    //
+    // 대상마다 코드가 다르다 — 상태 코드만 보면 "본인 것"과 "없는 것"을 구분하지 못해
+    // 전부 같은 붉은 토스트가 됐다. 화면은 아래 코드로 갈라 각각 다른 한국어를 적는다.
+
+    /// 본인이 쓴 피드는 신고할 수 없음 (400).
+    ///
+    /// 30-2 는 보통 자기 피드에 `...` 를 두지 않아 닿지 않지만, 서버가 작성자 id 를 주지 않는
+    /// 경로(`serverAuthorID == nil`)에서는 버튼이 남아 실제로 닿는다 — 문구를 정본에 맞춰 둔다.
+    nonisolated static let feedReportSelf = 40039
+    /// 본인이 개설한 모집은 신고할 수 없음 (400)
+    nonisolated static let roomReportSelf = 40044
+    /// 자기 자신은 신고할 수 없음 (400)
+    nonisolated static let memberReportSelf = 40045
+    /// 본인이 작성한 댓글은 신고할 수 없음 (400)
+    nonisolated static let commentReportSelf = 40046
+    /// 이미 신고한 모집 (409). 오류가 아니라 안내다.
+    nonisolated static let roomAlreadyReported = 40920
+    /// 이미 신고한 사용자 (409). 오류가 아니라 안내다.
+    nonisolated static let memberAlreadyReported = 40921
+    /// 이미 신고한 댓글 (409). 오류가 아니라 안내다.
+    nonisolated static let commentAlreadyReported = 40922
+
+    // MARK: 동시 변경 · 확정 조건 (BE-30 · BE-31)
+
+    /// 내가 읽은 뒤 남이 먼저 공지를 고쳤다 (409). **오류가 아니라 다시 보라는 안내다** —
+    /// 화면은 최신 내용을 입력칸에 올려 두고 덮어쓰기를 시도하지 않는다 (TC NOTICE-021).
+    nonisolated static let noticeUpdateConflict = 40923
+    /// 참가자 수가 `minimumParticipants` 에 못 미쳐 확정할 수 없다 (409).
+    /// 화면은 CTA 를 미리 잠그지만, 잠금 이후 누가 나가면 여기로 온다 (TC HOST-012·013).
+    nonisolated static let minimumParticipantsNotMet = 40924
+    /// 피드 댓글을 찾을 수 없음 (404)
+    nonisolated static let feedCommentNotFound = 40422
+    /// 이 피드는 현재 사용자에게 공개되지 않음 (403)
+    nonisolated static let feedNotVisible = 40306
     // 가입 게이트 코드(40902 · 40918 · 40919)는 `MoyeoSignupGate` 에 모아 뒀다.
 }
 
@@ -162,16 +234,29 @@ final class MoyeoAPIClient: @unchecked Sendable {
         _ = try await request(path: path, method: method, query: [], bodyData: bodyData)
     }
 
-    /// `multipart/form-data` 전송. JSON 파트는 `Content-Type: application/json` 을 달아 보낸다.
-    /// `POST /chat-rooms` 가 `request` 파트를 그렇게 요구하고, 2026-08-26 부터 `thumbnail`
-    /// 파일 파트도 **필수**다(없으면 400 `40041`). 그래서 `file` 은 선택 인자가 아니라 사실상 항상 넣는다.
-    func sendMultipart<Body: Encodable, Response: Decodable>(
+    /// 본문을 돌려주지 않는 `multipart/form-data` 전송.
+    ///
+    /// `PATCH /chat-rooms/{roomId}` 는 **204 No Content** 다. 빈 본문을 굳이 디코딩하면
+    /// 저장은 됐는데 화면에는 「서버 응답을 이해하지 못했어요」가 뜬다 — 그러면 사용자가
+    /// 다시 눌러 시스템 메시지가 겹쳐 쌓인다 (IOS-F112, 2026-09-12).
+    func sendMultipartVoid<Body: Encodable>(
         _ path: String,
         method: String,
         jsonPartName: String,
         jsonPart: Body,
         file: MoyeoMultipartFile? = nil
-    ) async throws -> Response {
+    ) async throws {
+        let (body, contentType) = try multipartBody(jsonPartName: jsonPartName, jsonPart: jsonPart, file: file)
+        _ = try await request(path: path, method: method, query: [], bodyData: body, contentType: contentType)
+    }
+
+    /// JSON 파트 + 선택 파일 하나짜리 본문을 만든다. 보내고 받는 쪽과 만드는 쪽을 나눠
+    /// 응답을 읽는 판(`sendMultipart`)과 읽지 않는 판(`sendMultipartVoid`)이 같은 본문을 쓰게 한다.
+    private func multipartBody<Body: Encodable>(
+        jsonPartName: String,
+        jsonPart: Body,
+        file: MoyeoMultipartFile?
+    ) throws -> (Data, String) {
         let boundary = "moyeo.\(UUID().uuidString)"
         var body = Data()
         body.append(Data("--\(boundary)\r\n".utf8))
@@ -185,13 +270,26 @@ final class MoyeoAPIClient: @unchecked Sendable {
             body.append(file.data)
         }
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        return (body, "multipart/form-data; boundary=\(boundary)")
+    }
 
+    /// `multipart/form-data` 전송. JSON 파트는 `Content-Type: application/json` 을 달아 보낸다.
+    /// `POST /chat-rooms` 가 `request` 파트를 그렇게 요구하고, 2026-08-26 부터 `thumbnail`
+    /// 파일 파트도 **필수**다(없으면 400 `40041`). 그래서 `file` 은 선택 인자가 아니라 사실상 항상 넣는다.
+    func sendMultipart<Body: Encodable, Response: Decodable>(
+        _ path: String,
+        method: String,
+        jsonPartName: String,
+        jsonPart: Body,
+        file: MoyeoMultipartFile? = nil
+    ) async throws -> Response {
+        let (body, contentType) = try multipartBody(jsonPartName: jsonPartName, jsonPart: jsonPart, file: file)
         let data = try await request(
             path: path,
             method: method,
             query: [],
             bodyData: body,
-            contentType: "multipart/form-data; boundary=\(boundary)"
+            contentType: contentType
         )
         return try decode(data)
     }
@@ -318,14 +416,23 @@ final class MoyeoAPIClient: @unchecked Sendable {
             guard !loaded.refreshToken.isEmpty else {
                 throw MoyeoAPIError.server(statusCode: statusCode, code: code, message: message)
             }
-            let refreshed: AuthSignupResponse
+            // 재발급은 **동시에 한 번만** 나간다 (AUTH-032). 이미 진행 중이면 그 결과를 기다렸다가
+            // 새 토큰으로 재시도한다. 실패했을 때의 처리(`missingSession` → 로그아웃)는 그대로다.
+            let refreshedTokens: AuthTokens
             do {
-                refreshed = try await authClient.refreshSession(refreshToken: loaded.refreshToken)
+                refreshedTokens = try await MoyeoTokenRefreshCoordinator.shared.tokens(
+                    replacing: loaded.accessToken,
+                    current: { [sessionStore] in (try? sessionStore.load()) ?? nil },
+                    refresh: { [authClient, sessionStore] refreshToken in
+                        let refreshed = try await authClient.refreshSession(refreshToken: refreshToken)
+                        try? sessionStore.save(refreshed.tokens)
+                        return refreshed.tokens
+                    }
+                )
             } catch {
                 throw MoyeoAPIError.missingSession
             }
-            try? sessionStore.save(refreshed.tokens)
-            return try await perform(call, accessToken: refreshed.tokens.accessToken)
+            return try await perform(call, accessToken: refreshedTokens.accessToken)
         }
     }
 
@@ -365,10 +472,25 @@ final class MoyeoAPIClient: @unchecked Sendable {
             if let step = MoyeoSignupGate.step(statusCode: httpResponse.statusCode, code: backendError?.code) {
                 MoyeoSignupGate.announce(step)
             }
+            // 서버 점검(503 · 50300)이면 섹션별 실패로 접지 않고 38 점검 안내 화면으로 옮긴다 (OFF-013).
+            // 웹과 같은 규칙이다 — 게이트웨이가 가로챈 503 은 본문이 없어 status 를 먼저 본다.
+            if MoyeoServerMaintenance.isMaintenance(
+                statusCode: httpResponse.statusCode,
+                code: backendError?.code
+            ) {
+                MoyeoServerMaintenance.announce()
+            }
+            // 서버가 준 한국어 까닭이 **언제나 우선**이다. 본문이 없을 때만 상태 코드로 고른다 —
+            // 이 자리가 상태 코드와 무관하게 한국어 기본 문구를 붙이고 있었고,
+            // 그 문구가 한국어라서 `MoyeoUserFacingError` 의 「서버 문구는 그대로 쓴다」 분기를
+            // 그대로 통과했다. **화면 쪽만 고쳤다면 예전 문구가 그대로 나왔을 자리다.**
+            let serverReason = backendError?.errorMessage.trimmingCharacters(in: .whitespacesAndNewlines)
             throw MoyeoAPIError.server(
                 statusCode: httpResponse.statusCode,
                 code: backendError?.code,
-                message: backendError?.errorMessage ?? "요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
+                message: serverReason?.isEmpty == false
+                    ? serverReason!
+                    : MoyeoAPIStatusMessage.fallback(for: httpResponse.statusCode)
             )
         }
         return data

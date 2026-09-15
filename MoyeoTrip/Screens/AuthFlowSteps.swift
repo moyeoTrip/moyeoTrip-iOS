@@ -154,30 +154,17 @@ struct AuthLoginView: View {
 struct AuthNicknameView: View {
     @Binding var nickname: String
     let continueAction: (String, String) -> Void
-    @StateObject private var viewModel: AuthNicknameViewModel
-
-    init(nickname: Binding<String>, continueAction: @escaping (String, String) -> Void) {
-        _nickname = nickname
-        _viewModel = StateObject(
-            wrappedValue: AuthNicknameViewModel(selectedNickname: nickname.wrappedValue)
-        )
-        self.continueAction = continueAction
-    }
+    /// 화면 밖(`AuthFlowViewModel`)이 소유한다 — 뒤로 왔다가 다시 들어와도
+    /// 마지막으로 받은 후보 묶음과 `selectionToken` 이 그대로여야 한다 (IOS-F57).
+    @ObservedObject private var viewModel: AuthNicknameViewModel
 
     init(
         nickname: Binding<String>,
-        provider: AuthNicknameCandidateProviding,
-        initialResponse: AuthNicknameCandidatesResponse? = nil,
+        viewModel: AuthNicknameViewModel,
         continueAction: @escaping (String, String) -> Void
     ) {
         _nickname = nickname
-        _viewModel = StateObject(
-            wrappedValue: AuthNicknameViewModel(
-                provider: provider,
-                initialResponse: initialResponse ?? AuthNicknameViewModel.initialResponse,
-                selectedNickname: nickname.wrappedValue
-            )
-        )
+        self.viewModel = viewModel
         self.continueAction = continueAction
     }
 
@@ -398,5 +385,48 @@ struct AuthBasicsView: View {
                 .disabled(!canContinue)
             }
         }
+    }
+}
+
+/// 저장된 세션이 있는데 **통신이 안 돼** 복원을 끝내지 못했을 때 (IOS 오프라인 회차 · 안드 AND-68 과 같은 결함).
+///
+/// 예전에는 이 상태가 그냥 로그인 화면(4/8)이라 이미 가입한 사람이 **로그아웃된 줄 알았다.**
+/// 안드로이드는 「로그아웃된 건 아니에요…」를 먼저 말한다(`AuthFlowScreen.kt` `SessionRestoreFailedStep`).
+/// 세 플랫폼의 말이 같아야 해서 iOS 도 같은 문장·같은 두 갈래(다시 시도 · 다른 계정)를 둔다.
+struct AuthSessionRestoreFailedView: View {
+    let message: String?
+    let isRetrying: Bool
+    let retryAction: () -> Void
+    let useAnotherAccountAction: () -> Void
+
+    var body: some View {
+        AuthStepContainer(
+            title: "로그인 정보를 불러오지 못했어요",
+            // 로그아웃된 것이 아니라는 점을 먼저 말한다 — 다시 가입해야 하나 싶게 두지 않는다.
+            subtitle: "로그아웃된 건 아니에요. \(MoyeoUserFacingError.network)"
+        ) {
+            // 서버가 준 사유가 따로 있을 때만 덧붙인다. 통신 실패 문구는 위 줄과 같은 말이라
+            // 그대로 두면 같은 문장이 두 번 보인다.
+            if let message, message != MoyeoUserFacingError.network {
+                AuthInlineError(message: message, accessibilityIdentifier: "auth.sessionRestore.error")
+            }
+        } footer: {
+            VStack(spacing: 10) {
+                AuthPrimaryButton(
+                    title: isRetrying ? "다시 시도하는 중..." : "다시 시도",
+                    accessibilityIdentifier: "auth.sessionRestore.retry",
+                    action: retryAction
+                )
+                .disabled(isRetrying)
+
+                AuthSecondaryButton(
+                    title: "다른 계정으로 시작하기",
+                    accessibilityIdentifier: "auth.sessionRestore.switch",
+                    action: useAnotherAccountAction
+                )
+                .disabled(isRetrying)
+            }
+        }
+        .accessibilityIdentifier("auth.sessionRestore")
     }
 }

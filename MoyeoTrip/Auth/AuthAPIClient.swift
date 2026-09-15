@@ -11,7 +11,8 @@ protocol AuthAPIClientProtocol: AuthNicknameCandidateProviding {
     func linkedProviders(accessToken: String) async throws -> AuthLinkedProvidersResponse
     func linkProvider(idToken: String, fcmToken: String?, accessToken: String) async throws -> AuthLinkedProvidersResponse
 
-    func withdraw(accessToken: String) async throws
+    /// 사유는 선택이다 — `nil` 이면 본문 없이 보낸다 (BE `WithdrawRequest`).
+    func withdraw(accessToken: String, body: ServerWithdrawRequest?) async throws
 
     func profileImages(accessToken: String) async throws -> AuthProfileImagesResponse
     func generateProfileImage(accessToken: String) async throws -> AuthProfileImageGenerationResponse
@@ -108,11 +109,14 @@ final class AuthAPIClient: AuthAPIClientProtocol {
         )
     }
 
-    func withdraw(accessToken: String) async throws {
+    /// 탈퇴. **사유는 선택**이다 — 고르지 않았으면 본문 없이 보낸다(서버가 그렇게 받는다).
+    /// 고른 사유는 `{reason, reasonDetail}` 로 함께 보낸다 (BE `WithdrawRequest`).
+    func withdraw(accessToken: String, body: ServerWithdrawRequest? = nil) async throws {
         try await sendWithoutResponse(
             path: "/api/v1/users/me",
             method: "DELETE",
-            accessToken: accessToken
+            accessToken: accessToken,
+            body: body
         )
     }
 
@@ -180,10 +184,11 @@ final class AuthAPIClient: AuthAPIClientProtocol {
         )
     }
 
-    private func sendWithoutResponse(
+    private func sendWithoutResponse<Body: Encodable>(
         path: String,
         method: String,
-        accessToken: String? = nil
+        accessToken: String? = nil,
+        body: Body? = nil
     ) async throws {
         let url = configuration.baseURL.appending(path: path)
         var request = URLRequest(url: url)
@@ -192,6 +197,10 @@ final class AuthAPIClient: AuthAPIClientProtocol {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let accessToken {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(body)
         }
 
         let data: Data
@@ -281,6 +290,10 @@ final class AuthAPIClient: AuthAPIClientProtocol {
         let backendError = try? decoder.decode(AuthBackendErrorResponse.self, from: data)
         if let step = MoyeoSignupGate.step(statusCode: statusCode, code: backendError?.code) {
             MoyeoSignupGate.announce(step)
+        }
+        // 인증 계열 API 도 점검 중에는 503 을 받는다 — 같은 한 곳에서 알린다 (OFF-013).
+        if MoyeoServerMaintenance.isMaintenance(statusCode: statusCode, code: backendError?.code) {
+            MoyeoServerMaintenance.announce()
         }
         return AuthClientError.server(
             statusCode: statusCode,

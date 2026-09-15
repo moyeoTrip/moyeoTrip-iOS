@@ -15,6 +15,25 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MoyeoTripTests {
+    /// 서버 좌표 유효성 — `0,0`·지구 밖 값은 **좌표가 아니다**.
+    ///
+    /// 응답 주입으로 확인한 실제 증상을 시험으로 굳힌다 (TC SEARCH-016, 2026-09-15):
+    /// 거르지 않으면 11 지도 탐색이 서해·니가타 앞바다를 비춘다.
+    @Test func mapCoordinateRejectsUnusableServerValues() {
+        #expect(MoyeoMapCoordinate(latitude: nil, longitude: nil) == nil)
+        #expect(MoyeoMapCoordinate(latitude: 36.4, longitude: nil) == nil)
+        // 좌표 미입력의 흔한 표현이다.
+        #expect(MoyeoMapCoordinate(latitude: 0, longitude: 0) == nil)
+        // 지구 밖.
+        #expect(MoyeoMapCoordinate(latitude: 60.0, longitude: 200.0) == nil)
+        #expect(MoyeoMapCoordinate(latitude: 91.0, longitude: 129.0) == nil)
+        #expect(MoyeoMapCoordinate(latitude: .nan, longitude: 129.0) == nil)
+
+        // 진짜 좌표는 그대로 통과한다 — 경북(대전사)과, 경도만 0 인 정상 값.
+        #expect(MoyeoMapCoordinate(latitude: 36.3965927808, longitude: 129.145407486) != nil)
+        #expect(MoyeoMapCoordinate(latitude: 51.4779, longitude: 0) != nil)
+    }
+
     @Test func weatherHeroPolicyChoosesSafeContentForRain() {
         let heavyRain = WeatherHeroPolicy.content(for: .heavyRain)
         let sunny = WeatherHeroPolicy.content(for: .sunny)
@@ -23,16 +42,18 @@ struct MoyeoTripTests {
 
         #expect(WeatherHeroPolicy.defaultContent == sunny)
         #expect(sunny.badge == "추천")
-        #expect(sunny.place == "경주 첨성대")
+        // 날씨 카드에는 **랜드마크 이름이 없다** — 지점은 서버(`locationName`)만 말한다.
+        // 예전에는 `place`(경주 첨성대 …)를 들고 있다가 서버 지점이 없을 때 그걸 그렸다
+        // (NO-MOCK-CANON R1). 필드를 지웠으므로 이 단언은 "없어야 통과" 한다.
+        #expect(Mirror(reflecting: sunny).children.allSatisfy { $0.label != "place" })
+        #expect(Mirror(reflecting: sunny).children.allSatisfy { $0.label != "highlights" })
         #expect(heavyRain.badge == "대체 추천")
-        #expect(heavyRain.place == "경주 월정교")
         #expect(heavyRain.imageAssetName == "weather_heavy_rain_woljeonggyo")
         #expect(heavyRain.imageAsset.lightFileName == "weather-heavy-rain-woljeonggyo.heic")
         #expect(heavyRain.imageAsset.darkFileName == "weather-heavy-rain-woljeonggyo-night.heic")
         #expect(heavyRain.copy.contains("실내형 코스"))
         #expect(rain.state == .caution)
         #expect(rain.badge == "주의")
-        #expect(rain.place == "안동 하회마을")
         #expect(rain.imageAssetName == "weather_rain_hahoe")
         #expect(dust.state == .blocked)
         #expect(dust.badge == "대체 추천")
@@ -987,7 +1008,10 @@ extension MoyeoTripTests {
     @Test func changeLogDirectLaunchKeysResolveDeterministically() {
         let keys = [
             "onb-1", "onb-2", "onb-3", "login", "nickname", "profile-basic", "profile-image", "terms",
-            "place-search", "place-detail", "terms-detail", "terms-privacy", "terms-location",
+            "place-search", "place-detail", "terms-detail", "terms-privacy",
+            // 설정 › 개인정보 **처리방침**은 가입 동의서와 다른 문서다 (QA BE-03).
+            "privacy-settings", "marketing-settings",
+            // `terms-location` 은 BE-04 결정(B안)으로 없앴다 — 열 화면 자체가 없다.
             "terms-marketing", "terms-settings", "create-detail", "create-people", "create-summary",
             "create-summary-custom"
         ]
@@ -1100,14 +1124,75 @@ extension MoyeoTripTests {
         ])
     }
 
-    @Test func changeLogLegalDocumentsKeepRequiredFlagsAndVersions() {
-        #expect(LegalDocumentKind.service.content.isRequired)
-        #expect(LegalDocumentKind.service.content.version == "v1.2")
-        #expect(LegalDocumentKind.privacy.content.isRequired)
-        #expect(LegalDocumentKind.privacy.content.version == "v1.4")
-        #expect(!LegalDocumentKind.location.content.isRequired)
-        #expect(!LegalDocumentKind.marketing.content.isRequired)
-        #expect(LegalDocumentKind.allCases.allSatisfy { !$0.content.sections.isEmpty })
+    /// 약관 **종류**만 앱이 알고, 본문·제목·버전·필수 여부는 서버가 준다.
+    /// 예전에는 이 테스트가 번들 사본의 `version == "v1.4"` 를 세고 있었다 —
+    /// 사본이 서버 원장과 다른 말을 해도 테스트는 초록이었다.
+    @Test func legalDocumentKindsMapToServerCodes() {
+        // 종류는 서버 `AgreementTermCode` 와 1:1 이어야 한다. 처리방침(고지)과
+        // 수집·이용 동의서(동의 대상)는 **다른 문서**다 — 이 둘을 섞은 것이 QA BE-03 이었다.
+        #expect(LegalDocumentKind.allCases.count == 4)
+        #expect(Set(LegalDocumentKind.allCases.map(\.serverCode)) == [
+            "SERVICE", "PRIVACY_COLLECTION", "PRIVACY_POLICY", "MARKETING"
+        ])
+        #expect(LegalDocumentKind.privacyPolicy != LegalDocumentKind.privacyCollection)
+        // 위치정보 약관은 BE-04 결정(B안)으로 없앴다 — 서버 `/terms` 도 주지 않는다.
+        #expect(LegalDocumentKind(rawValue: "location") == nil)
+        #expect(LegalDocumentKind(rawValue: "LOCATION") == nil)
+        // 화면 이름은 본문을 받기 전에만 쓰는 네비게이션 라벨이다 — 비어 있으면 헤더가 빈다.
+        #expect(LegalDocumentKind.allCases.allSatisfy { !$0.screenLabel.isEmpty })
+    }
+
+    /// 설정 화면은 `termId` 가 아니라 **종류(code)** 로 현재 판본을 받아야 한다.
+    /// `termId` 는 판본이 바뀔 때마다 새로 발급되므로 종류를 가리킬 수 없고,
+    /// 제목 문자열 매칭은 처리방침 자리에 가입 동의서를 열었다 (QA BE-03).
+    ///
+    /// **이 계약은 실서버로 확인한 것이 아니다** — `/terms/latest/{code}` 는 아직 배포 전이라
+    /// 실기기로는 실패 경로만 볼 수 있다. 성공 경로는 여기서만 고정된다.
+    @Test func settingsTermsUseLatestByCodeEndpoint() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AuthURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        var requestedPaths: [String] = []
+
+        AuthURLProtocolStub.handler = { request in
+            #expect(request.httpMethod == "GET")
+            // 약관은 공개 엔드포인트다 — 가입 중(세션 없음)에도 본문을 받아야 한다.
+            #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+            requestedPaths.append(request.url?.path ?? "")
+            let body = """
+            {"termId": 7, "code": "PRIVACY_POLICY", "title": "[안내] 개인정보 처리방침", \
+            "required": false, "version": "2026.09.14", \
+            "content": "# 개인정보 처리방침\\n\\n| 구분 | 항목 |\\n| --- | --- |\\n| 필수 | 이메일 |"}
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+        defer { AuthURLProtocolStub.handler = nil }
+
+        let api = MoyeoAPIClient(
+            configuration: AuthAPIConfiguration(baseURL: URL(string: "https://api.example.test")!),
+            session: session,
+            sessionStore: InMemoryAuthSessionStore()
+        )
+        let detail = try await TermsAPIClient(api: api)
+            .latestTerm(code: LegalDocumentKind.privacyPolicy.serverCode)
+
+        #expect(requestedPaths == ["/api/v1/terms/latest/PRIVACY_POLICY"])
+        #expect(detail.code == "PRIVACY_POLICY")
+        #expect(detail.title == "[안내] 개인정보 처리방침")
+        #expect(detail.version == "2026.09.14")
+        #expect(!detail.required)
+        // 서버 본문에는 표가 들어 있다 — 가입 약관 화면과 같은 렌더러가 표로 인식해야 한다.
+        // 그대로 이으면 `| --- |` 구분선이 본문에 노출된다.
+        #expect(MoyeoMarkdownParser.blocks(from: detail.content).contains { block in
+            if case .table = block { return true }
+            return false
+        })
     }
 
     @Test func placeDetailsExposeMenuImagesOnlyForRestaurants() throws {
@@ -1231,6 +1316,8 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
     var capturedRefreshToken: String?
     var capturedSelectedProfileImageID: Int64?
     var capturedWithdrawAccessTokens: [String] = []
+    /// 탈퇴에 함께 실려 간 사유. 안 골랐으면 nil 이다 (TC SET-039).
+    var capturedWithdrawBodies: [ServerWithdrawRequest?] = []
     var capturedLinkedProviderAccessTokens: [String] = []
     var capturedLinkedProviderIDTokens: [String] = []
     var linkedProviderErrors: [Error] = []
@@ -1309,8 +1396,9 @@ private final class AuthFlowTestAPIClient: AuthAPIClientProtocol {
         return AuthLinkedProvidersResponse(providers: [.kakao, provider(from: idToken)])
     }
 
-    func withdraw(accessToken: String) async throws {
+    func withdraw(accessToken: String, body: ServerWithdrawRequest?) async throws {
         capturedWithdrawAccessTokens.append(accessToken)
+        capturedWithdrawBodies.append(body)
         if !withdrawErrors.isEmpty {
             throw withdrawErrors.removeFirst()
         }
@@ -1446,5 +1534,27 @@ struct EmailCredentialsPolicyTests {
         // 최소 길이 6자
         #expect(!EmailCredentialsPolicy.canSubmit(email: "moyeo@example.com", password: "12345"))
         #expect(EmailCredentialsPolicy.canSubmit(email: "moyeo@example.com", password: "123456"))
+    }
+
+    /// 예전 규칙은 **`@` 포함**이 전부라 아래가 모두 통과했다 (IOS-F02·F55).
+    /// 이 테스트가 그 느슨한 규칙을 고정하고 있었다 — 규칙과 함께 고쳤다.
+    @Test func emailPolicyRejectsMalformedAddresses() {
+        for invalid in [
+            "@", "a@", "@b", "a@b", "a@b.c", "a@@b.com", "a b@example.com",
+            "a@example..com", "a@.example.com", "a@example.com.", ".a@example.com",
+            " a@example.com", "a@example.com "
+        ] {
+            #expect(!EmailCredentialsPolicy.isValidEmail(invalid), "통과하면 안 된다: \(invalid)")
+        }
+    }
+
+    /// 실제로 쓰이는 주소를 막지 않는다 — 너무 엄격한 쪽도 결함이다.
+    @Test func emailPolicyAcceptsRealAddresses() {
+        for valid in [
+            "moyeo@example.com", "claude.qa02@example.com", "a+tag@sub.example.co.kr",
+            "user_name-1@example.io", "x@y.dev"
+        ] {
+            #expect(EmailCredentialsPolicy.isValidEmail(valid), "막으면 안 된다: \(valid)")
+        }
     }
 }

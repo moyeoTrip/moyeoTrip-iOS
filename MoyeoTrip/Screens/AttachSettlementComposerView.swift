@@ -25,8 +25,30 @@ struct AttachSettlementComposerView: View {
     private static let memoLimit = 1000
     private static let peopleRange = 1...50
 
+    /// 총 금액은 **9자리까지만** 센다. 더 길면 `Int` 변환이 nil 이 되어 조용히 0원이 됐다.
+    private static let totalDigitLimit = 9
+
+    private var totalDigits: String {
+        String(totalText.filter(\.isNumber).prefix(Self.totalDigitLimit))
+    }
+
     private var total: Int {
-        Int(totalText.filter(\.isNumber)) ?? 0
+        Int(totalDigits) ?? 0
+    }
+
+    /// 입력한 글자와 계산에 쓴 숫자가 다르면 **무엇을 뺐는지 칸 아래에 적는다.**
+    /// 예전에는 「1,234.56」을 붙여 넣으면 화면은 그대로 두고 계산만 `123456원` 으로
+    /// 말없이 바뀌어, 보이는 총액과 1인당 금액이 어긋났다 (IOS-F72).
+    private var totalAdjustmentNotice: String? {
+        let typed = totalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return nil }
+        let digits = totalDigits
+        guard digits.isEmpty == false else { return "숫자를 찾지 못했어요. 총 금액을 숫자로 적어주세요." }
+        guard digits != typed else { return nil }
+        if typed.filter(\.isNumber).count > Self.totalDigitLimit {
+            return "\(Self.totalDigitLimit)자리까지만 셀 수 있어요 — \(Self.won(total))원으로 봤어요."
+        }
+        return "숫자만 세서 \(Self.won(total))원으로 봤어요. 쉼표·소수점·단위는 빼고 계산해요."
     }
 
     /// 1인당 금액 — 10원 단위 올림 (R4).
@@ -50,7 +72,7 @@ struct AttachSettlementComposerView: View {
             identifier: "attachSettlement",
             onSend: send
         ) {
-            AttachFieldLabel(text: "무엇을 정산하나요", isRequired: true)
+            AttachFieldLabel(text: "무엇을 정산하나요", isRequired: true, isFirst: true)
             AttachTextField(
                 placeholder: "예: 점심 · 달기약수탕 백숙",
                 text: $subject,
@@ -63,37 +85,52 @@ struct AttachSettlementComposerView: View {
             AttachFieldLabel(text: "남길 말 (선택)").padding(.top, 18)
             noteEditor
 
+            // 안내 한 줄은 **memo 본문에 넣지 않는다** — 서버로 나가는 값은 그대로 두고 화면에서만 읽힌다.
+            // 여기는 메모를 **올리는 사람** 화면이라 신고 버튼을 두지 않는다 — 자기 자신은 신고할 수
+            // 없다(서버 400 `40045`). 신고 진입점은 받는 사람이 금액을 보는 자리, 즉 채팅방 정산 카드다.
             AttachNoteBox(lines: [
                 "모여트립은 송금을 하지 않아요. 실제 정산은 각자 하셔야 해요.",
+                MoyeoSettlementReport.guide,
                 "계좌번호는 아무나 볼 수 있으니 꼭 필요할 때만 남겨주세요."
             ])
         }
-        .attachComposerFailureAlert(sendState)
+        .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
     private var amountRow: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            VStack(alignment: .leading, spacing: 0) {
-                AttachFieldLabel(text: "총 금액", isRequired: true)
-                HStack(spacing: 4) {
-                    TextField("0", text: $totalText)
-                        .keyboardType(.numberPad)
-                        .font(.subheadline.weight(.heavy))
-                        .monospacedDigit()
-                        .accessibilityIdentifier("attachSettlement.total")
-                    Text("원").font(.subheadline).foregroundStyle(MoyeoTheme.muted)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .bottom, spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
+                    AttachFieldLabel(text: "총 금액", isRequired: true)
+                    HStack(spacing: 4) {
+                        TextField("0", text: $totalText)
+                            .keyboardType(.numberPad)
+                            .font(.subheadline.weight(.heavy))
+                            .monospacedDigit()
+                            .accessibilityIdentifier("attachSettlement.total")
+                        Text("원").font(.subheadline).foregroundStyle(MoyeoTheme.muted)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 44)
+                    .background(MoyeoTheme.card)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 44)
-                .background(MoyeoTheme.card)
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 0) {
+                    AttachFieldLabel(text: "나눌 인원", isRequired: true)
+                    stepper
+                }
+                .frame(width: 116)
             }
-            VStack(alignment: .leading, spacing: 0) {
-                AttachFieldLabel(text: "나눌 인원", isRequired: true)
-                stepper
+            if let notice = totalAdjustmentNotice {
+                Text(notice)
+                    .font(MoyeoTypography.tinyMeta)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("attachSettlement.totalNotice")
             }
-            .frame(width: 116)
         }
         .padding(.top, 18)
     }

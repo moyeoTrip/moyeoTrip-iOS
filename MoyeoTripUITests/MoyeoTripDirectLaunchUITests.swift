@@ -193,12 +193,17 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["나이대 제한"].waitForExistence(timeout: 4))
         assertStaticTextContaining("25 ~ 35세")
 
+        // 접근성 id 의 가운데 토막은 서버 `code` 다 — 제목 문자열이 아니다 (QA BE-03).
         relaunch(screen: "terms-privacy")
-        XCTAssertTrue(element("screen.terms.privacy.signup").waitForExistence(timeout: 4))
+        XCTAssertTrue(element("screen.terms.PRIVACY_COLLECTION.signup").waitForExistence(timeout: 4))
         XCTAssertTrue(app.buttons["동의하고 돌아가기"].exists)
 
+        // 설정 › 개인정보는 **처리방침**이지 가입 동의서가 아니다.
+        relaunch(screen: "privacy-settings")
+        XCTAssertTrue(element("screen.terms.PRIVACY_POLICY.settings").waitForExistence(timeout: 4))
+
         relaunch(screen: "terms-settings")
-        XCTAssertTrue(element("screen.terms.service.settings").waitForExistence(timeout: 4))
+        XCTAssertTrue(element("screen.terms.SERVICE.settings").waitForExistence(timeout: 4))
         XCTAssertFalse(app.buttons["동의하고 돌아가기"].exists)
     }
 
@@ -225,7 +230,7 @@ final class MoyeoTripDirectLaunchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["모임 종료"].exists)
 
         relaunch(screen: "terms-marketing")
-        XCTAssertTrue(element("screen.terms.marketing.signup").waitForExistence(timeout: 4))
+        XCTAssertTrue(element("screen.terms.MARKETING.signup").waitForExistence(timeout: 4))
     }
 
     @MainActor

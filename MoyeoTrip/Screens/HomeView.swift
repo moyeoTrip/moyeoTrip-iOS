@@ -59,6 +59,17 @@ struct HomeView: View {
                                     // 시안에 박힌 랜드마크 대신 실제 예보 지점을 보여준다.
                                     place: tabData.homeWeather?.locationName
                                 )
+                            } else if tabData.didFailHomeWeather {
+                                // 날씨를 못 받으면 히어로가 **통째로 사라져** 화면 위쪽이 비었고,
+                                // 사용자는 무엇이 잘못됐는지 알 수 없었다 (TC HOME-016).
+                                // 없는 날씨를 「맑음」으로 지어내지 않고, 못 받았다고 말한다.
+                                MoyeoSectionRetryNotice(
+                                    message: "오늘 날씨를 불러오지 못했어요.",
+                                    identifier: "home.weatherHero"
+                                ) {
+                                    Task { await tabData.refreshHomeWeather() }
+                                }
+                                .padding(.horizontal, 18)
                             }
 
                             // 실시간 추천과 인기 순위는 네트워크 없이 만들 수 없다.
@@ -93,6 +104,17 @@ struct HomeView: View {
                                             .padding(.horizontal, 18)
                                             .padding(.vertical, 12)
                                             .accessibilityIdentifier("home.serverCourses.loading")
+                                    } else if tabData.didFailHomeCourses {
+                                        // **실패는 빈 상태와 다르다** (NO-MOCK-CANON R1).
+                                        // 예전에는 서버가 500 을 줘도 「아직 공개된 코스가 없어요.」로
+                                        // 보여 사용자가 「코스가 없는 앱」이라고 읽었다 (TC HOME-014).
+                                        MoyeoSectionRetryNotice(
+                                            message: "코스를 불러오지 못했어요.",
+                                            identifier: "home.serverCourses"
+                                        ) {
+                                            Task { await tabData.refreshHomeCourses() }
+                                        }
+                                        .padding(.horizontal, 18)
                                     } else if recommendedCourses.isEmpty {
                                         // 서버가 준 코스만 그린다 — 없으면 그 상태를 그대로 보여준다
                                         Text("아직 공개된 코스가 없어요.")
@@ -123,7 +145,9 @@ struct HomeView: View {
 
                                 PopularCourseRanking(
                                     courses: tabData.homePopularCourses,
-                                    isLoading: tabData.isLoadingHomePopularCourses
+                                    isLoading: tabData.isLoadingHomePopularCourses,
+                                    didFail: tabData.didFailHomePopularCourses,
+                                    onRetry: { Task { await tabData.refreshHomePopularCourses() } }
                                 )
                                 .padding(.horizontal, 18)
                             }
@@ -141,6 +165,9 @@ struct HomeView: View {
                         .padding(.top, 0)
                         .padding(.bottom, 10)
                     }
+                    // 당겨서 새로고침 — 정본 TAB-STATE-CANON R4. 홈은 「가진 것 보여주며 뒤에서
+                    // 갱신」이지만, 사용자가 직접 다시 받아 볼 길도 있어야 한다.
+                    .refreshable { await tabData.refreshHome() }
                     .onAppear {
                         guard let state = QAScrollState.requested else { return }
                         let target = state.targetID(middle: "home.middle", bottom: "home.qa.bottom")

@@ -450,7 +450,7 @@ struct ServerChatRoomHostRequestContractTests {
     /// **둘 다 null 이면 서버가 공지를 삭제**하므로 `pinned` 는 반드시 값이 있어야 한다.
     @Test func noticePinToggleSendsNullContentAndNonNullPinned() throws {
         let encoder = JSONEncoder()
-        let body = try encoder.encode(ServerUpdateNoticeRequest(notice: nil, pinned: true))
+        let body = try encoder.encode(ServerUpdateNoticeRequest(notice: nil, pinned: true, expectedUpdatedAt: nil))
         let text = try #require(String(data: body, encoding: .utf8))
         #expect(text.contains("\"pinned\":true"))
         // notice 키는 nil 이라 인코딩에서 빠진다 — 서버는 미전달을 null 로 읽는다

@@ -60,6 +60,14 @@ enum RouteEditState: String, Hashable {
     case editable
     case linkedLocked
     case tripConfirmed
+    /// 모집이 불발된 방. **잠금은 `tripConfirmed` 와 똑같고 이유만 다르다** —
+    /// 케이스가 없던 시절에는 불발된 방도 `tripConfirmed` 로 접혀서 「여행이 확정되어 경로가
+    /// 잠겼어요」라고 말했다. 떠나지도 않을 여행을 확정됐다고 알리는 셈이었다 (안드 AND-119 교차).
+    case tripCancelled
+
+    /// 경로를 못 고치는 상태인지. 잠금 판단은 **여기 한 곳**에서만 한다 —
+    /// 케이스를 늘릴 때 `!= .editable` 같은 조건이 흩어져 있으면 잠금이 새기 쉽다.
+    var isRouteLocked: Bool { self != .editable }
 }
 
 enum TripScheduleKind: String, CaseIterable, Hashable {
@@ -102,6 +110,9 @@ struct CoursePublishingInfo: Hashable {
     let travelerAvatar: String
     /// 작성자 프로필 이미지. 있으면 **반드시** 이걸 그린다 (`creatorProfileImageUrl`).
     var travelerAvatarURL: URL?
+    /// 작성자 userId. **nil 이면 공개하지 않은 것** — 25 공개 프로필로 보내지 않고
+    /// 누를 수 있는 모양도 주지 않는다 (BE-29).
+    var travelerUserID: Int64?
     let publishedAt: String
     let tripCount: Int
 }
@@ -215,15 +226,30 @@ struct TripRecruitment: Identifiable, Hashable {
     var scheduleDetails: TripScheduleDetails?
     var meetingDetails: MeetingPointDetails?
     var recruitmentDeadline: String = ""
-    var minimumAge: Int = 25
-    var maximumAge: Int = 35
+    /// 나이 제한은 **호스트가 정했을 때만** 걸린다 — 정하지 않았으면 `nil` 이다.
+    /// 서버도 둘 다 nullable 이고, 예전 기본값 `25~35` 는 호스트가 고른 적 없는 제한이었다.
+    var minimumAge: Int?
+    var maximumAge: Int?
     var genderRestriction: String = "성별 무관"
+    /// 17-5 신청 승인 방식 — 서버 `joinApprovalMode` 의 `AUTO` · `MANUAL` 을 그대로 담는다.
+    ///
+    /// 신청하는 사람에게 이 값은 **「누르면 바로 들어가는가, 호스트가 볼 때까지 기다리는가」**를
+    /// 가른다. 예전에는 상세가 이 값을 아예 읽지 않아, 신청 버튼을 누르고 나서야 알 수 있었다
+    /// (IOS-F103). 못 받았으면 nil 이고 그때는 **줄을 그리지 않는다**(기본값을 지어내지 않는다).
+    var joinApprovalMode: String?
     var routeEditState: RouteEditState = .linkedLocked
     var notices: [TripNotice] = []
     var applicationState: RecruitmentApplicationState = .none
     /// 실서버 모임 연동 필드 — 서버 모임일 때만 채워진다.
-    /// 서버가 내려주지 않는 값(호스트 닉네임·매너 점수·최소 인원 등)은 화면에서 숨긴다.
+    ///
+    /// **호스트 닉네임은 모집 상세 응답에 없지만 「없는 값」이 아니다.**
+    /// `GET /chat-rooms/{id}` 는 `hostId` 와 `hostProfileImageUrl` 만 주고 `participants` 에도
+    /// 닉네임이 없지만, **공개 프로필 API(`GET /users/{userId}/profile`)가 닉네임·매너 점수·여행 횟수를
+    /// 모두 준다.** 예전에는 세 플랫폼이 다 「서버가 안 준다」고 적어 두고 「호스트」 라벨만 덩그러니
+    /// 그렸다 — 이름 없는 빈 줄이 됐다(사용자 지적 2026-09-12).
+    /// 그래서 `hostUserID` 를 들고 있다가 상세 화면에서 공개 프로필로 이름을 채운다.
     var serverRoomID: Int64?
+    var hostUserID: Int64?
     var heroImageURL: URL?
     var hostProfileImageURL: URL?
     var serverCourseTitle: String?
@@ -275,7 +301,8 @@ struct TripRecruitment: Identifiable, Hashable {
     }
 
     var ageRangeText: String {
-        "\(minimumAge)~\(maximumAge)세"
+        guard let minimumAge, let maximumAge else { return "나이 제한 없음" }
+        return "\(minimumAge)~\(maximumAge)세"
     }
 }
 
@@ -364,17 +391,25 @@ struct FeedPost: Identifiable, Hashable {
     var title: String?
     var subtitle: String?
     var detailBody: String?
-    var distanceText: String = "12.4km"
-    var durationText: String = "4시간 30분"
-    // 대표 피드의 경로는 주왕산 · 용연폭포 · 주산지 3곳이다 (4개 플랫폼 공통)
-    var visitCountText: String = "3곳"
-    var photoCountText: String = "1/10"
+    /// 이동 거리·소요 시간·방문지 수. **서버가 준 값이 있을 때만** 채운다 —
+    /// 예전 기본값 `12.4km`·`4시간 30분`·`3곳` 은 아무 근거 없는 수치라,
+    /// 이 값을 덮어쓰지 않는 생성 경로(`ServerFeedMapper.stubPost` = 알림 딥링크)에서
+    /// 그대로 새 나갈 수 있었다 (NO-MOCK-CANON R1). 비면 24 피드가 그 칸을 그리지 않는다.
+    var distanceText: String = ""
+    var durationText: String = ""
+    var visitCountText: String = ""
+    /// 「사진 N장」. 비면 그 줄을 그리지 않는다 — 지어낸 기본값을 두지 않는다 (NO-MOCK R1).
+    var photoCountText: String = ""
     /// 실서버 피드 연동 필드 — 서버 피드일 때만 채워진다
     var authorAvatarURL: URL?
     var photoURL: URL?
     /// 서버 피드가 준 사진 전체(sequence 순). 22 타임라인은 웹 · 안드로이드처럼 앞의 2장을 나란히 그린다.
     var photoURLs: [URL] = []
     var serverFeedID: Int64?
+    /// 다녀온 코스의 서버 id (`FeedTripResponse.courseId`). 「방문지 N곳」을 눌러
+    /// 14 코스 상세로 가는 데 쓴다 — **없으면 누를 수 있는 모양을 주지 않는다**
+    /// (식별자 없이 눌리는 자리를 만들지 않는다, `FEED-COMMENT-PREVIEW-CANON` 보충).
+    var serverCourseID: Int64?
     var serverLiked: Bool = false
     /// changeLog18 — 작성자를 눌러 25 프로필 카드로 갈 때 쓰는 유저 id (서버 피드만 안다)
     var serverAuthorID: Int64?
@@ -428,5 +463,20 @@ extension FeedPost {
     guard serverFeedID != nil else { return false }
     guard let authorID = serverAuthorID, let myID = MoyeoCurrentUser.id else { return true }
     return authorID != myID
+  }
+
+  /// 내가 쓴 서버 피드인가 — 24-6 수정·삭제 시트를 열 수 있는 조건이다.
+  ///
+  /// `canReport` 의 반대가 아니다. 서버 피드가 아니거나 작성자를 모르면 **둘 다 아니다** —
+  /// 모르는 글에 수정·삭제를 열어 주면 남의 글을 지우자고 권하는 꼴이 된다.
+  ///
+  /// 예전에는 이 판정이 없어 **내 피드에는 `...` 자체가 그려지지 않았고**, 수정·삭제 시트
+  /// (`FeedActionsSheetView`)로 가는 제품 경로가 캡처 하네스뿐이었다 (TC FEED-027).
+  var canEditOrDelete: Bool {
+    guard serverFeedID != nil,
+          let authorID = serverAuthorID,
+          let myID = MoyeoCurrentUser.id
+    else { return false }
+    return authorID == myID
   }
 }

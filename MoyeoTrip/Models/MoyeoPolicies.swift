@@ -5,6 +5,21 @@
 
 import Foundation
 
+/// 모집 연령 조건(17-4 · 18-6)으로 고를 수 있는 범위.
+///
+/// **하한은 가입 최소 연령과 같은 값에서 파생한다** — 서버도 그렇게 정의한다
+/// (`ChatRoom.MINIMUM_CONDITION_AGE = AgePolicy.MINIMUM_SIGNUP_AGE`).
+/// 조건 하한이 가입 연령보다 높으면 **그 나이로 가입한 사람이 연령 조건이 걸린 모집에
+/// 영영 들어갈 수 없다** — 2026-09-14 BE-06 으로 20 → 19 가 됐다.
+/// 또 바뀌면 `KoreanBirthdatePolicy.minimumSignupAge` 하나만 고치면 된다.
+enum RoomConditionAgePolicy {
+    static var minimum: Int { KoreanBirthdatePolicy.minimumSignupAge }
+    static let maximum = 100
+
+    /// 안내 문구에 쓰는 범위 표기. 숫자는 이 타입 하나에서만 온다.
+    static var rangeText: String { "\(minimum)~\(maximum)" }
+}
+
 enum WeatherCondition: CaseIterable, Hashable {
     case sunny
     case cloudy
@@ -43,12 +58,10 @@ struct GeneratedImageAsset: Hashable {
 struct WeatherHeroContent: Hashable {
     let label: String
     let badge: String
-    let place: String
     let copy: String
     let state: WeatherHeroState
     let imageAsset: GeneratedImageAsset
     let mood: CourseMood
-    let highlights: [String]
 
     var imageAssetName: String {
         imageAsset.catalogName
@@ -85,92 +98,74 @@ enum WeatherHeroPolicy {
         .sunny: WeatherHeroContent(
             label: "맑음",
             badge: WeatherHeroState.good.badge,
-            place: "경주 첨성대",
             copy: "햇살 좋은 날, 걷기 좋은 코스를 추천해드려요",
             state: .good,
             imageAsset: generatedAsset(named: "weather-sunny-cheomseongdae"),
-            mood: .forest,
-            highlights: ["걷기 좋은 날", "경주 첨성대"]
+            mood: .forest
         ),
         .cloudy: WeatherHeroContent(
             label: "구름",
             badge: WeatherHeroState.good.badge,
-            place: "경주 불국사",
             copy: "선선한 날씨에 역사 산책 코스를 추천해드려요",
             state: .good,
             imageAsset: generatedAsset(named: "weather-cloudy-bulguksa"),
-            mood: .sunrise,
-            highlights: ["역사 산책", "경주 불국사"]
+            mood: .sunrise
         ),
         .rain: WeatherHeroContent(
             label: "비",
             badge: WeatherHeroState.caution.badge,
-            place: "안동 하회마을",
             copy: "우산과 실내 동선을 챙겨 여유로운 코스를 골라드려요",
             state: .caution,
             imageAsset: generatedAsset(named: "weather-rain-hahoe"),
-            mood: .river,
-            highlights: ["실내 동선", "안동 하회마을"]
+            mood: .river
         ),
         .snow: WeatherHeroContent(
             label: "눈",
             badge: WeatherHeroState.caution.badge,
-            place: "영주 부석사",
             copy: "눈길 이동이 짧고 쉬어가기 좋은 코스를 먼저 보여드려요",
             state: .caution,
             imageAsset: generatedAsset(named: "weather-snow-buseoksa"),
-            mood: .sunrise,
-            highlights: ["짧은 이동", "영주 부석사"]
+            mood: .sunrise
         ),
         .fog: WeatherHeroContent(
             label: "안개",
             badge: WeatherHeroState.caution.badge,
-            place: "경주 석굴암",
             copy: "시야가 흐린 날엔 가까운 코스와 안전한 이동을 우선해요",
             state: .caution,
             imageAsset: generatedAsset(named: "weather-fog-seokguram"),
-            mood: .blossom,
-            highlights: ["가까운 코스", "경주 석굴암"]
+            mood: .blossom
         ),
         .wind: WeatherHeroContent(
             label: "강풍",
             badge: WeatherHeroState.blocked.badge,
-            place: "포항 호미곶",
             copy: "바람이 강한 날엔 해안 코스 대신 대체 코스를 추천해요",
             state: .blocked,
             imageAsset: generatedAsset(named: "weather-wind-homigot"),
-            mood: .blossom,
-            highlights: ["대체 코스", "포항 호미곶"]
+            mood: .blossom
         ),
         .heavyRain: WeatherHeroContent(
             label: "폭우",
             badge: WeatherHeroState.blocked.badge,
-            place: "경주 월정교",
             copy: "오늘은 무리하지 말고 실내형 코스를 먼저 확인해보세요",
             state: .blocked,
             imageAsset: generatedAsset(named: "weather-heavy-rain-woljeonggyo"),
-            mood: .river,
-            highlights: ["실내형 코스", "경주 월정교"]
+            mood: .river
         ),
         .heatwave: WeatherHeroContent(
             label: "폭염",
             badge: WeatherHeroState.blocked.badge,
-            place: "안동 도산서원",
             copy: "더위가 심한 날엔 짧은 동선과 그늘 많은 장소를 추천해요",
             state: .blocked,
             imageAsset: generatedAsset(named: "weather-heatwave-dosan"),
-            mood: .coral,
-            highlights: ["짧은 동선", "안동 도산서원"]
+            mood: .coral
         ),
         .dust: WeatherHeroContent(
             label: "미세먼지",
             badge: WeatherHeroState.blocked.badge,
-            place: "경주 동궁과 월지",
             copy: "공기가 탁한 날엔 실내 휴식과 짧은 이동 코스를 우선해요",
             state: .blocked,
             imageAsset: generatedAsset(named: "weather-dust-donggung-wolji"),
-            mood: .sunrise,
-            highlights: ["실내 휴식", "경주 동궁과 월지"]
+            mood: .sunrise
         )
     ]
 }

@@ -8,17 +8,27 @@ import SwiftUI
 struct FeedMetricBox: View {
     let title: String
     let value: String
+    /// 누를 수 있는 칸이면 쉐브론을 붙인다 — 다른 카드들이 쓰는 것과 **같은 결**이다.
+    /// 누를 수 없는 칸에는 절대 붙이지 않는다(누를 수 있는 모양만 주면 안 된다).
+    var showsChevron = false
 
     var body: some View {
         VStack(spacing: 5) {
             Text(title)
                 .font(.caption2)
                 .foregroundStyle(MoyeoTheme.muted)
-            Text(value)
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
+            HStack(spacing: 3) {
+                Text(value)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+                if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)

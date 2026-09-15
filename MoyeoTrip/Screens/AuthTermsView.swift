@@ -6,8 +6,12 @@ import SwiftUI
 /// 동의한 `termId` 를 회원가입 요청의 `agreedTermIds` 로 보낸다 —
 /// 보내지 않으면 서버가 400 `40012` 로 가입을 막는다.
 ///
-/// **만 18세 이상**은 서버 약관이 아니라 별도 확인이다. 서버는 `birthDate` 로 나이를 검증하고
+/// **만 N세 이상**은 서버 약관이 아니라 별도 확인이다. 서버는 `birthDate` 로 나이를 검증하고
 /// 약관 목록에는 연령 항목이 없다. 화면기획이 이 확인을 요구하므로 목록과 분리해 맨 위에 둔다.
+///
+/// N 은 `KoreanBirthdatePolicy.minimumSignupAge` 하나에서만 온다 — 서버
+/// `AuthService.MINIMUM_SIGNUP_AGE` 를 따르는 값이다. 예전에는 여기만 「만 18세」로 남아
+/// 생년월일 피커(당시 20)와 **서로 다른 나이를 말했다** (BE-06 · 2026-09-14 에 19 로 통일).
 struct AuthTermsView: View {
     let terms: [ServerTermSummary]
     let isLoading: Bool
@@ -53,7 +57,7 @@ struct AuthTermsView: View {
                 .disabled(terms.isEmpty)
 
                 AuthTermButton(
-                    title: "만 18세 이상",
+                    title: "만 \(KoreanBirthdatePolicy.minimumSignupAge)세 이상",
                     subtitle: "필수 항목",
                     isRequired: true,
                     accessibilityIdentifier: "auth.terms.age",
@@ -105,7 +109,10 @@ struct AuthTermsView: View {
         .fullScreenCover(item: $selectedTerm) { term in
             NavigationStack {
                 LegalDocumentDetailView(
-                    kind: LegalDocumentKind(serverTitle: term.title),
+                    // 종류는 서버가 준 `code` 로만 정한다. 제목으로 추측하면 처리방침 자리에
+                    // 가입 동의서가 열린다 (QA BE-03). `code` 가 없으면 nil 인 채로 두고,
+                    // 본문은 `termId` 로 받으므로 화면은 그대로 그려진다.
+                    kind: term.code.flatMap(LegalDocumentKind.init(rawValue:)),
                     entry: .signup,
                     serverTermID: term.termId,
                     onAgree: { agreedTermIDs.insert(term.termId) }

@@ -54,9 +54,13 @@ struct ServerCreateNoticeRequest: Encodable {
 
 /// `PUT /chat-rooms/{id}/notices/{noticeId}` — 내용만 고칠 때는 `pinned` 를,
 /// 고정만 토글할 때는 `notice` 를 null 로 둔다. **둘 다 null 이면 서버가 공지를 삭제한다.**
+///
+/// `expectedUpdatedAt` 은 **내가 읽었을 때의 `updatedAt`** 이다 (BE-30) — 그 사이 남이 먼저
+/// 고쳤으면 서버가 409(`40923`)로 거절한다. null 이면 검사하지 않는다(배포 전 · 키 없음).
 struct ServerUpdateNoticeRequest: Encodable {
     let notice: String?
     let pinned: Bool?
+    let expectedUpdatedAt: String?
 }
 
 /// `PUT /chat-rooms/{id}/meeting-info` — `meetingDateTime` 만 필수다.
@@ -116,6 +120,21 @@ struct ServerApplicantProfile: Decodable, Hashable {
     var profileImageURL: URL? {
         MoyeoImageURL.resolve(profileImageUrl)
     }
+}
+
+/// `GET /chat-rooms/{roomId}/applications/waitlist` — 18 모집 관리의 「대기열」 구역.
+///
+/// 정원이 찼을 때 호스트가 승인한 신청이 여기로 간다(`ApprovalResult.WAITLISTED`).
+/// `position` 1 이 **자리가 나면 자동으로 합류할 사람**이다 — 서버가 준 순번을 그대로 쓴다.
+/// 호스트가 아니면 403, 없는 방은 404 다.
+struct ServerWaitlistEntry: Decodable, Identifiable, Hashable {
+    let applicationId: Int64
+    let position: Int
+    let applicationMessage: String?
+    let applicant: ServerApplicantProfile
+    let appliedAt: String
+
+    var id: Int64 { applicationId }
 }
 
 /// `POST .../applications/{applicationId}/approve` — 정원이 차면 `WAITLISTED` 다.
@@ -291,8 +310,13 @@ final class ChatRoomWriteAPIClient: @unchecked Sendable {
 
     // MARK: 20-3 공지
 
-    func createNotice(roomID: Int64, notice: String, pinned: Bool) async throws -> ServerChatRoomNotice {
-        try await api.send(
+    /// 공지 등록 — 서버는 **201 에 `{"noticeId": …}` 하나만** 준다(2026-09-13 실서버 확인).
+    /// 예전에는 이 응답을 `ServerChatRoomNotice`(`pinned`·`authorNickname`·`createdAt` 필수)로
+    /// 디코딩해서, 등록이 **성공했는데도** 화면에 「서버 응답을 이해하지 못했어요」가 떴다.
+    /// `IOS-F112`(모집 수정)와 같은 원인이라 같은 방식 — 응답 본문을 읽지 않는다 — 으로 막는다 (IOS-F74).
+    /// 등록 결과는 방을 다시 읽어 확인하므로 `noticeId` 는 쓰이지 않는다.
+    func createNotice(roomID: Int64, notice: String, pinned: Bool) async throws {
+        try await api.sendVoid(
             "/api/v1/chat-rooms/\(roomID)/notices",
             method: "POST",
             body: ServerCreateNoticeRequest(notice: notice, pinned: pinned)
@@ -300,21 +324,27 @@ final class ChatRoomWriteAPIClient: @unchecked Sendable {
     }
 
     /// 고정 토글 — 204 를 주고 본문이 없다. `notice` 는 건드리지 않도록 null 로 보낸다.
+    /// 내용을 덮어쓰지 않으므로 `expectedUpdatedAt` 검사를 걸지 않는다(남의 수정과 충돌하지 않는다).
     func setNoticePinned(roomID: Int64, noticeID: Int64, pinned: Bool) async throws {
         try await api.sendVoid(
             "/api/v1/chat-rooms/\(roomID)/notices/\(noticeID)",
             method: "PUT",
-            body: ServerUpdateNoticeRequest(notice: nil, pinned: pinned)
+            body: ServerUpdateNoticeRequest(notice: nil, pinned: pinned, expectedUpdatedAt: nil)
         )
     }
 
     /// 20-3a 공지 수정 — 내용과 고정을 함께 보낸다. 204 를 준다.
     /// **둘 다 null 이면 서버가 공지를 지운다** — 그래서 내용은 항상 채워서 보낸다.
-    func updateNotice(roomID: Int64, noticeID: Int64, notice: String, pinned: Bool) async throws {
+    ///
+    /// - Parameter expectedUpdatedAt: 내가 읽었을 때의 `ServerChatRoomNotice.updatedAt` (BE-30).
+    ///   그 사이 남이 먼저 고쳤으면 서버가 409 `40923` 으로 거절한다. 모르면 nil 이다(검사 없음).
+    func updateNotice(
+        roomID: Int64, noticeID: Int64, notice: String, pinned: Bool, expectedUpdatedAt: String? = nil
+    ) async throws {
         try await api.sendVoid(
             "/api/v1/chat-rooms/\(roomID)/notices/\(noticeID)",
             method: "PUT",
-            body: ServerUpdateNoticeRequest(notice: notice, pinned: pinned)
+            body: ServerUpdateNoticeRequest(notice: notice, pinned: pinned, expectedUpdatedAt: expectedUpdatedAt)
         )
     }
 
@@ -350,6 +380,16 @@ final class ChatRoomWriteAPIClient: @unchecked Sendable {
 
     func applications(roomID: Int64) async throws -> [ServerJoinApplication] {
         try await api.get("/api/v1/chat-rooms/\(roomID)/applications")
+    }
+
+    /// 거절 기록 — 호스트만 볼 수 있다. 서버가 최신순으로 준다 (BE-17).
+    func rejectedApplications(roomID: Int64) async throws -> [ServerRejectedJoinApplication] {
+        try await api.get("/api/v1/chat-rooms/\(roomID)/applications/rejected")
+    }
+
+    /// 대기열 — 호스트만 볼 수 있다(참가자는 403). `position` 오름차순으로 그대로 그린다.
+    func waitlist(roomID: Int64) async throws -> [ServerWaitlistEntry] {
+        try await api.get("/api/v1/chat-rooms/\(roomID)/applications/waitlist")
     }
 
     func approveApplication(
@@ -440,6 +480,14 @@ enum ServerChatShareLimits {
     nonisolated static let maximumPhotoBytes = 20 * 1024 * 1024
     /// 서버 검증과 같은 값 — 선택지 2~5개
     nonisolated static let pollOptionRange = 2...5
+    /// 채팅 메시지 한도. 서버 원문은 「메시지는 1000자 이하여야 합니다.」
+    /// (2026-09-13 실서버 `POST /chat-rooms/{id}/messages` 로 확인, IOS-F17).
+    nonisolated static let maximumMessageLength = 1000
+    /// 20-2a 사진 첨부의 「같이 보낼 한 줄」 한도. **서버는 이 값을 검사하지 않는다**
+    /// (`ChatRoomController.shareImage` 의 `caption` 파트에 `@Size` 가 없다) — 제품 한도다.
+    /// 웹 `maxLength={200}` · 안드로이드 `PHOTO_CAPTION_MAX_LENGTH = 200` 과 같은 값이다.
+    /// iOS 만 한도가 없어 204자가 그대로 올라갔다 (TC ATTACH-016).
+    nonisolated static let maximumPhotoCaptionLength = 200
 }
 
 /// 호스트가 보낼 수 있는 방 상태. 서버 enum 에는 `COMPLETED` 도 있지만 클라가 보낼 수 있는 값은 둘이다.

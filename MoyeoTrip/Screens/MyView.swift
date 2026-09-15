@@ -25,7 +25,9 @@ struct MyView: View {
 
   /// 26 상단 3칸 지표의 근거 — `GET /users/{myId}/profile` 이 매너 점수 · 완료한 여행 수 ·
   /// 공개 피드 수를 준다. `GET /users/me/profile` 에는 그 셋이 없다.
-  @State private var myMetrics: ServerPublicProfile?
+  /// 값은 탭 바깥(`MoyeoTabDataStore`)에 둔다 — 화면 안에 두면 탭을 떠날 때 사라져서
+  /// 돌아올 때마다 줄이 없어졌다가 다시 생긴다 (TC NAV-011).
+  private var myMetrics: ServerPublicProfile? { tabData.myMetrics }
 
   private var serverProfile: ServerMyProfile? {
     tabData.myProfile
@@ -76,7 +78,9 @@ struct MyView: View {
             MyTravelTabContent(
               selectedSegment: tabData.mySegment,
               activeTrips: activeTrips,
-              serverRooms: serverRooms
+              serverRooms: serverRooms,
+              didFailServerRooms: tabData.didFailMyRooms,
+              onRetryServerRooms: { Task { await tabData.refreshMy() } }
             )
           }
           .padding(.top, 8)
@@ -89,6 +93,8 @@ struct MyView: View {
         .padding(.top, 8)
         .padding(.bottom, 128)
       }
+      // 당겨서 새로고침 — 정본 TAB-STATE-CANON R4.
+      .refreshable { await tabData.refreshMy() }
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationDestination(for: TripRecruitment.self) { trip in
@@ -105,6 +111,10 @@ struct MyView: View {
         course: course,
         tripContext: tripContext
       )
+    }
+    // 「지난여행」 카드에서 끝난 방을 읽기 전용으로 연다 (IOS-F81).
+    .navigationDestination(for: ChatThread.self) { thread in
+      ChatRoomView(thread: thread)
     }
     .navigationDestination(for: MyRoute.self) { route in
       switch route {
@@ -163,8 +173,7 @@ struct MyView: View {
   /// 내 신원은 액세스 토큰에서 동기로 읽는다 (TAB-STATE-CANON R6).
   /// 못 받으면 지표 줄을 그리지 않는다 — 숫자를 지어내지 않는다.
   private func loadMyMetrics() async {
-    guard myMetrics == nil, MoyeoServerSync.isEnabled, let userID = MoyeoCurrentUser.id else { return }
-    myMetrics = try? await UserProfileAPIClient.shared.publicProfile(userID: userID)
+    await tabData.loadMyMetricsIfNeeded()
   }
 
   /// 내 여행 개수 — 서버 목록을 받았으면 진행 중인 서버 방 개수를 쓴다
@@ -247,10 +256,30 @@ private struct MyTravelTabContent: View {
   let activeTrips: [TripRecruitment]
   /// 실서버 내 모임 목록 — 있으면 진행중·지난여행 탭을 서버 방으로 그린다
   var serverRooms: [ServerMyChatRoom]?
+  /// 내 모임 조회가 **실패**했는지. 빈 목록과 갈라야 한다.
+  var didFailServerRooms = false
+  /// 실패 줄의 「다시 시도」.
+  var onRetryServerRooms: () -> Void = {}
 
   var body: some View {
-    if let serverRooms {
+    // 찜 두 탭은 **내 모임 목록과 무관한 API** 를 쓴다. 예전에는 `serverRooms` 가 있어야
+    // 닿을 수 있어서, 내 모임 조회가 실패하면 찜해 둔 게 있어도 찜 탭까지
+    // 「참여 중인 모임이 없어요.」로 덮였다.
+    if selectedSegment == "찜한 모집" {
+      VStack(spacing: 10) { FavoriteRoomsSection() }
+    } else if selectedSegment == "찜한 코스" {
+      VStack(spacing: 10) { FavoriteCoursesSection() }
+    } else if let serverRooms {
       serverContent(rooms: serverRooms)
+    } else if didFailServerRooms {
+      // 실패를 빈 목록으로 그리지 않는다 — 참여 중인 모임이 있어도 없는 것처럼 보였다.
+      VStack(spacing: 10) {
+        MoyeoEmptyStateView(
+          message: MoyeoEmptyText.loadFailed,
+          onRetry: onRetryServerRooms,
+          accessibilityIdentifier: "my.serverTrip.failed"
+        )
+      }
     } else {
       sessionContent
     }
@@ -261,25 +290,38 @@ private struct MyTravelTabContent: View {
     let filtered = selectedSegment == "지난여행" ? rooms.filter(\.ended) : rooms.filter { !$0.ended }
 
     VStack(spacing: 10) {
-      if selectedSegment == "찜한 모집" {
-        // 26-1 찜한 모집 — `GET /chat-rooms/my/favorites`. 목록 화면을 그대로 끼워 넣는다.
-        FavoriteRoomsSection()
-      } else if selectedSegment == "찜한 코스" {
-        // `GET /travel-courses/me/favorites` 는 실서버에 있다. 오래 "API 가 없다"고 적어 두어
-        // 탭이 늘 비어 있었다 (NO-MOCK-CANON §4-1 — 내 오판이었다).
-        FavoriteCoursesSection()
-      } else if filtered.isEmpty {
+      if filtered.isEmpty {
+        // 두 세그먼트가 **같은 문구**를 썼다 — 「지난여행」이 비었을 때 「참여 중인 채팅방이
+        // 없어요」는 지난 여행이 없다는 뜻으로 읽히지 않는다 (IOS-F43).
         MoyeoEmptyStateView(
-          message: MoyeoEmptyText.noChatRooms,
+          message: selectedSegment == "지난여행"
+            ? "아직 끝난 여행이 없어요. 여행이 끝나면 여기에 남아요."
+            : MoyeoEmptyText.noChatRooms,
           accessibilityIdentifier: "my.serverTrip.empty"
         )
       } else {
         ForEach(filtered) { room in
           if room.ended {
-            // 지난 여행은 서버가 코스 공개 가능 여부만 준다 — 이동할 상세가 없어 카드만 보여준다
-            MyServerTripCard(room: room)
-              .accessibilityIdentifier("my.serverTrip.\(room.roomId)")
+            // 끝난 방도 **읽기 전용 채팅방으로 열린다**(`isReadOnly: !chatAvailable || ended`).
+            // 예전에는 「이동할 상세가 없다」며 카드만 그려서, 지난 여행의 사진·정산·여행
+            // 마무리에 마이 탭에서 닿을 길이 아예 없었다 (IOS-F81).
+            NavigationLink(value: ServerTripMapper.stubThread(serverRoomID: room.roomId)) {
+              MyServerTripCard(room: room)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("my.serverTrip.\(room.roomId)")
+          } else if room.chatAvailable {
+            // **채팅이 열린 방은 채팅방으로 간다.** 예전에는 `chatAvailable` 을 읽기 전용 판정에만
+            // 쓰고 이동은 늘 모집 상세여서, 이미 확정된 내 여행을 눌러도 「함께 가기 신청」
+            // 화면이 열렸다 (IOS-F44). 상세 응답에는 이 값이 없지만 **목록 응답에는 있다**
+            // (`ServerMyChatRoom.chatAvailable` — 상세 쪽은 `BE-23` 으로 요청돼 있다).
+            NavigationLink(value: ServerTripMapper.stubThread(serverRoomID: room.roomId)) {
+              MyServerTripCard(room: room)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("my.serverTrip.\(room.roomId)")
           } else {
+            // 아직 채팅이 열리지 않은 방(모집 중·승인 대기)은 모집 상세가 맞다.
             NavigationLink(value: ServerTripMapper.placeholderTrip(roomID: room.roomId, title: room.title)) {
               MyServerTripCard(room: room)
             }
@@ -379,7 +421,9 @@ private struct MyServerTripCard: View {
       }
     }
     .padding(12)
-    .frame(height: MyTravelCardMetrics.activeHeight)
+    // 큰 글자에서 높이를 못박으면 카드 안에서 상태·인원 줄이 겹쳐 읽힌다 (TC ENV-005).
+    // 기본 크기에서는 지금과 같은 높이이고, 글자가 커질 때만 카드가 따라 늘어난다.
+    .frame(minHeight: MyTravelCardMetrics.activeHeight)
     .moyeoListCard()
   }
 }
@@ -390,7 +434,9 @@ private struct MyHubMenuPanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text("메뉴")
-        .font(.system(size: 18, weight: .heavy))
+        // 고정 크기(.system(size:))는 글자 크기 설정을 따르지 않는다 — 큰 글자에서
+        // 이 라벨만 작게 남아 아래 항목과 겹쳐 보였다 (TC ENV-005).
+        .font(MoyeoTypography.font(size: 18, weight: .heavy, relativeTo: .title3))
         .foregroundStyle(MoyeoTheme.ink)
       VStack(spacing: 0) {
         Button {
@@ -510,8 +556,12 @@ private struct MyFeedPostCard: View {
   let onOpen: () -> Void
 
   var body: some View {
-    Button(action: onOpen) {
-      VStack(alignment: .leading, spacing: 12) {
+    // 결정 ⑪ — 사진 영역만 `Button` 밖으로 뺀다. `Button` 안에 `TabView(.page)` 를
+    // 넣으면 탭이 삼켜져 카드를 눌러도 상세로 가지 않는다. 그래서 카드를 위(머리)·
+    // 사진·아래(본문) 세 덩이로 나누고, 사진 말고는 예전처럼 `Button` 이 받는다.
+    // 사진 탭도 `onTap` 으로 같은 `onOpen` 을 부른다 — 어디를 눌러도 상세로 간다.
+    VStack(alignment: .leading, spacing: 12) {
+      Button(action: onOpen) {
         HStack(spacing: 10) {
           // 피드 카드와 같은 컴포넌트다 — 프로필 이미지가 있으면 이미지를 그리고,
           // 없을 때만 마스코트로 떨어진다. 여기만 마스코트를 고정하면 같은 사람이 화면마다 달라진다.
@@ -529,46 +579,75 @@ private struct MyFeedPostCard: View {
             .font(.caption.bold())
             .foregroundStyle(MoyeoTheme.text400)
         }
-
-        // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
-        FeedPhotoPreview(post: post, height: 118)
-        .frame(height: 118)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-        VStack(alignment: .leading, spacing: 7) {
-          Text(post.feedTitle)
-            .font(.system(size: 16, weight: .heavy))
-            .foregroundStyle(MoyeoTheme.ink)
-            .lineLimit(2)
-          Text(post.detailBodyText)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.text700)
-            .lineLimit(2)
-        }
-
-        MyFeedTagRow(tags: post.tags)
-
-        HStack(spacing: 16) {
-          Label("\(post.likeCount)", systemImage: "heart")
-          Label("\(post.commentCount)", systemImage: "bubble.right")
-          Spacer()
-          Text(post.photoCountText)
-        }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(MoyeoTheme.muted)
+        .contentShape(Rectangle())
       }
-      .padding(13)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(MoyeoTheme.card)
-      .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-          .stroke(MoyeoTheme.softLine, lineWidth: 1)
+      .buttonStyle(.plain)
+      .accessibilityLabel(post.feedTitle)
+      .accessibilityIdentifier("my.feedPost.\(post.id)")
+
+      // 피드 경로에는 좌표가 없다 — 손으로 그린 경로 지도를 옆에 두지 않는다 (R4)
+      photoArea
+
+      Button(action: onOpen) {
+        VStack(alignment: .leading, spacing: 12) {
+          VStack(alignment: .leading, spacing: 7) {
+            Text(post.feedTitle)
+              .font(.system(size: 16, weight: .heavy))
+              .foregroundStyle(MoyeoTheme.ink)
+              .lineLimit(2)
+            Text(post.detailBodyText)
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(MoyeoTheme.text700)
+              .lineLimit(2)
+          }
+
+          MyFeedTagRow(tags: post.tags)
+
+          HStack(spacing: 16) {
+            Label("\(post.likeCount)", systemImage: "heart")
+            Label("\(post.commentCount)", systemImage: "bubble.right")
+            Spacer()
+            Text(post.photoCountText)
+          }
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MoyeoTheme.muted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("my.feedPost.\(post.id).body")
+    }
+    .padding(13)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MoyeoTheme.card)
+    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+        .stroke(MoyeoTheme.softLine, lineWidth: 1)
+    }
+  }
+
+  /// 사진 영역. 여러 장이면 상세와 같은 페이저로 좌우로 넘긴다 (결정 ⑪).
+  /// 한 장이면 페이저도 배지도 만들지 않고 예전처럼 한 장만 그린다.
+  @ViewBuilder
+  private var photoArea: some View {
+    Group {
+      if post.photoURLs.count > 1 {
+        FeedCardPhotoPager(
+          photoURLs: post.photoURLs,
+          height: 118,
+          identifierPrefix: "my.feedPost.\(post.id)",
+          onTap: onOpen
+        )
+      } else {
+        FeedPhotoPreview(post: post, height: 118)
+          .contentShape(Rectangle())
+          .onTapGesture(perform: onOpen)
       }
     }
-    .buttonStyle(.plain)
-    .accessibilityLabel(post.feedTitle)
-    .accessibilityIdentifier("my.feedPost.\(post.id)")
+    .frame(height: 118)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 }
 
@@ -600,6 +679,9 @@ private struct ProfileEditView: View {
   @State private var selectedInterestRegions: Set<Int64>
   @State private var isTasteEditorPresented: Bool
   @State private var saveMessage: String?
+  /// 저장 결과가 **성공인지 실패인지.** 예전에는 둘 다 같은 `saveMessage` 에 담겨
+  /// 실패도 「저장 완료」라는 제목으로 떴다 (IOS-F47).
+  @State private var didSaveSucceed = true
   /// 28-1 의 세 줄(자기소개·생년월일·성별)을 실제로 고치는 시트. 예전에는 화살표만 있었다.
   @State private var editingField: ProfileEditField?
   /// 서버 값에서 시작해 시트에서 바뀌는 값 — 저장은 PUT users/me/profile 한 번이다.
@@ -633,6 +715,7 @@ private struct ProfileEditView: View {
           if serverProfile != nil {
             saveProfileToServer()
           } else {
+            didSaveSucceed = true
             saveMessage = "프로필 변경사항이 저장됐어요."
           }
         } label: {
@@ -746,7 +829,7 @@ private struct ProfileEditView: View {
       .presentationBackground(MoyeoTheme.card)
     }
     .alert(
-      "저장 완료",
+      didSaveSucceed ? "저장 완료" : "저장하지 못했어요",
       isPresented: Binding<Bool>(
         get: { saveMessage != nil },
         set: { isPresented in
@@ -787,11 +870,13 @@ private struct ProfileEditView: View {
   /// 현재 선택을 PUT users/me/profile 로 저장한다 (여행 취향 시트 저장 포함)
   private func saveProfileToServer() {
     guard let serverProfile, let serverOptions else {
+      didSaveSucceed = false
       saveMessage = "서버 프로필을 불러오지 못해 저장할 수 없어요."
       return
     }
     // 서버는 생년월일을 반드시 요구한다 — 아직 등록되지 않았으면 그 줄부터 채우게 안내한다.
     guard !birthDate.isEmpty else {
+      didSaveSucceed = false
       saveMessage = "생년월일이 등록되지 않아 저장할 수 없어요."
       return
     }
@@ -820,10 +905,11 @@ private struct ProfileEditView: View {
         bio = updated.introduction ?? ""
         birthDate = updated.birthDate ?? ""
         gender = updated.gender
+        didSaveSucceed = true
         saveMessage = "프로필 변경사항이 저장됐어요."
       } catch {
-        saveMessage = (error as? LocalizedError)?.errorDescription
-          ?? "저장하지 못했어요. 잠시 후 다시 시도해주세요."
+        didSaveSucceed = false
+        saveMessage = error.moyeoUserMessage(fallback: "저장하지 못했어요. 잠시 후 다시 시도해주세요.")
       }
     }
   }
@@ -1158,10 +1244,21 @@ private struct CustomerCenterLinkRow: View {
   let identifier: String
 
   @Environment(\.openURL) private var openURL
+  /// 열지 못했을 때의 안내. `mailto:` 는 메일 앱이 없으면 **아무 일도 일어나지 않는다** —
+  /// 사용자는 버튼이 고장 난 줄 안다 (TC SOCIAL-037). 그때는 주소를 눌러 복사하게 둔다.
+  @State private var openFailureMessage: String?
 
   var body: some View {
     Button {
-      openURL(url)
+      // `openURL` 의 완료 콜백으로 실제 결과를 받는다. 성공하면 아무 말도 하지 않는다.
+      openURL(url) { accepted in
+        guard !accepted else {
+          openFailureMessage = nil
+          return
+        }
+        UIPasteboard.general.string = subtitle
+        openFailureMessage = "이 기기에서 바로 열 수 없어서 「\(subtitle)」를 복사해 뒀어요."
+      }
     } label: {
       HStack(spacing: 12) {
         VStack(alignment: .leading, spacing: 5) {
@@ -1171,6 +1268,13 @@ private struct CustomerCenterLinkRow: View {
           Text(subtitle)
             .font(.caption)
             .foregroundStyle(MoyeoTheme.muted)
+          if let openFailureMessage {
+            Text(openFailureMessage)
+              .font(.caption2)
+              .foregroundStyle(MoyeoTheme.warningText)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("\(identifier).openFailed")
+          }
         }
         Spacer(minLength: 8)
         Image(systemName: "arrow.up.right")
@@ -1246,7 +1350,9 @@ private struct MyHubMenuRow: View {
         .font(.caption.bold())
         .foregroundStyle(MoyeoTheme.text400)
     }
-    .frame(height: 58)
+    // 큰 글자에서 높이를 못박으면 줄이 위 칸(섹션 라벨)까지 밀고 올라와 겹친다 (TC ENV-005).
+    .frame(minHeight: 58)
+    .padding(.vertical, 6)
     .padding(.horizontal, 16)
     .contentShape(Rectangle())
   }
@@ -1255,27 +1361,51 @@ private struct MyHubMenuRow: View {
 private struct MySegmentBar: View {
   let segments: [String]
   @Binding var selectedSegment: String
+  /// 큰 글자에서는 네 칸을 화면 폭에 균등 분할할 수 없다 — 「찜한 코스」·「찜한 모집」이
+  /// 둘 다 「찜…」으로 잘려 **어느 탭인지 구분할 수 없었다** (TC ENV-005).
+  /// 그 크기에서는 균등 분할을 포기하고 가로 스크롤로 바꿔 이름을 끝까지 보여준다.
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   var body: some View {
-    HStack(spacing: 4) {
-      ForEach(segments, id: \.self) { segment in
-        Button {
-          selectedSegment = segment
-        } label: {
-          Text(segment)
-            .font(MoyeoTypography.tab)
-            .foregroundStyle(selectedSegment == segment ? MoyeoTheme.forest : MoyeoTheme.muted)
-            .frame(maxWidth: .infinity)
-            .frame(height: 36)
-            .background(selectedSegment == segment ? MoyeoTheme.card : .clear)
-            .clipShape(Capsule())
+    if dynamicTypeSize.isAccessibilitySize {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 4) {
+          ForEach(segments, id: \.self) { segment in
+            chip(segment, fillsWidth: false)
+          }
         }
-        .buttonStyle(.plain)
+        .padding(4)
       }
+      .background(MoyeoTheme.subtleBackground)
+      .clipShape(Capsule())
+    } else {
+      HStack(spacing: 4) {
+        ForEach(segments, id: \.self) { segment in
+          chip(segment, fillsWidth: true)
+        }
+      }
+      .padding(4)
+      .background(MoyeoTheme.subtleBackground)
+      .clipShape(Capsule())
     }
-    .padding(4)
-    .background(MoyeoTheme.subtleBackground)
-    .clipShape(Capsule())
+  }
+
+  /// 높이를 `height` 로 못박으면 큰 글자에서 글자가 캡슐 밖으로 넘친다 — 최소 높이로 둔다.
+  private func chip(_ segment: String, fillsWidth: Bool) -> some View {
+    Button {
+      selectedSegment = segment
+    } label: {
+      Text(segment)
+        .font(MoyeoTypography.tab)
+        .lineLimit(1)
+        .foregroundStyle(selectedSegment == segment ? MoyeoTheme.forest : MoyeoTheme.muted)
+        .padding(.horizontal, fillsWidth ? 0 : 14)
+        .frame(maxWidth: fillsWidth ? .infinity : nil)
+        .frame(minHeight: 36)
+        .background(selectedSegment == segment ? MoyeoTheme.card : .clear)
+        .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
   }
 }
 
@@ -1289,12 +1419,16 @@ private struct CompactDetailHeader<Trailing: View>: View {
       Button {
         dismiss()
       } label: {
+        // ENV-009 — 화살표 그림 크기는 그대로 두고 누를 넓이만 44x44 로 넓힌다
         Image(systemName: "chevron.left")
           .font(.system(size: 15, weight: .bold))
           .foregroundStyle(MoyeoTheme.ink)
-          .frame(width: 34, height: 34)
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      // ENV-006: 라벨이 없으면 VoiceOver 가 영어 시스템 문구(「Back」)로 읽는다.
+      .accessibilityLabel("뒤로")
 
       Spacer()
 
@@ -1304,8 +1438,10 @@ private struct CompactDetailHeader<Trailing: View>: View {
 
       Spacer()
 
+      // ENV-009 — 뒤로 버튼이 44 로 넓어진 만큼 오른쪽 자리도 44 로 맞춘다(제목 가운데 정렬 유지).
+      // 이 자리에 들어오는 버튼의 누를 넓이도 함께 44x44 가 된다.
       trailing()
-        .frame(width: 34, height: 34)
+        .frame(width: 44, height: 44)
     }
     .frame(height: 50)
     .padding(.horizontal, 10)
@@ -1325,6 +1461,10 @@ private struct FriendDexView: View {
   @State private var selectedFilter: DogamFriendFilter = .all
   /// 실서버 여행 도감 — 도감 API가 성공했을 때만 채워진다 (nil = 아직 못 받음)
   @State private var serverDex: ServerTravelDex?
+  /// 도감 조회가 **실패**했는지. 「없다」와 「못 받았다」를 구분한다 —
+  /// 예전에는 `try?` 로 삼켜 통신 실패가 「검색 결과가 없어요」로 읽혔다
+  /// (TC SOCIAL-010 계열 · 안드 `AFTER-017` 교차).
+  @State private var didFailDex = false
 
   /// 한 줄 메시지를 아직 안 남긴 친구 수와, 그중 가장 최근 여행 이름.
   /// 대상이 없으면 `nil` — 안내 카드를 아예 그리지 않는다.
@@ -1340,6 +1480,16 @@ private struct FriendDexView: View {
       .max { $0.tripDate < $1.tripDate }
     guard let tripTitle = latest?.tripTitle else { return nil }
     return (pending.count, tripTitle)
+  }
+
+  /// 도감을 받아 온다. 실패는 **빈 도감이 아니라 실패로** 남긴다.
+  private func loadServerDex() async {
+    didFailDex = false
+    do {
+      serverDex = try await SocialAPIClient.shared.travelDex()
+    } catch {
+      didFailDex = true
+    }
   }
 
   private var filteredServerCompanions: [ServerTravelDexCompanion]? {
@@ -1449,6 +1599,15 @@ private struct FriendDexView: View {
                   }
                 }
               }
+            } else if didFailDex {
+              // **못 받은 것**이지 친구가 없는 게 아니다. 예전에는 이 자리에도
+              // 「검색 결과가 없어요 / 이름이나 필터를 바꿔 다시 찾아보세요」가 떠서,
+              // 통신이 끊긴 것을 사용자가 자기 검색어 탓으로 읽었다.
+              MoyeoEmptyStateView(
+                message: MoyeoEmptyText.loadFailed,
+                onRetry: { Task { await loadServerDex() } },
+                accessibilityIdentifier: "friendDex.failed"
+              )
             } else {
               // 도감은 서버 응답이 전부다 — 목 친구를 채우지 않는다 (NO-MOCK-CANON R1)
               DogamEmptyResultView()
@@ -1483,7 +1642,7 @@ private struct FriendDexView: View {
     .toolbar(.hidden, for: .navigationBar)
     .task {
       guard MoyeoServerSync.isEnabled, serverDex == nil else { return }
-      serverDex = try? await SocialAPIClient.shared.travelDex()
+      await loadServerDex()
     }
     .accessibilityIdentifier("screen.friendDex")
   }
@@ -1522,7 +1681,10 @@ private struct ServerDogamCard: View {
         .foregroundStyle(MoyeoTheme.ink)
         .lineLimit(1)
         .minimumScaleFactor(0.72)
-      Text(ServerTripMapper.displayDate(companion.latestTripDate))
+      // 27 도감의 동행 날짜는 **요일을 붙이지 않는다** — 웹·안드로이드가 `2026.09.12` 이고
+      // iOS 만 `2026.09.12 (토)` 였다. 25 프로필 카드 뒷면도 이미 요일 없이 그린다
+      // (`ProfileCardCompanion.dateText`). `displayDate` 는 일정 날짜용이라 그대로 둔다.
+      Text(ProfileCardCompanion.dateText(companion.latestTripDate))
         .font(.system(size: 10, weight: .semibold))
         .foregroundStyle(MoyeoTheme.muted)
         .lineLimit(1)
@@ -1572,14 +1734,20 @@ private enum DogamFriendFilter: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
+  /// 서버 도감을 아직 못 받았을 때 쓰는 이름. **수를 지어내지 않는다** (NO-MOCK-CANON R1).
+  ///
+  /// 예전에는 여기서 「전체 12」·「2회 이상 4」·「최근 1개월 3」을 **박아 돌려줬다** —
+  /// 조회가 끝나기 전이나 실패했을 때 실제 사용자에게도 늘 그 숫자가 보였고,
+  /// 「지금까지 만난 친구 0마리」 옆에 「전체 12」가 나란히 떴다.
+  /// 같은 화면의 「카드 뒷면이 비어 있는 친구 2명」 하드코딩과 같은 부류다.
   var title: String {
     switch self {
     case .all:
-      return "전체 12"
+      return "전체"
     case .repeated:
-      return "2회 이상 4"
+      return "2회 이상"
     case .recent:
-      return "최근 1개월 3"
+      return "최근 1개월"
     }
   }
 
@@ -1754,12 +1922,39 @@ private struct SettingsView: View {
   @State private var isServerSettingsLoaded = false
   @State private var serverChatMode = "ALL"
   @State private var serverDNDSettings: ServerNotificationSettings?
+  /// 차단 인원. 서버에서 읽기 전에는 `nil` 이라 숫자를 그리지 않는다 (IOS-F22·F33).
+  @State private var blockedUserCount: Int?
+  /// 알림 설정 저장 실패를 알린다. 예전에는 `try?` 로 삼켜 꺼진 줄 알았던 알림이 살아 있었다 (IOS-F59).
+  @State private var notificationSaveError: String?
+  /// 알림 설정 **조회**가 실패했는지. 못 받았는데 화면 기본값(세 토글 모두 켜짐)을 그대로 그리면
+  /// 서버가 확인해 준 내 설정으로 읽힌다 — 실패를 확정값으로 그리는 것은 목데이터와 같다
+  /// (NO-MOCK-CANON R1). 실패는 실패라고 말하고 다시 시도를 준다.
+  @State private var didFailServerNotificationSettings = false
   @State private var selectedAction: SettingsRow?
   /// 29 설정 › 화면 › 테마. 행을 탭하면 시스템 기본 → 라이트 → 다크 순으로 순환한다.
   @ObservedObject private var themeStore = MoyeoThemeStore.shared
   @State private var isPerformingAccountAction = false
   @State private var accountErrorMessage: String?
   @State private var isShowingProviderManagement = false
+  /// 「문의하기」 행이 여는 두 창구 선택지 (GitHub 이슈 · 이메일).
+  @State private var isShowingContactOptions = false
+  /// 창구를 열지 못했을 때의 안내. 값이 있으면 알림으로 보여준다.
+  @State private var contactOpenFailure: String?
+  @Environment(\.openURL) private var openURL
+
+  private var contactOpenFailureBinding: Binding<Bool> {
+    Binding(get: { contactOpenFailure != nil }, set: { if !$0 { contactOpenFailure = nil } })
+  }
+
+  /// 창구를 연다. 열지 못하면 **주소를 클립보드에 넣고** 그 사실을 알린다 —
+  /// `mailto:` 는 메일 앱이 없으면 아무 일도 일어나지 않아 버튼이 고장 난 것처럼 보였다.
+  private func openContact(_ url: URL, copying fallbackText: String) {
+    openURL(url) { accepted in
+      guard !accepted else { return }
+      UIPasteboard.general.string = fallbackText
+      contactOpenFailure = "이 기기에서 바로 열 수 없어서 「\(fallbackText)」를 복사해 뒀어요."
+    }
+  }
   @State private var supportRoute: SupportRoute?
   @StateObject private var providerService: AuthProviderLinkService
   private let accountService: AuthAccountService
@@ -1790,8 +1985,26 @@ private struct SettingsView: View {
               SettingsToggleRow(title: "모집 마감 임박", subtitle: "D-3부터 알려드려요", isOn: $deadlineEnabled)
               SettingsToggleRow(title: "친구 신청·피드 반응", subtitle: nil, isOn: $friendEnabled)
               SettingsToggleRow(title: "마케팅 알림", subtitle: "이벤트·새 코스 소개", isOn: $marketingEnabled)
-              SettingsValueRow(action: .notificationDetail) { _ in
+              SettingsValueRow(action: .notificationDetail, valueOverride: quietHoursRowValue) { _ in
                 supportRoute = .notificationDetail
+              }
+              if didFailServerNotificationSettings {
+                MoyeoEmptyStateView(
+                  message: MoyeoEmptyText.loadFailed,
+                  onRetry: { Task { await loadServerNotificationSettings() } },
+                  accessibilityIdentifier: "settings.notification.loadFailed"
+                )
+                .padding(.vertical, 10)
+              }
+              if let notificationSaveError {
+                Text(notificationSaveError)
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(MoyeoTheme.dangerRed)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .padding(.horizontal, 16)
+                  .padding(.vertical, 10)
+                  .accessibilityIdentifier("settings.notification.saveError")
               }
             }
 
@@ -1812,11 +2025,11 @@ private struct SettingsView: View {
               SettingsValueRow(action: .kickHistory) { _ in
                 supportRoute = .kickHistory
               }
-              SettingsValueRow(action: .blockedUsers) { _ in
+              SettingsValueRow(action: .blockedUsers, valueOverride: blockedUsersRowValue) { _ in
                 supportRoute = .blockedUsers
               }
               SettingsValueRow(action: .privacyPolicy) { _ in
-                supportRoute = .legalDocument(.privacy)
+                supportRoute = .legalDocument(.privacyPolicy)
               }
               SettingsValueRow(action: .terms) { _ in
                 supportRoute = .legalDocument(.service)
@@ -1825,7 +2038,10 @@ private struct SettingsView: View {
 
             SettingsSectionGroup("정보") {
               SettingsValueRow(action: .version) { selectedAction = $0 }
-              SettingsValueRow(action: .contact) { selectedAction = $0 }
+              // 「문의하기」는 안내만 하고 끝나면 안 된다 — 예전에는 「닫기」 하나뿐이라
+              // 어디로 문의하는지 읽고도 갈 곳이 없었다 (TC SET-028).
+              // 웹은 같은 다이얼로그 안에 GitHub·이메일 두 링크를 둔다. 그대로 맞춘다.
+              SettingsValueRow(action: .contact) { _ in isShowingContactOptions = true }
               SettingsValueRow(action: .rate) { selectedAction = $0 }
               // changeLog17 — `앱 평가하기` 다음, `로그아웃` 위
               SettingsValueRow(action: .ossLicenses) { _ in
@@ -1875,6 +2091,20 @@ private struct SettingsView: View {
     } message: {
       Text(accountErrorMessage ?? "잠시 후 다시 시도해주세요.")
     }
+    // 29 설정 「문의하기」 — 실제로 열리는 두 창구. 값은 `MoyeoContact` 한 곳에서 온다.
+    .confirmationDialog("문의하기", isPresented: $isShowingContactOptions, titleVisibility: .visible) {
+      Button(MoyeoContact.issuesLabel) { openContact(MoyeoContact.issuesURL, copying: MoyeoContact.issuesURL.absoluteString) }
+      Button(MoyeoContact.emailLabel) { openContact(MoyeoContact.mailtoURL, copying: MoyeoContact.email) }
+      Button("닫기", role: .cancel) {}
+    } message: {
+      Text(MoyeoContact.dialogBody)
+    }
+    // 열지 못했을 때(메일 앱 없음 등)만 뜬다 — 조용히 실패하지 않는다 (TC SOCIAL-037).
+    .alert("바로 열 수 없어요", isPresented: contactOpenFailureBinding) {
+      Button("확인", role: .cancel) { contactOpenFailure = nil }
+    } message: {
+      Text(contactOpenFailure ?? "")
+    }
     .sheet(isPresented: $isShowingProviderManagement) {
       ProviderManagementView(service: providerService)
     }
@@ -1896,6 +2126,25 @@ private struct SettingsView: View {
     themeStore.mode.rowValue
   }
 
+  /// 방해금지 행의 값 — **서버 설정 그대로**. 아직 못 읽었으면 아무 값도 적지 않는다.
+  private var quietHoursRowValue: String? {
+    guard let settings = serverDNDSettings else { return nil }
+    guard settings.doNotDisturbEnabled,
+          let start = settings.doNotDisturbStartTime,
+          let end = settings.doNotDisturbEndTime else { return "방해금지 꺼짐" }
+    return "방해금지 \(Self.hourMinute(start))~\(Self.hourMinute(end))"
+  }
+
+  /// `"22:30:00"` · `"22:30"` 어느 쪽으로 와도 `22:30` 으로 줄인다.
+  private static func hourMinute(_ value: String) -> String {
+    value.split(separator: ":").prefix(2).joined(separator: ":")
+  }
+
+  /// 차단 인원 — 서버에서 읽은 수만 적는다.
+  private var blockedUsersRowValue: String? {
+    blockedUserCount.map { "\($0)명" }
+  }
+
   private func advanceTheme() {
     themeStore.advance()
   }
@@ -1903,13 +2152,18 @@ private struct SettingsView: View {
   /// 29-2 알림 설정 — 채팅 모드·3개 토글은 프로필 응답에, 방해 금지는 알림 설정 응답에 있다
   private func loadServerNotificationSettings() async {
     guard MoyeoServerSync.isEnabled, !isServerSettingsLoaded else { return }
-    guard let profile = try? await UserProfileAPIClient.shared.myProfile() else { return }
+    didFailServerNotificationSettings = false
+    guard let profile = try? await UserProfileAPIClient.shared.myProfile() else {
+      didFailServerNotificationSettings = true
+      return
+    }
     serverChatMode = profile.chatNotificationMode
     chatEnabled = profile.chatNotificationMode != "NONE"
     deadlineEnabled = profile.recruitmentDeadlineEnabled
     friendEnabled = profile.socialActivityEnabled
     marketingEnabled = profile.marketingEnabled
     serverDNDSettings = try? await NotificationAPIClient.shared.settings()
+    blockedUserCount = (try? await SocialAPIClient.shared.blockedUsers())?.count
     isServerSettingsLoaded = true
   }
 
@@ -1927,8 +2181,16 @@ private struct SettingsView: View {
       doNotDisturbDays: serverDNDSettings?.doNotDisturbDays ?? []
     )
     Task {
-      if let updated = try? await NotificationAPIClient.shared.updateSettings(update) {
-        serverDNDSettings = updated
+      do {
+        serverDNDSettings = try await NotificationAPIClient.shared.updateSettings(update)
+        notificationSaveError = nil
+      } catch {
+        // 껐다고 생각한 알림이 살아 있으면 안 된다 — 실패를 말하고 화면을 서버 값으로 되돌린다.
+        notificationSaveError = error.moyeoUserMessage(
+          fallback: "알림 설정을 저장하지 못했어요. 잠시 후 다시 시도해주세요."
+        )
+        isServerSettingsLoaded = false
+        await loadServerNotificationSettings()
       }
     }
   }
@@ -1984,8 +2246,7 @@ private struct SettingsView: View {
         onAuthenticationRequired()
       } catch {
         accountErrorMessage =
-          (error as? LocalizedError)?.errorDescription
-          ?? "잠시 후 다시 시도해주세요."
+          error.moyeoUserMessage(fallback: "잠시 후 다시 시도해주세요.")
       }
       isPerformingAccountAction = false
     }
@@ -2023,8 +2284,25 @@ struct ProviderManagementView: View {
             .foregroundStyle(MoyeoTheme.muted)
             .fixedSize(horizontal: false, vertical: true)
 
-          ForEach(AuthServiceProvider.connectionOrder) { provider in
-            providerCard(provider)
+          if service.hasLoadedProviders {
+            ForEach(AuthServiceProvider.connectionOrder) { provider in
+              providerCard(provider)
+            }
+          } else if service.isLoading {
+            MoyeoEmptyStateView(
+              message: MoyeoEmptyText.loading,
+              accessibilityIdentifier: "providers.loading"
+            )
+          } else {
+            // **못 받은 것을 「모두 연결되지 않음」으로 그리지 않는다.** 그렇게 그리면
+            // 이미 연결된 방식에까지 「연결하기」가 붙어, 사용자는 연결이 풀린 줄 안다
+            // (TC SET-023). 다시 받을 길만 준다.
+            MoyeoSectionRetryNotice(
+              message: "연결된 로그인 방식을 불러오지 못했어요.",
+              identifier: "providers.list"
+            ) {
+              Task { await service.load() }
+            }
           }
 
           // 마지막 하나는 끊을 수 없다 — 끊으면 아무 방법으로도 못 들어온다.
@@ -2493,10 +2771,12 @@ private enum SettingsRow: Identifiable {
     }
   }
 
+  /// **서버에서 읽어야 하는 값은 여기에 적지 않는다.** 예전에는 방해금지 시간대와
+  /// 차단 인원이 「방해금지 22:30~07:00」·「2명」으로 박혀 있어, 서버 값과 무관하게
+  /// 늘 같은 숫자가 보였다 (IOS-F22·F33·F60, NO-MOCK-CANON R1).
+  /// 그 두 행은 `SettingsView` 가 `valueOverride` 로 실제 값을 넘긴다.
   var rowValue: String? {
     switch self {
-    case .notificationDetail:
-      return "방해금지 22:30~07:00"
     case .theme:
       // 캡처 기본값. 실제 값은 SettingsView 가 사용자 설정으로 덮어쓴다.
       return MoyeoThemeMode.system.rowValue
@@ -2504,8 +2784,6 @@ private enum SettingsRow: Identifiable {
       return "한국어"
     case .loginMethod:
       return "관리"
-    case .blockedUsers:
-      return "2명"
     case .version:
       // 최신 버전 조회 API가 없어 `(최신)` 판정은 붙이지 않는다. 캡처 모드만 기획값을 유지한다.
       return AppVersionInfo.rowValue
@@ -2571,7 +2849,9 @@ private enum SettingsRow: Identifiable {
     case .version:
       return AppVersionInfo.dialogBody
     case .contact:
-      return "채팅, 모집, 결제 문의를 남기는 고객센터로 이어져요."
+      // 「고객센터」는 존재하지 않는 개념이다(정본 changeLog14 · `MoyeoContact`).
+      // 웹·안드로이드는 이미 이 문구로 바꿨는데 iOS 만 옛 문구가 남아 있었다.
+      return MoyeoContact.dialogBody
     case .rate:
       return "스토어 평가로 이동하기 전, 모여트립 사용 경험을 한 번 더 확인해요."
     case .ossLicenses:
@@ -2616,7 +2896,10 @@ private struct MyActiveTripCard: View {
             .minimumScaleFactor(0.9)
             .accessibilityIdentifier("my.activeTrip.\(trip.id).title")
           Spacer(minLength: 4)
-          Pill(text: trip.ddayText, tint: MoyeoTheme.coral)
+          // 마감 근거가 없으면 배지를 그리지 않는다 (NO-MOCK-CANON R1).
+          if !trip.ddayText.isEmpty {
+            Pill(text: trip.ddayText, tint: MoyeoTheme.coral)
+          }
         }
 
         Text(trip.myDateText)
@@ -2643,7 +2926,9 @@ private struct MyActiveTripCard: View {
       }
     }
     .padding(12)
-    .frame(height: MyTravelCardMetrics.activeHeight)
+    // 큰 글자에서 높이를 못박으면 카드 안에서 상태·인원 줄이 겹쳐 읽힌다 (TC ENV-005).
+    // 기본 크기에서는 지금과 같은 높이이고, 글자가 커질 때만 카드가 따라 늘어난다.
+    .frame(minHeight: MyTravelCardMetrics.activeHeight)
     .moyeoListCard()
   }
 }
@@ -2734,18 +3019,17 @@ extension TripRecruitment {
     }
   }
 
+  /// 26 마이 진행중 카드의 마감 배지. **서버가 준 마감값에서만 뽑는다.**
+  ///
+  /// 예전에는 화면 id 로 갈라 `D-3`·`D-5` 를 돌려주고 나머지는 전부 `D-1` 이었다 —
+  /// 서버가 알려준 적 없는 마감일이라 목데이터다 (NO-MOCK-CANON R1).
+  /// `recruitmentDeadline` 은 `ServerChatRoomTripMapper.deadlineText` 가 만든
+  /// `"D-17 · 9/9"` 꼴이라 앞머리만 떼어 쓰고, 근거가 없으면 **빈 문자열**이다
+  /// (카드가 배지를 그리지 않는다).
   fileprivate var ddayText: String {
-    // 마감 D-day는 4개 플랫폼 공통 값이다 (docs/alignment/MOCKDATA-CANON.md)
-    switch id {
-    case "trip-cheongsong-juwangsan":
-      return "D-3"
-    case "trip-andong-hahoe":
-      return "D-5"
-    case "trip-gyeongju-night":
-      return "D-3"
-    default:
-      return "D-1"
-    }
+    guard let head = recruitmentDeadline.split(separator: "·").first else { return "" }
+    let text = head.trimmingCharacters(in: .whitespaces)
+    return text.hasPrefix("D-") ? text : ""
   }
 
   /// 화면기획 26 마이 — 진행중 카드는 서버가 준 코스 이름이 있으면 그것을, 없으면 모집 이름을 쓴다
@@ -2772,48 +3056,6 @@ extension TripRecruitment {
 
   private var myParticipantCount: (joined: Int, capacity: Int) {
     (joined, capacity)
-  }
-}
-
-private struct ProfileHeader: View {
-  let profile: ProfileSummary
-
-  var body: some View {
-    VStack(spacing: 18) {
-      HStack(spacing: 16) {
-        AuthenticatedProfileAvatar(profile: profile, size: 82)
-        VStack(alignment: .leading, spacing: 8) {
-          Text(profile.name)
-            .font(.title2.weight(.heavy))
-            .foregroundStyle(MoyeoTheme.ink)
-          Text(profile.handle)
-            .font(.headline)
-            .foregroundStyle(MoyeoTheme.forest)
-          Label(profile.region, systemImage: "mappin.circle.fill")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(MoyeoTheme.muted)
-        }
-        Spacer()
-        Image(systemName: "gearshape.fill")
-          .font(.headline.bold())
-          .foregroundStyle(MoyeoTheme.forest)
-          .frame(width: 44, height: 44)
-          .background(MoyeoTheme.leaf)
-          .clipShape(Circle())
-      }
-
-      HStack(spacing: 8) {
-        ForEach(dynamicBadges.prefix(3), id: \.self) { badge in
-          Pill(text: badge, tint: MoyeoTheme.coral)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .moyeoCard()
-  }
-
-  private var dynamicBadges: [String] {
-    ["여행 \(profile.joinedTrips)", "매너 4.7", "경북 친구"]
   }
 }
 
@@ -2900,44 +3142,6 @@ private struct MyProfileMetricStrip: View {
   }
 }
 
-private struct ProfileTagPanel: View {
-  let profile: ProfileSummary
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Text("선호 지역")
-        .font(.headline)
-        .foregroundStyle(MoyeoTheme.ink)
-      HStack(spacing: 8) {
-        ForEach(profile.favoriteRegions, id: \.self) { region in
-          Pill(text: region, tint: MoyeoTheme.forest)
-        }
-      }
-
-      Divider()
-
-      HStack(spacing: 12) {
-        Image(systemName: "leaf.fill")
-          .font(.headline)
-          .foregroundStyle(MoyeoTheme.forest)
-          .frame(width: 38, height: 38)
-          .background(MoyeoTheme.leaf)
-          .clipShape(Circle())
-        VStack(alignment: .leading, spacing: 4) {
-          Text("이번 달 추천")
-            .font(.subheadline.bold())
-            .foregroundStyle(MoyeoTheme.ink)
-          Text("문경새재 숲길 힐링 워크가 프로필 취향과 잘 맞아요.")
-            .font(.caption)
-            .foregroundStyle(MoyeoTheme.muted)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-    }
-    .moyeoCard()
-  }
-}
-
 /// 28-1 에서 고칠 수 있는 줄. 자기소개는 공개, 생년월일·성별은 비공개 정보다.
 private enum ProfileEditField: String, Identifiable {
   case introduction
@@ -2964,6 +3168,9 @@ private struct ProfileEditFieldSheet: View {
   @Binding var gender: String
   let onSave: () -> Void
   let onCancel: () -> Void
+
+  /// 서버 `PUT /users/me/profile` 의 `introduction` 한도 (`size must be between 0 and 300`).
+  private static let introductionLimit = 300
 
   /// 서버 형식은 `yyyy-MM-dd` 다. 값이 없으면 오늘로 시작한다(저장 전까지 서버에 가지 않는다).
   @State private var pickedDate = Date()
@@ -3016,7 +3223,15 @@ private struct ProfileEditFieldSheet: View {
     switch field {
     case .introduction:
       VStack(alignment: .leading, spacing: 8) {
-        TextEditor(text: $introduction)
+        // 카운터는 **서버 한도와 같아야 한다.** 예전에는 `/ 200` 이라 적어 두고 자르지도 않아,
+        // 201~300자는 「넘었다」고 붉게 적히는데 저장은 되고, 301자부터는 서버가
+        // `size must be between 0 and 300` 으로 막았다 (IOS-F48, 실서버 확인 2026-09-13).
+        TextEditor(
+          text: Binding(
+            get: { introduction },
+            set: { introduction = String($0.prefix(Self.introductionLimit)) }
+          )
+        )
           .scrollContentBackground(.hidden)
           .padding(10)
           .frame(minHeight: 120)
@@ -3024,14 +3239,24 @@ private struct ProfileEditFieldSheet: View {
           .overlay(RoundedRectangle(cornerRadius: 10).stroke(MoyeoTheme.line))
           .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
           .accessibilityIdentifier("profile.edit.introductionInput")
-        Text("\(introduction.count) / 200")
+        Text("\(introduction.count) / \(Self.introductionLimit)")
           .font(.caption2)
-          .foregroundStyle(MoyeoTheme.text400)
+          .foregroundStyle(
+            introduction.count >= Self.introductionLimit ? MoyeoTheme.dangerRed : MoyeoTheme.text400
+          )
           .monospacedDigit()
           .frame(maxWidth: .infinity, alignment: .trailing)
       }
     case .birthDate:
-      DatePicker("", selection: $pickedDate, displayedComponents: .date)
+      // 상한을 걸지 않으면 2439년까지 고를 수 있었고, 저장해야 서버가
+      // 「과거 날짜여야 합니다」로 거절했다 (TC MY-015). 가입 플로우는 이미
+      // `KoreanBirthdatePolicy` 로 최소 연령까지 막고 있는데 프로필 편집만 빠져 있었다.
+      DatePicker(
+        "",
+        selection: $pickedDate,
+        in: ...KoreanBirthdatePolicy.latestAllowedBirthdate(),
+        displayedComponents: .date
+      )
         .datePickerStyle(.wheel)
         .labelsHidden()
         // 17-2 날짜 시트와 같은 한국어 표기로 맞춘다 (기본값이면 월이 영어로 나온다).

@@ -19,6 +19,11 @@ struct AttachComposerFrame<Content: View>: View {
     var hint: String = ""
     let cta: String
     var isCTAEnabled = true
+    /// CTA 바로 위에 띄우는 경고 한 줄. 비면 그 줄을 그리지 않는다.
+    ///
+    /// 본문 끝에 두면 스크롤 밖으로 밀려 **왜 저장이 막혔는지 보이지 않는다**
+    /// — 실제로 화면(874pt) 밖 y≈997pt 에 떠서 못 읽었다 (IOS-F125, 2026-09-13).
+    var warning: String = ""
     var identifier: String
     let onSend: () -> Void
     @ViewBuilder var content: () -> Content
@@ -52,9 +57,22 @@ struct AttachComposerFrame<Content: View>: View {
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다. 탭 루트에서 한 번 살려 둔 것이
+        // **push 될 때마다 다시 꺼지므로** 이 화면들에서도 각각 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            AuthPrimaryButton(title: cta, accessibilityIdentifier: "\(identifier).send", action: onSend)
-                .disabled(!isCTAEnabled)
+            VStack(spacing: 8) {
+                if !warning.isEmpty {
+                    Text(warning)
+                        .font(MoyeoTypography.tinyMeta)
+                        .foregroundStyle(MoyeoTheme.dangerRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("\(identifier).warning")
+                }
+                AuthPrimaryButton(title: cta, accessibilityIdentifier: "\(identifier).send", action: onSend)
+                    .disabled(!isCTAEnabled)
+            }
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
                 .padding(.bottom, 28)
@@ -73,10 +91,13 @@ struct AttachComposerFrame<Content: View>: View {
                 .foregroundStyle(MoyeoTheme.ink)
             HStack {
                 Button(action: dismiss.callAsFunction) {
+                    // NAV-017 · ENV-009 — 44x44 틀은 있었지만 `contentShape` 가 없어
+                    // 실제로는 화살표 그림(9x14pt)에만 반응했다. 그림 크기는 그대로 둔다.
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(MoyeoTheme.ink)
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("뒤로")
@@ -91,6 +112,8 @@ struct AttachComposerFrame<Content: View>: View {
 struct AttachFieldLabel: View {
     let text: String
     var isRequired = false
+    /// 화면의 **첫 칸**이면 위 여백을 주지 않는다 — 프레임이 이미 `.padding(.top, 16)` 을 준다.
+    var isFirst = false
 
     var body: some View {
         HStack(spacing: 3) {
@@ -102,6 +125,11 @@ struct AttachFieldLabel: View {
         .font(.caption.weight(.heavy))
         .foregroundStyle(MoyeoTheme.ink)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // 라벨은 **새 칸이 시작한다**는 표시다. 예전에는 아래 여백(8)만 있고 위가 0 이라,
+        // 앞 칸의 힌트 줄과 다음 라벨이 딱 붙어 한 덩어리로 읽혔다
+        // (사용자 지적 2026-09-12 — 「뷰들의 위아래로 너무 딱붙어 있다」).
+        // 프레임의 content VStack 이 `spacing: 0` 이라 여백을 줄 곳이 여기뿐이다.
+        .padding(.top, isFirst ? 0 : 20)
         .padding(.bottom, 8)
     }
 }
@@ -185,6 +213,12 @@ struct AttachTextField: View {
 final class AttachComposerSendState: ObservableObject {
     @Published var isSending = false
     @Published var failureMessage: String?
+    /// 한 번이라도 성공했는지. **성공하면 작성 화면을 닫는다.**
+    ///
+    /// 예전에는 성공해도 화면이 그대로 남아, 보낸 줄 모른 사용자가 다시 눌러
+    /// 같은 카드를 두 번 세 번 올렸다 — 2026-09-13 기기 확인에서 공지 3건이 실제로 쌓였다
+    /// (IOS-F71). `isSending` 가드는 **보내는 동안**만 막아서 이 경우를 못 막는다.
+    @Published var didSend = false
 
     var isFailureShown: Binding<Bool> {
         Binding(get: { self.failureMessage != nil }, set: { if !$0 { self.failureMessage = nil } })
@@ -196,29 +230,53 @@ final class AttachComposerSendState: ObservableObject {
         work: @escaping () async throws -> Void,
         onSuccess: @escaping () -> Void
     ) {
-        guard !isSending else { return }
+        guard !isSending, !didSend else { return }
         isSending = true
         Task {
             do {
                 try await work()
                 isSending = false
+                didSend = true
                 onSuccess()
             } catch {
                 isSending = false
-                failureMessage = (error as? LocalizedError)?.errorDescription ?? fallbackMessage
+                failureMessage = error.moyeoUserMessage(fallback: fallbackMessage)
             }
         }
     }
 }
 
+/// 성공하면 **작성 화면을 스스로 닫는다.** 닫는 일을 부모(첨부 메뉴)에 맡기면
+/// 그 위에 쌓인 작성 화면이 남아 중복 전송이 난다 (IOS-F71).
+private struct AttachComposerSendOutcome: ViewModifier {
+    @ObservedObject var state: AttachComposerSendState
+    /// 성공하면 이 화면을 닫을지. **보내고 끝나는 화면만** 참이다 —
+    /// 결과 화면을 이어 그리는 곳(27-2 여행 확정)이나 목록에 머무는 곳(23-1a 댓글 수정)은 거짓이다.
+    let dismissesOnSuccess: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content
+            .alert("보내기", isPresented: state.isFailureShown) {
+                Button("확인", role: .cancel) { state.failureMessage = nil }
+            } message: {
+                Text(state.failureMessage ?? "")
+            }
+            .onChange(of: state.didSend) { _, didSend in
+                guard didSend, dismissesOnSuccess else { return }
+                dismiss()
+            }
+    }
+}
+
 extension View {
-    /// 6종이 같은 실패 알림을 쓴다.
-    func attachComposerFailureAlert(_ state: AttachComposerSendState) -> some View {
-        alert("보내기", isPresented: state.isFailureShown) {
-            Button("확인", role: .cancel) { state.failureMessage = nil }
-        } message: {
-            Text(state.failureMessage ?? "")
-        }
+    /// 같은 실패 알림을 쓴다. `dismissesOnSuccess` 를 켜면 성공 후 **스스로 닫는다**
+    /// — 닫는 일을 부모에 맡기면 그 위에 쌓인 작성 화면이 남아 중복 전송이 난다 (IOS-F71).
+    func attachComposerFailureAlert(
+        _ state: AttachComposerSendState,
+        dismissesOnSuccess: Bool = false
+    ) -> some View {
+        modifier(AttachComposerSendOutcome(state: state, dismissesOnSuccess: dismissesOnSuccess))
     }
 }
 

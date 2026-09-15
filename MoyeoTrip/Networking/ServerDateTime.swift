@@ -61,4 +61,27 @@ enum ServerDateTime {
         formatter.dateFormat = "M월 d일 a h:mm"
         return formatter.string(from: date)
     }
+
+    /// 채팅 날짜 구분선 — "오늘" · "어제" · "2026년 9월 14일 (일)" (웹과 같은 규칙).
+    /// 못 읽는 값이면 `nil` 이다 — **구분선을 지어내지 않는다.**
+    static func daySeparatorText(from value: String, today: Date = Date()) -> String? {
+        guard let date = date(from: value) else { return nil }
+        let calendar = Calendar(identifier: .gregorian)
+        if calendar.isDate(date, inSameDayAs: today) { return "오늘" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "어제"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy년 M월 d일 (E)"
+        return formatter.string(from: date)
+    }
+
+    /// 두 메시지가 **다른 날**인지. 앞 메시지가 없으면(목록 첫 줄) 항상 구분선을 둔다.
+    static func startsNewDay(_ value: String, after previous: String?) -> Bool {
+        guard let current = date(from: value) else { return false }
+        guard let previous, let earlier = date(from: previous) else { return true }
+        return !Calendar(identifier: .gregorian).isDate(current, inSameDayAs: earlier)
+    }
 }

@@ -44,16 +44,22 @@ struct AuthOnboardingPage: Identifiable {
 typealias AuthProvider = AuthServiceProvider
 
 extension AuthServiceProvider {
+    /// 로그인 버튼 문구. **「제공자 이름 + 로그인」으로 통일한다** (2026-09-14 결정 ③).
+    ///
+    /// 예전에는 한 화면에 동사가 셋이었다 — 「카카오 로그인」·「Google로 계속하기」·
+    /// 「이메일로 시작하기」. 같은 일을 하는 버튼이 서로 다른 약속을 하는 것처럼 읽힌다.
+    /// 제공자 표기(`카카오`·`Google`·`Apple`)는 브랜드를 따르고 **뒤는 전부 「 로그인」**이다.
+    /// 접근성 라벨도 같은 문장을 쓴다(`AuthProviderButton` 이 이 값을 그대로 읽는다).
     var title: String {
         switch self {
         case .kakao:
             return "카카오 로그인"
         case .email:
-            return "이메일로 시작하기"
+            return "이메일 로그인"
         case .google:
-            return "Google로 계속하기"
+            return "Google 로그인"
         case .apple:
-            return "Apple로 계속하기"
+            return "Apple 로그인"
         }
     }
 
@@ -162,7 +168,6 @@ enum AuthTerm: String, CaseIterable, Identifiable {
     case age
     case service
     case privacy
-    case location
     case marketing
 
     var id: String { rawValue }
@@ -170,13 +175,13 @@ enum AuthTerm: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .age:
-            return "만 18세 이상"
+            // 숫자는 `KoreanBirthdatePolicy.minimumSignupAge` 하나에서만 온다 —
+            // 서버 `AuthService.MINIMUM_SIGNUP_AGE` 를 따르는 값이다 (BE-06).
+            return "만 \(KoreanBirthdatePolicy.minimumSignupAge)세 이상"
         case .service:
             return "이용약관 동의"
         case .privacy:
             return "개인정보 처리방침"
-        case .location:
-            return "위치정보 이용"
         case .marketing:
             return "마케팅 정보 수신"
         }
@@ -195,25 +200,6 @@ enum AuthTerm: String, CaseIterable, Identifiable {
     }
 
     static let requiredTerms: [AuthTerm] = [.age, .service, .privacy]
-
-    var legalDocument: LegalDocumentKind? {
-        switch self {
-        case .age: nil
-        case .service: .service
-        case .privacy: .privacy
-        case .location: .location
-        case .marketing: .marketing
-        }
-    }
-
-    init?(document: LegalDocumentKind) {
-        switch document {
-        case .service: self = .service
-        case .privacy: self = .privacy
-        case .location: self = .location
-        case .marketing: self = .marketing
-        }
-    }
 }
 
 struct AuthStepContainer<Content: View, Footer: View>: View {
@@ -295,8 +281,11 @@ struct AuthPrimaryButton: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: MoyeoTheme.ctaHeight)
                 .background(isEnabled ? MoyeoTheme.forest : MoyeoTheme.subtleBackground)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                // 정본은 **높이 48 · 모서리 12** 이고 네 표면이 각자 이름 있는 상수로 그 값을 쓴다
+                // (docs/ui-comparison/BUTTON-GEOMETRY.md). 여기만 카드용 반경(9)을 쓰고 있어
+                // 같은 버튼이 iOS 에서만 덜 둥글었다 (TC REQ-008).
+                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier ?? "")
@@ -320,14 +309,16 @@ struct AuthSecondaryButton: View {
                 .font(.subheadline.weight(.heavy))
                 .foregroundStyle(isEnabled ? MoyeoTheme.onLeaf : MoyeoTheme.muted)
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
+                // 보조 CTA 도 주 버튼과 **같은 높이·모서리**다 — 나란히 놓이는 두 버튼이
+                // 48 과 50 으로 달라 한쪽만 커 보였다 (TC REQ-008).
+                .frame(height: MoyeoTheme.ctaHeight)
                 .background(isEnabled ? MoyeoTheme.card : MoyeoTheme.subtleBackground)
-                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius, style: .continuous)
                         .stroke(isEnabled ? MoyeoTheme.forest : MoyeoTheme.line, lineWidth: 1)
                 }
-                .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: MoyeoTheme.ctaRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier ?? "")

@@ -11,6 +11,9 @@ enum AuthFlowStage: Equatable {
     case splash
     case onboarding
     case login
+    /// 저장된 세션은 있는데 **통신이 안 돼** 복원을 끝내지 못했다 (안드 `sessionRestoreFailed` 와 같은 자리).
+    /// 로그인 화면으로 떨어뜨리면 로그아웃된 것처럼 읽힌다 — 세션은 지우지 않고 다시 시도할 길을 준다.
+    case sessionRestoreFailed
     case emailLogin
     case emailRegistration
     case passwordReset
@@ -27,6 +30,7 @@ enum AuthFlowStage: Equatable {
         case .splash: 0
         case .onboarding: 0.12
         case .login: 0.28
+        case .sessionRestoreFailed: 0.28
         case .emailLogin, .emailRegistration, .passwordReset: 0.34
         case .nickname: 0.44
         case .basics: 0.68

@@ -46,7 +46,7 @@ struct AttachNoticeComposerView: View {
             identifier: "attachNotice",
             onSend: send
         ) {
-            AttachFieldLabel(text: "공지 내용", isRequired: true)
+            AttachFieldLabel(text: "공지 내용", isRequired: true, isFirst: true)
             noticeEditor
 
             AttachToggleRow(
@@ -74,7 +74,7 @@ struct AttachNoticeComposerView: View {
             let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID)
             pinnedNotices = history?.pinnedNotices ?? []
         }
-        .attachComposerFailureAlert(sendState)
+        .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
     private var noticeEditor: some View {
@@ -147,7 +147,7 @@ struct AttachNoticeComposerView: View {
                     )
                 }
             }
-            _ = try await ChatRoomWriteAPIClient.shared.createNotice(
+            try await ChatRoomWriteAPIClient.shared.createNotice(
                 roomID: roomID, notice: notice, pinned: pinned
             )
         } onSuccess: { onSent() }

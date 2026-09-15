@@ -11,7 +11,11 @@ struct CourseDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedTrip: TripRecruitment?
     @State private var supportRoute: SupportRoute?
-    @State private var isFavorite = false
+    /// 찜 상태는 **서버가 아는 값**이다. 아직 못 읽었으면 `nil` 이라 하트를 채우지 않는다.
+    /// 예전에는 로컬 `@State` 토글만 바꾸고 「찜한 코스에 담았어요」를 띄워,
+    /// 서버에는 아무것도 저장되지 않은 채 성공처럼 보였다 (IOS-F14·F93).
+    @State private var isFavorite: Bool?
+    @State private var isTogglingFavorite = false
     @State private var feedbackMessage: String?
     /// 실서버 코스 상세 — 목록에 없는 작성자·연결된 모임 수가 여기서 온다 (14)
     @State private var serverDetail: TravelCourse?
@@ -26,21 +30,26 @@ struct CourseDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             CourseDetailHeader(
-                isFavorite: isFavorite,
+                isFavorite: isFavorite ?? false,
+                isFavoriteEnabled: displayCourse.serverCourseID != nil && !isTogglingFavorite,
                 onBack: { dismiss() },
-                onShare: {
-                    feedbackMessage = "코스 공유 링크를 복사했어요."
-                },
-                onToggleFavorite: {
-                    isFavorite.toggle()
-                    feedbackMessage = isFavorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
-                }
+                onToggleFavorite: toggleFavorite
             )
 
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 18) {
-                        CourseDetailHero(course: displayCourse)
+                        CourseDetailHero(course: displayCourse) { userID, info in
+                            supportRoute = .publicProfile(
+                                .serverUser(
+                                    ProfileCardUserReference(
+                                        userID: userID,
+                                        nickname: info.travelerName,
+                                        profileImageUrl: info.travelerAvatarURL?.absoluteString
+                                    )
+                                )
+                            )
+                        }
 
                         if let feedbackMessage {
                             CourseDetailFeedbackBanner(message: feedbackMessage)
@@ -58,7 +67,9 @@ struct CourseDetailView: View {
                             DetailPanel(title: "방문지 \(displayCourse.itinerary.count)곳") {
                                 VStack(spacing: 10) {
                                     ForEach(displayCourse.itinerary) { stop in
-                                        CourseStopRow(stop: stop)
+                                        CourseStopRow(stop: stop) { placeID in
+                                            supportRoute = .placeDetail(placeID)
+                                        }
                                     }
                                 }
                             }
@@ -126,19 +137,44 @@ struct CourseDetailView: View {
             )
         }
         .task {
-            guard MoyeoServerSync.isEnabled, let courseID = course.serverCourseID, serverDetail == nil else { return }
-            if let detail = try? await TravelCourseAPIClient.shared.courseDetail(courseID: courseID) {
+            guard MoyeoServerSync.isEnabled, let courseID = course.serverCourseID else { return }
+            if serverDetail == nil,
+               let detail = try? await TravelCourseAPIClient.shared.courseDetail(courseID: courseID) {
                 serverDetail = ServerCourseMapper.course(from: detail)
+            }
+            // 코스 상세 응답에는 내 찜 여부가 없다 — 찜 목록으로 판단한다 (BE-26).
+            if isFavorite == nil,
+               let liked = try? await TravelCourseAPIClient.shared.likedCourses() {
+                isFavorite = liked.contains { $0.courseId == courseID }
             }
         }
         .accessibilityIdentifier("course.detail.\(course.id)")
+    }
+
+    private func toggleFavorite() {
+        guard let courseID = displayCourse.serverCourseID, !isTogglingFavorite else { return }
+        isTogglingFavorite = true
+        feedbackMessage = nil
+        Task {
+            defer { isTogglingFavorite = false }
+            do {
+                let result = try await TravelCourseAPIClient.shared.toggleFavorite(courseID: courseID)
+                isFavorite = result.favorite
+                feedbackMessage = result.favorite ? "찜한 코스에 담았어요." : "찜한 코스에서 제외했어요."
+            } catch {
+                feedbackMessage = error.moyeoUserMessage(
+                    fallback: "찜을 저장하지 못했어요. 잠시 후 다시 시도해주세요."
+                )
+            }
+        }
     }
 }
 
 private struct CourseDetailHeader: View {
     let isFavorite: Bool
+    /// 서버 코스가 아니면 찜할 곳이 없다 — 누를 수 있게 두고 아무 일도 안 하는 대신 잠근다.
+    let isFavoriteEnabled: Bool
     let onBack: () -> Void
-    let onShare: () -> Void
     let onToggleFavorite: () -> Void
 
     var body: some View {
@@ -149,9 +185,11 @@ private struct CourseDetailHeader: View {
 
             HStack {
                 Button(action: onBack) {
+                    // ENV-009 / NAV-017 — 그림에만 반응하던 것을 틀 전체로 넓힌다
                     Image(systemName: "chevron.left")
                         .font(.system(size: 19, weight: .bold))
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(MoyeoTheme.ink)
@@ -159,22 +197,21 @@ private struct CourseDetailHeader: View {
 
                 Spacer()
 
+                // 결정 ⑬ — 공유 진입점을 뺐다. 공개 URL 규격이 없어 공유 본문에 링크가
+                // 한 줄도 없었다(EXTRA-003). 「준비 중」 안내로 바꾸지 않고 버튼 자체를 없앤다.
+                // 찜 버튼이 제자리(오른쪽 끝)를 그대로 지킨다.
                 HStack(spacing: 4) {
-                    Button(action: onShare) {
-                        Image(systemName: "square.and.arrow.up")
-                            .frame(width: 40, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .accessibilityLabel("공유")
-
                     Button(action: onToggleFavorite) {
+                        // ENV-009 — 찜도 같다 (재던 값 15x14pt)
                         Image(systemName: isFavorite ? "heart.fill" : "heart")
-                            .frame(width: 40, height: 44)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .disabled(!isFavoriteEnabled)
                     .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.ink)
                     .accessibilityLabel(isFavorite ? "찜 해제" : "찜")
+                    .accessibilityIdentifier("course.detail.favorite")
                 }
             }
         }
@@ -206,6 +243,8 @@ private struct CourseDetailFeedbackBanner: View {
 
 private struct CourseDetailHero: View {
     let course: TravelCourse
+    /// 작성자 프로필로 보내는 길. 작성자 userId 가 공개됐을 때만 불린다 (BE-29).
+    let onOpenCreatorProfile: (Int64, CoursePublishingInfo) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -243,7 +282,20 @@ private struct CourseDetailHero: View {
                 }
 
                 if let publishingInfo = course.publishingInfo {
-                    CoursePublishingSource(info: publishingInfo)
+                    // 작성자 userId 를 공개한 코스에서만 25 공개 프로필로 보낸다 (BE-29).
+                    // 공개하지 않았으면 누를 수 있는 모양조차 주지 않는다.
+                    if let creatorUserID = publishingInfo.travelerUserID {
+                        Button {
+                            onOpenCreatorProfile(creatorUserID, publishingInfo)
+                        } label: {
+                            CoursePublishingSource(info: publishingInfo)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("course.detail.creatorProfile")
+                        .accessibilityHint("\(publishingInfo.travelerName) 님의 프로필 보기")
+                    } else {
+                        CoursePublishingSource(info: publishingInfo)
+                    }
                 }
 
                 if !course.subtitle.isEmpty {
@@ -348,143 +400,5 @@ private struct CourseMetricColumn: View {
                 .minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// 14 코스 미리보기 — 방문지 좌표를 실제 카카오 지도에 순번 마커 + 경로선으로 그린다.
-/// 좌표가 없는 방문지가 하나라도 있으면 그리지 않는다 (NO-MOCK-CANON R4).
-private struct CourseRouteMap: View {
-    let stops: [ItineraryStop]
-
-    private var routeMarkers: [MoyeoMapMarker] {
-        stops.compactMap { stop in
-            guard let coordinate = MoyeoMapCoordinate(latitude: stop.latitude, longitude: stop.longitude) else {
-                return nil
-            }
-            return MoyeoMapMarker(id: stop.id, coordinate: coordinate, order: stop.order)
-        }
-    }
-
-    var body: some View {
-        let markers = routeMarkers
-        if markers.count == stops.count, let first = markers.first {
-            MoyeoMapView(
-                content: MoyeoMapContent(
-                    center: first.coordinate,
-                    level: 11,
-                    markers: markers,
-                    polyline: markers.map(\.coordinate)
-                ),
-                isInteractive: false,
-                fallback: { MoyeoTheme.mapGreen }
-            )
-            .frame(height: 146)
-            .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("코스 경로 지도, 방문지 \(stops.count)곳")
-            .accessibilityIdentifier("course.route.preview")
-        }
-    }
-}
-
-private struct CourseDetailBottomBar: View {
-    let onCreateRecruitment: () -> Void
-    let onOpenRecruitments: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Button(action: onCreateRecruitment) {
-                Text("이 코스로 모집 만들기")
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(MoyeoTheme.forest)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .background(MoyeoTheme.card)
-                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous)
-                            .stroke(MoyeoTheme.forest, lineWidth: 1)
-                    }
-            }
-            .buttonStyle(.plain)
-
-            Button(action: onOpenRecruitments) {
-                Text("모집 중인 모임 보기")
-                    .font(.subheadline.weight(.heavy))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .background(MoyeoTheme.forest)
-                    .clipShape(RoundedRectangle(cornerRadius: MoyeoTheme.cardRadius, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("course.detail.recruitments")
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
-        .background(MoyeoTheme.card)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(MoyeoTheme.softLine)
-                .frame(height: 1)
-        }
-    }
-}
-
-private struct DetailPanel<Content: View>: View {
-    let title: String
-    let content: Content
-
-    init(title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    // 섹션을 카드로 감싸지 않는다 — 화면기획은 제목과 내용만 배경 위에 둔다
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(MoyeoTypography.font(size: 15, weight: .bold, relativeTo: .headline))
-                .foregroundStyle(MoyeoTheme.ink)
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-    }
-}
-
-/// 14 방문지 한 줄 — 순번 · 이름 · `N일차 · HH:mm`.
-///
-/// 기획·웹·안드로이드가 같은 모양이다. 서버가 안 준 값(시각 등)은 **그 자리를 비운다**.
-private struct CourseStopRow: View {
-    let stop: ItineraryStop
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("\(stop.order)")
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(MoyeoTheme.forest)
-                .frame(width: 26, height: 26)
-                .background(MoyeoTheme.leaf)
-                .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(stop.name)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(MoyeoTheme.ink)
-                    .lineLimit(1)
-                let meta = [stop.day > 0 ? "\(stop.day)일차" : nil, stop.time.isEmpty ? nil : stop.time]
-                    .compactMap { $0 }
-                    .joined(separator: " · ")
-                if !meta.isEmpty {
-                    Text(meta)
-                        .font(MoyeoTypography.tinyMeta)
-                        .foregroundStyle(MoyeoTheme.muted)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 4)
     }
 }

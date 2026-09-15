@@ -62,6 +62,12 @@ struct ChatSpecialMessageCard: View {
   let message: ServerChatMessage
   var isVoting = false
   var onVote: ((ServerChatPollOption) -> Void)?
+  /// 정산 카드의 신고 진입점이 쓴다. 21 견본 화면은 방을 넘기지 않아 신고 버튼이 그려지지 않는다.
+  var roomID: Int64?
+  /// 내가 올린 정산 메모면 신고 줄을 두지 않는다 — 자기 자신은 신고할 수 없다(서버 400 `40045`).
+  var isMine = false
+
+  @State private var isReportPresented = false
 
   var body: some View {
     if let imageURL = message.imageURL {
@@ -85,17 +91,37 @@ struct ChatSpecialMessageCard: View {
 
   @ViewBuilder
   private func photo(_ url: URL) -> some View {
-    CachedRemoteImage(url: url) { image in
-      image
-        .resizable()
-        .scaledToFill()
-    } placeholder: {
-      MoyeoTheme.leaf
+    VStack(alignment: .leading, spacing: 6) {
+      CachedRemoteImage(url: url) { image in
+        image
+          .resizable()
+          .scaledToFill()
+      } placeholder: {
+        MoyeoTheme.leaf
+      }
+      .frame(height: 150)
+      .frame(maxWidth: .infinity)
+      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .accessibilityIdentifier("chat.card.image")
+
+      // 사진과 함께 보낸 한 줄. **보내기는 보내는데 채팅에는 그리지 않아**,
+      // 적은 사람만 자기가 무엇을 적었는지 알았다 (IOS-F75).
+      if let caption = photoCaption {
+        Text(caption)
+          .font(.subheadline)
+          .foregroundStyle(MoyeoTheme.ink)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("chat.card.imageCaption")
+      }
     }
-    .frame(height: 150)
-    .frame(maxWidth: .infinity)
-    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    .accessibilityIdentifier("chat.card.image")
+  }
+
+  /// 서버는 설명이 비면 `content` 를 **"사진"** 으로 채운다(`ChatRoomService.shareImage`).
+  /// 그 기본값은 사용자가 적은 말이 아니므로 그리지 않는다.
+  private var photoCaption: String? {
+    let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, text != "사진" else { return nil }
+    return text
   }
 
   // MARK: 장소 (관광 콘텐츠 공유)
@@ -150,7 +176,7 @@ struct ChatSpecialMessageCard: View {
           fitsContent: false
         ),
         isInteractive: false,
-        fallback: { MoyeoTheme.mapGreen }
+        fallback: { MoyeoMapUnavailableView(message: "지도를 불러오지 못했어요.") }
       )
       .frame(height: 110)
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -236,6 +262,8 @@ struct ChatSpecialMessageCard: View {
 
   // MARK: 정산 메모
 
+  /// 정산 메모 카드. **금액을 보는 자리가 여기다** — 메모를 올리는 화면(20-2e)이 아니라
+  /// 받는 사람이 「얼마 내라」를 읽는 자리라, 신고 안내와 진입점을 여기에 둔다 (2026-09-14).
   private var settlementCard: some View {
     VStack(alignment: .leading, spacing: 6) {
       // 송금 기능이 아니다 — 메모라는 것을 카드가 직접 말한다.
@@ -244,6 +272,32 @@ struct ChatSpecialMessageCard: View {
         .font(.caption)
         .foregroundStyle(MoyeoTheme.ink)
         .fixedSize(horizontal: false, vertical: true)
+      Divider()
+      // 문구는 웹·안드로이드와 글자까지 같다 (`MoyeoSettlementReport.guide`).
+      Text(MoyeoSettlementReport.guide)
+        .font(.caption2)
+        .foregroundStyle(MoyeoTheme.muted)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("chat.card.settlementGuide")
+      // 방·대상 id 를 모르면 버튼을 두지 않는다 — 눌러도 아무 일이 없는 버튼을 만들지 않는다.
+      if !isMine, let roomID, let senderID = message.senderId {
+        Button {
+          isReportPresented = true
+        } label: {
+          Label("금액이 부당해요 · 신고하기", systemImage: "flag")
+            .font(.caption2.weight(.heavy))
+            .foregroundStyle(MoyeoTheme.ink)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.card.settlementReport")
+        .sheet(isPresented: $isReportPresented) {
+          SettlementReportSheetView(
+            roomID: roomID,
+            memberID: senderID,
+            memberNickname: message.senderNickname
+          )
+        }
+      }
     }
     .accessibilityIdentifier("chat.card.settlement")
   }

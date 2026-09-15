@@ -159,6 +159,8 @@ struct FeedActionsSheetView: View {
             .accessibilityIdentifier("feedActions.sheet")
         }
         .background(FeedOverlayBackdrop(feed: feed))
+        // 시트처럼 보이지만 실제로는 밀어 올린 화면이다 — 모달 의미를 직접 붙인다 (TC ENV-007).
+        .accessibilityAddTraits(.isModal)
         .navigationBarBackButtonHidden(true)
         .navigationDestination(item: $route) { mode in
             FeedEditLoaderView(feedID: feed.feedId, mode: mode)
@@ -259,8 +261,10 @@ struct FeedEditView: View {
     @State private var draftBody: String
     @StateObject private var sendState = AttachComposerSendState()
 
-    /// 서버 `UpdateFeedRequest` 와 같은 한도.
-    private static let contentLimit = 1000
+    /// 서버 `UpdateFeedRequest.content` 와 같은 한도 — `@Size(max = 500)` 이다.
+    /// 예전에는 1,000 이라 500자를 넘겨 쓰면 저장 순간에 서버가 400 을 냈다.
+    /// 작성 화면(`FeedWriteView`)은 처음부터 500 이었고 수정 화면만 어긋나 있었다.
+    private static let contentLimit = 500
 
     init(feed: ServerFeed) {
         self.feed = feed
@@ -289,7 +293,7 @@ struct FeedEditView: View {
             identifier: "feedEdit",
             onSend: save
         ) {
-            AttachFieldLabel(text: "글", isRequired: true)
+            AttachFieldLabel(text: "글", isRequired: true, isFirst: true)
             editor
 
             // 못 고치는 것은 감추지 않고 이유를 적는다 — 감추면 "왜 없지?" 로 남는다.
@@ -409,9 +413,12 @@ struct FeedOverlayBackdrop: View {
     let feed: ServerFeed?
 
     var body: some View {
+        // 이 뒤 화면은 **장식용 다시 그리기**다 — 누를 수는 없지만 스크린리더는 그대로 읽어,
+        // 시트 안을 다 읽고 나면 똑같은 피드 상세가 한 번 더 읽혔다 (TC ENV-007).
         if let feed {
             FeedDetailView(post: ServerFeedMapper.post(from: feed))
                 .allowsHitTesting(false)
+                .accessibilityHidden(true)
         } else {
             MoyeoTheme.background
         }

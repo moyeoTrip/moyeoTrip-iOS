@@ -24,6 +24,8 @@ struct MeetingsView: View {
   /// 지금까지 확인 없이 바로 눌리는 자리였다.
   @State private var cancelCandidate: ServerWaitingRoom?
   @State private var isCancellingApplication = false
+  /// 신청 취소가 실패한 이유. 있으면 확인 시트를 닫지 않고 그 자리에 적는다.
+  @State private var cancelFailure: String?
 
   /// 진입 세그먼트(`UITEST_SCREEN`)는 보관소 초기값으로 들어온다 —
   /// 화면을 만드는 동안 보관소를 건드리지 않는다.
@@ -65,10 +67,16 @@ struct MeetingsView: View {
   private func confirmApplyCancel(_ room: ServerWaitingRoom) {
     guard !isCancellingApplication else { return }
     isCancellingApplication = true
+    cancelFailure = nil
     Task {
-      await cancelServerApplication(roomID: room.roomId)
+      let failure = await cancelServerApplication(roomID: room.roomId)
       isCancellingApplication = false
-      cancelCandidate = nil
+      // 실패하면 **시트를 닫지 않는다** — 닫아 버리면 취소된 것처럼 보인다.
+      if let failure {
+        cancelFailure = failure
+      } else {
+        cancelCandidate = nil
+      }
     }
   }
 
@@ -102,6 +110,9 @@ struct MeetingsView: View {
           .padding(.bottom, 132)
       }
       .scrollBounceBehavior(.basedOnSize)
+      // 당겨서 새로고침이 **실제로 다시 받아온다.** 예전에는 이 목록이 첫 로드 이후
+      // 다시 불리지 않아, 불발 처리한 방이 「모집중」으로 남았다 (IOS-F143).
+      .refreshable { await tabData.refreshMeetings() }
     }
     .background(MoyeoTheme.background.ignoresSafeArea())
     .navigationDestination(for: TripRecruitment.self) { trip in
@@ -138,8 +149,12 @@ struct MeetingsView: View {
           confirmTitle: "신청 취소",
           isDanger: true,
           isBusy: isCancellingApplication,
+          failureMessage: cancelFailure,
           identifier: "applyCancel",
-          onCancel: { cancelCandidate = nil },
+          onCancel: {
+            cancelCandidate = nil
+            cancelFailure = nil
+          },
           onConfirm: { confirmApplyCancel(room) }
         )
       }
@@ -147,7 +162,15 @@ struct MeetingsView: View {
     .onChange(of: cancelCandidate?.roomId) { _, roomID in
       isBottomNavigationSuppressed = roomID != nil
     }
-    .task { await tabData.loadMeetingsIfNeeded() }
+    // 처음 들어오면 받아오고, 이미 받아 둔 값이 있으면 **화면을 지우지 않고 뒤에서 다시 받는다** —
+    // 탭을 다녀오면 방 상태 변화가 반영돼야 한다 (IOS-F143).
+    .task {
+      if tabData.meetingRooms == nil {
+        await tabData.loadMeetingsIfNeeded()
+      } else {
+        await tabData.refreshMeetings()
+      }
+    }
     .accessibilityIdentifier("screen.meetings")
   }
 
@@ -190,16 +213,10 @@ struct MeetingsView: View {
   @ViewBuilder
   private var roomSegmentContent: some View {
     if serverRooms != nil {
-      let threads = serverThreads(for: segment)
-      if threads.isEmpty {
-        MoyeoEmptyStateView(
-          message: MoyeoEmptyText.noChatRooms,
-          systemImage: "person.3",
-          accessibilityIdentifier: "meetings.empty"
-        )
-      } else {
-        ServerMeetingList(threads: threads, segment: segment)
-      }
+      // 세그먼트별 문구는 `ServerMeetingList` 가 갖고 있다. 예전에는 여기서 `threads.isEmpty`
+      // 를 먼저 잡아 네 세그먼트 모두 「참여 중인 채팅방이 없어요」 하나로 끝났고,
+      // 세그먼트별 문구는 **도달할 수 없는 죽은 코드**였다 (IOS-F12).
+      ServerMeetingList(threads: serverThreads(for: segment), segment: segment)
     } else if !sessionThreads.isEmpty {
       // 이 세션에서 만들어진 방(모집 만들기 직후)만 남는다
       ChatListView(threads: sessionThreads)
@@ -244,12 +261,21 @@ struct MeetingsView: View {
     ]
   }
 
-  private func cancelServerApplication(roomID: Int64) async {
+  /// 신청 취소. 실패하면 화면에 적을 문구를 돌려준다 — 예전에는 빈 `catch` 로 삼켜
+  /// **시트가 그냥 닫히고 줄도 그대로**라 눌렀는지조차 알 수 없었다 (TC SOCIAL-010 계열).
+  private func cancelServerApplication(roomID: Int64) async -> String? {
     do {
       try await ChatRoomAPIClient.shared.cancelApplication(roomID: roomID)
       tabData.removeMeetingWaitingRoom(roomID: roomID)
+      return nil
     } catch {
-      // 취소 실패 시 목록을 유지한다 — 다음 진입에서 서버 상태로 다시 맞춰진다
+      // 실패한 까닭이 「그 신청이 이제 없다」일 수 있다 — 그 사이 호스트가 승인했거나
+      // 다른 기기에서 이미 취소한 경우다. 까닭만 적고 목록을 그대로 두면 승인돼 참여 중인 방이
+      // 계속 「호스트 승인을 기다리는 중」으로 남는다 (TC MEET-011).
+      // 통신이 안 되는 상황이면 이 다시 읽기도 실패해 **목록은 그대로** 남는다.
+      await tabData.refreshMeetings()
+      return error.moyeoUserMessage(
+        fallback: "신청을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
     }
   }
 
@@ -376,9 +402,11 @@ private struct ServerMeetingList: View {
         Text(emptyTitle)
           .font(.subheadline.weight(.heavy))
           .foregroundStyle(MoyeoTheme.ink)
-        Text("탐색에서 마음에 드는 모임을 찾아보세요.")
+        Text(emptyHint)
           .font(.caption.weight(.semibold))
           .foregroundStyle(MoyeoTheme.muted)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity)
       .padding(.vertical, 44)
@@ -390,12 +418,28 @@ private struct ServerMeetingList: View {
 
   private var emptyTitle: String {
     switch segment {
+    case .applied:
+      return "신청한 모임이 없어요"
     case .confirmed:
       return "확정된 여행이 없어요"
     case .ended:
       return "종료된 여행이 없어요"
-    default:
+    case .ongoing:
       return "진행 중인 모임이 없어요"
+    }
+  }
+
+  /// 세그먼트마다 **다음에 할 일**이 다르다 — 같은 한 줄을 넷에 돌려쓰지 않는다.
+  private var emptyHint: String {
+    switch segment {
+    case .applied:
+      return "신청하면 호스트 승인을 기다리는 동안 여기에 보여요."
+    case .confirmed:
+      return "호스트가 여행을 확정하면 여기로 옮겨져요."
+    case .ended:
+      return "여행이 끝나면 채팅방이 14일 동안 여기에 남아요."
+    case .ongoing:
+      return "탐색에서 마음에 드는 모임을 찾아보세요."
     }
   }
 }

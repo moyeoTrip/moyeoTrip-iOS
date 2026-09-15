@@ -116,6 +116,49 @@ struct TourismContentDetailContractTests {
 
 // MARK: - homepage 앵커 태그 추출 (17-1b)
 
+/// 관광 `overview` 는 HTML 조각으로 온다 — 태그·스타일이 글자로 노출되던 것을 막는다.
+/// **글자를 줄이지 않는다**는 것까지 함께 고정한다 (웹 교차 발견 2026-09-14).
+@Suite
+struct TourismRichTextTests {
+    /// 달기약수탕 실측 문자열. `</div>` 뒤에 CSS 규칙이 **본문으로** 따라붙는다.
+    @Test func stripsTagsAndTrailingStyleRule() {
+        let raw = "<div class=\"text202503\">달기약수탕은 탄산이 강한 약수로 이름난 곳이다.</div>"
+            + ".text202503{ COLOR: #FF0000; }"
+        #expect(TourismRichText.plainText(from: raw) == "달기약수탕은 탄산이 강한 약수로 이름난 곳이다.")
+    }
+
+    @Test func dropsStyleBlockButKeepsEveryWordOfTheBody() {
+        let raw = "<style>.a{color:red;}</style><p>첫 문단이다.</p><p>둘째 문단이다.</p>"
+        #expect(TourismRichText.plainText(from: raw) == "첫 문단이다.\n둘째 문단이다.")
+    }
+
+    /// `<br>` 과 문단 태그는 **줄바꿈으로** 남는다 — 통째로 지우면 한 덩어리가 된다.
+    @Test func keepsParagraphBreaks() {
+        #expect(TourismRichText.plainText(from: "한 줄<br>두 줄") == "한 줄\n두 줄")
+    }
+
+    /// 태그가 없는 멀쩡한 글은 **손대지 않는다.**
+    @Test func leavesPlainTextUntouched() {
+        let raw = "기암절벽과 폭포가 이어지는 청송 대표 관광지예요."
+        #expect(TourismRichText.plainText(from: raw) == raw)
+    }
+
+    /// 본문 속 중괄호는 CSS 가 아니다 — `:` 가 없으면 지우지 않는다.
+    @Test func keepsBracesThatAreNotStyleRules() {
+        #expect(TourismRichText.plainText(from: "<p>안내문 {중요} 입니다.</p>") == "안내문 {중요} 입니다.")
+    }
+
+    @Test func returnsNilWhenNothingIsLeft() {
+        #expect(TourismRichText.plainText(from: "<style>.a{color:red;}</style>") == nil)
+        #expect(TourismRichText.plainText(from: "   ") == nil)
+        #expect(TourismRichText.plainText(from: nil) == nil)
+    }
+
+    @Test func decodesEntities() {
+        #expect(TourismRichText.plainText(from: "<p>산&amp;물</p>") == "산&물")
+    }
+}
+
 @Suite
 struct TourismHomepageTextTests {
     @Test func extractsHrefFromAnchorTag() {

@@ -132,18 +132,28 @@ enum TourismPlaceCatalog {
 
 struct PlaceSearchView: View {
     var onAdd: (TourismPlace) -> Void = { _ in }
+    /// 지금 코스에 담겨 있는 방문지 수. **부르는 쪽(코스 에디터)이 세어 준 실제 값**이다.
+    ///
+    /// 예전에는 화면이 `@State addedCount = 3` 으로 시작해, 아무것도 담지 않았는데도 「3곳 담김」이라고
+    /// 했다. 검색어도 `"청송"` 이 박혀 있어 지난 세션의 검색어가 남은 것처럼 보였다 (IOS-F120).
+    /// 카운터가 거짓말을 하면 「내가 고르지 않은 3곳이 딸려 들어간다」고 믿게 된다.
+    var addedCount = 0
+
+    /// 더 담을 수 없는 상태인지. `addedCount` 는 지금 코스에 담긴 방문지 수다.
+    private var isStopLimitReached: Bool { addedCount >= RoutePolicy.maximumStopCount }
     @StateObject private var model: TourismPlaceSearchModel
-    @State private var query = "청송"
+    @State private var query = ""
     @State private var selectedType: TourismContentType?
     @State private var showsMap = false
-    @State private var addedCount = 3
     @Environment(\.dismiss) private var dismiss
 
     init(
         onAdd: @escaping (TourismPlace) -> Void = { _ in },
+        addedCount: Int = 0,
         service: TourismContentProviding? = nil
     ) {
         self.onAdd = onAdd
+        self.addedCount = addedCount
         let resolvedService = service ?? (UITestRuntime.usesMockTourism
             ? SampleTourismContentService()
             : TourismAPIClient())
@@ -165,7 +175,9 @@ struct PlaceSearchView: View {
     /// 검색 결과 개수는 서버의 `totalElements` 를 쓴다. 목데이터 목록은 기존 "근처순" 표기를 유지한다.
     /// 서버 타입 목록을 못 받아 화면이 직접 타입을 거른 경우에는 서버 전체 개수가 목록과 어긋나므로 쓰지 않는다.
     private var countText: String {
-        guard model.isServerBacked else { return "\(filteredPlaces.count)곳 · 주왕산 코스 근처순" }
+        // 예전에는 서버 목록이 아닐 때(=조회 실패 포함) `주왕산 코스 근처순` 을 붙였다 —
+        // 서버가 정한 적 없는 정렬 기준이고 코스 이름까지 지어낸 것이다 (NO-MOCK-CANON R1).
+        guard model.isServerBacked else { return "\(filteredPlaces.count)곳" }
         let filtersTypeLocally = !usesServerTypes && selectedType != nil
         guard !filtersTypeLocally, let total = model.totalElements else { return "\(filteredPlaces.count)곳" }
         return "\(total)곳"
@@ -198,7 +210,7 @@ struct PlaceSearchView: View {
             MoyeoMapView(
                 content: MoyeoMapContent(center: first.coordinate, level: 11, markers: markers),
                 isInteractive: false,
-                fallback: { MoyeoTheme.mapGreen }
+                fallback: { MoyeoMapUnavailableView(message: "지도를 불러오지 못했어요.") }
             )
             .frame(height: 150)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -217,9 +229,16 @@ struct PlaceSearchView: View {
                     TextField("지역이나 장소 이름을 검색하세요", text: $query)
                         .textInputAutocapitalization(.never)
                     if !query.isEmpty {
-                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(MoyeoTheme.text400)
+                        // ENV-009 — 아이콘은 그대로 두고 누를 넓이만 44x44 로 (재던 값 16x16pt)
+                        Button { query = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(MoyeoTheme.text400)
+                        .accessibilityLabel("검색어 지우기")
+                        .accessibilityIdentifier("placeSearch.query.clear")
                     }
                 }
                 .padding(.horizontal, 13)
@@ -275,14 +294,52 @@ struct PlaceSearchView: View {
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
 
+                    // 코스는 방문지 20곳까지다(`RoutePolicy.maximumStopCount`). 예전에는 이 상한이
+                    // 편집기 쪽에만 있고 **검색 목록에는 없어** 21곳째도 담겼다 (안드로이드 교차 발견).
+                    if isStopLimitReached {
+                        Text("방문지는 \(RoutePolicy.maximumStopCount)곳까지 담을 수 있어요. 더 담으려면 코스에서 몇 곳을 빼주세요.")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(MoyeoTheme.dangerRed)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 8)
+                            .accessibilityIdentifier("placeSearch.limitReached")
+                    }
+
+                    // 서버 목록이 비면 **빈 상태**를 그린다. 예전에는 번들 카탈로그가
+                    // 초기값이라 이 자리가 빌 일이 없었고, 그래서 「결과 0건」과
+                    // 「아직 못 받음」을 화면에서 구분할 수 없었다 (NO-MOCK-CANON R1).
+                    if filteredPlaces.isEmpty, !model.isLoading, model.fallbackMessage == nil {
+                        MoyeoEmptyStateView(
+                            message: "조건에 맞는 방문지가 없어요. 검색어를 바꿔보세요.",
+                            systemImage: "mappin.slash",
+                            accessibilityIdentifier: "placeSearch.empty"
+                        )
+                        .padding(.vertical, 30)
+                    }
                     ForEach(filteredPlaces) { place in
                         NavigationLink(value: place) {
-                            PlaceSearchRow(place: place, onAdd: {
-                                onAdd(place)
-                                addedCount += 1
-                            })
+                            PlaceSearchRow(
+                                place: place,
+                                isAddEnabled: !isStopLimitReached,
+                                onAdd: { onAdd(place) }
+                            )
                         }
                         .buttonStyle(.plain)
+                        // 마지막 줄이 보이면 다음 쪽을 잇는다. 예전에는 **100번째에서 목록이 끝났는데**
+                        // 머리에는 「3,115곳」이라고 적혀 있었다 (IOS-F91).
+                        .onAppear {
+                            guard place.id == filteredPlaces.last?.id else { return }
+                            Task { await model.loadNextPageIfNeeded() }
+                        }
+                    }
+
+                    if model.isLoadingMore {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .accessibilityIdentifier("placeSearch.loadingMore")
                     }
 
                     Text("목록에는 제목·주소·썸네일·좌표만 표시해요. 전화번호와 상세 소개는 장소를 눌러 확인할 수 있어요.")
@@ -302,8 +359,11 @@ struct PlaceSearchView: View {
                 Button {
                     showsMap.toggle()
                 } label: {
+                    // ENV-009 — 아이콘 크기는 그대로, 누를 넓이만 44x44 (재던 값 30x36pt)
                     Image(systemName: "map")
                         .foregroundStyle(MoyeoTheme.ink)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("지도에서 보기")
                 .accessibilityIdentifier("placeSearch.mapToggle")
@@ -337,12 +397,20 @@ struct PlaceSearchView: View {
             .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
         }
         .navigationDestination(for: TourismPlace.self) { place in
-            PlaceDetailView(place: place, onAdd: onAdd, service: model.service)
+            PlaceDetailView(
+                place: place,
+                isAddEnabled: !isStopLimitReached,
+                onAdd: onAdd,
+                service: model.service
+            )
         }
         // 검색어가 바뀌면 이전 요청은 취소되고, 모델이 잠깐 기다렸다가 서버로 다시 검색한다
         .task(id: query) {
             await model.apply(keyword: query)
         }
+        // 결과를 고르려고 스크롤하면 키보드가 닫히고, 「완료」로도 닫을 수 있다 (IOS-F136).
+        .scrollDismissesKeyboard(.interactively)
+        .moyeoKeyboardDismissable()
         .accessibilityIdentifier("screen.placeSearch")
     }
 
@@ -382,6 +450,8 @@ struct PlaceSearchView: View {
 
 private struct PlaceSearchRow: View {
     let place: TourismPlace
+    /// 상한에 닿으면 담기 버튼을 잠근다 — 눌리는데 아무 일도 없는 것보다 낫다.
+    var isAddEnabled = true
     let onAdd: () -> Void
 
     var body: some View {
@@ -411,12 +481,14 @@ private struct PlaceSearchRow: View {
             Button(action: onAdd) {
                 Image(systemName: "plus")
                     .font(.caption.weight(.bold))
-                    .frame(width: 32, height: 32)
+                    .frame(width: 44, height: 44)
                     .background(MoyeoTheme.leaf)
                     .clipShape(Circle())
                     .overlay(Circle().stroke(MoyeoTheme.primary300))
             }
             .buttonStyle(.plain)
+            .disabled(!isAddEnabled)
+            .opacity(isAddEnabled ? 1 : 0.4)
             .foregroundStyle(MoyeoTheme.forest)
             .accessibilityLabel("\(place.title) 코스에 담기")
         }
@@ -428,6 +500,18 @@ private struct PlaceSearchRow: View {
 
 struct PlaceDetailView: View {
     @State private var place: TourismPlace
+    /// 대표 사진 페이저에서 지금 보고 있는 장.
+    @State private var heroPhotoIndex = 0
+
+    /// 히어로에 걸 사진들. 서버가 사진을 안 주면 썸네일 한 장, 그것도 없으면 빈 배열이다
+    /// (자리표시자는 `CachedRemoteImage` 의 placeholder 가 그린다).
+    private var heroPhotoURLs: [URL] {
+        if !place.imageURLs.isEmpty { return place.imageURLs }
+        if let thumbnail = place.thumbnailURL { return [thumbnail] }
+        return []
+    }
+    /// 코스 방문지 상한(20곳)에 닿으면 담기를 잠근다 (안드로이드 교차 발견).
+    var isAddEnabled = true
     var onAdd: (TourismPlace) -> Void = { _ in }
     private let service: TourismContentProviding
     @Environment(\.dismiss) private var dismiss
@@ -437,10 +521,12 @@ struct PlaceDetailView: View {
 
     init(
         place: TourismPlace,
+        isAddEnabled: Bool = true,
         onAdd: @escaping (TourismPlace) -> Void = { _ in },
         service: TourismContentProviding? = nil
     ) {
         _place = State(initialValue: place)
+        self.isAddEnabled = isAddEnabled
         self.onAdd = onAdd
         self.service = service ?? (UITestRuntime.usesMockTourism
             ? SampleTourismContentService()
@@ -456,17 +542,29 @@ struct PlaceDetailView: View {
                 // 예전에는 20pt 여백 안에 둥근 사각형으로 들어가 iOS 만 사진이 작아 보였다
                 // (17-1b, 사용자 지적 2026-09-09). 아래 `.padding(20)` 을 되돌려 폭을 넓힌다.
                 ZStack(alignment: .bottomTrailing) {
-                    CachedRemoteImage(url: place.imageURLs.first ?? place.thumbnailURL, fallbackShape: .landscape) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        MoyeoPhotoTile(mascot: "", mood: .forest, height: 210, cornerRadius: MoyeoTheme.cardRadius)
+                    // 대표 사진은 **좌우로 넘길 수 있다.** 예전에는 `imageURLs.first` 한 장만
+                    // 고정으로 그리고 배지도 `1/N` 로 박아 둬서, 서버가 여러 장을 줘도
+                    // 첫 장 말고는 볼 수 없었고 배지가 늘 1페이지를 가리켰다 (TC PLACE-009).
+                    TabView(selection: $heroPhotoIndex) {
+                        ForEach(Array(heroPhotoURLs.enumerated()), id: \.offset) { index, url in
+                            CachedRemoteImage(url: url, fallbackShape: .landscape) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                MoyeoPhotoTile(mascot: "", mood: .forest, height: 210, cornerRadius: MoyeoTheme.cardRadius)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 210)
+                            .clipped()
+                            .tag(index)
+                        }
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                     .frame(maxWidth: .infinity)
                     .frame(height: 210)
-                    .clipped()
+                    .accessibilityIdentifier("placeDetail.heroPager")
 
                     // 사진 장수 배지는 **이미지 우측 하단**이다 (정본 `HERO-SCROLL-CANON.md` R1-1).
-                    Text("1/\(max(place.imageURLs.count, 1))")
+                    Text("\(heroPhotoURLs.isEmpty ? 1 : heroPhotoIndex + 1)/\(max(heroPhotoURLs.count, 1))")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 8)
@@ -488,11 +586,11 @@ struct PlaceDetailView: View {
                 // 서버가 null 로 주는 줄은 숨긴다 — 값을 지어내지 않는다 (17-1b)
                 VStack(spacing: 12) {
                     detailRow("mappin.and.ellipse", place.address, place.postalCode.map { "우편번호 \($0)" })
-                    detailRow("phone", place.phone, place.phoneLabel)
+                    detailRow("phone", place.phone, place.phoneLabel, destination: placePhoneURL)
                     // 좌표가 있을 때만 이 행을 그리지만, **보여주는 것은 동작 문구**다.
                     // 좌표 숫자는 지도를 여는 입력값이지 읽는 사람에게 보일 값이 아니다.
-                    detailRow("map", place.coordinateText == nil ? nil : "지도에서 열기", nil)
-                    detailRow("globe", place.homepage, "홈페이지")
+                    detailRow("map", placeMapURL == nil ? nil : "지도에서 열기", nil, destination: placeMapURL)
+                    detailRow("globe", place.homepage, "홈페이지", destination: placeHomepageURL)
                 }
                 .padding(14)
                 .background(MoyeoTheme.card)
@@ -501,7 +599,13 @@ struct PlaceDetailView: View {
 
                 if let summary = place.summary {
                     Text("소개").font(.headline)
-                    Text(summary).font(.subheadline).foregroundStyle(MoyeoTheme.text700)
+                    // 문단(줄바꿈)을 살려 그린다 — `TourismRichText` 가 이미 문단만 남겼다.
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(MoyeoTheme.text700)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("placeDetail.summary")
                 }
 
                 if isLoading {
@@ -562,9 +666,15 @@ struct PlaceDetailView: View {
                     onAdd(place)
                     dismiss()
                 } label: {
-                    Label("이 장소를 코스에 담기", systemImage: "plus")
+                    Label(
+                        isAddEnabled
+                            ? "이 장소를 코스에 담기"
+                            : "방문지 \(RoutePolicy.maximumStopCount)곳을 다 담았어요",
+                        systemImage: "plus"
+                    )
                 }
                 .buttonStyle(DesignPrimaryButtonStyle())
+                .disabled(!isAddEnabled)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -573,46 +683,94 @@ struct PlaceDetailView: View {
         .background(MoyeoTheme.background.ignoresSafeArea())
         .navigationTitle("방문지 상세")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            // 화면기획·웹의 우측 상단 공유
-            ToolbarItem(placement: .topBarTrailing) {
-                // 이전에는 빈 클로저라 눌러도 아무 일도 없었다 (29-4 약관 공유와 같은 ShareLink 를 쓴다).
-                ShareLink(item: shareText, subject: Text(place.title)) {
-                    Image(systemName: "square.and.arrow.up")
-                        .foregroundStyle(MoyeoTheme.ink)
-                }
-                .accessibilityLabel("방문지 공유")
-                .accessibilityIdentifier("placeDetail.share")
-            }
-        }
+        // 결정 ⑬ — 우측 상단 공유를 뺐다. 공개 URL 규격이 없어 공유 본문에 링크가 없었다.
         .accessibilityIdentifier("screen.placeDetail.\(place.id)")
         .task { await loadDetail() }
     }
 
-    /// 공유 본문 — 이름과 주소만 보낸다. **좌표는 넣지 않는다** (21·15·17-1a·17-1b 에서 뺀 것과 같다).
-    private var shareText: String {
-        [place.title, place.address].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-    }
-
     /// 값이 없으면(서버가 null) 줄 자체를 그리지 않는다. 안내 문구도 값이 있을 때만 붙인다.
+    ///
+    /// `destination` 이 있으면 **누를 수 있는 줄**이다. 예전에는 「지도에서 열기」·홈페이지·전화가
+    /// 전부 `Text` 라, 동작을 약속하는 문구를 읽고 눌러도 아무 일이 없었다 (IOS-F90).
     @ViewBuilder
-    private func detailRow(_ icon: String, _ value: String?, _ caption: String?) -> some View {
+    private func detailRow(
+        _ icon: String,
+        _ value: String?,
+        _ caption: String?,
+        destination: URL? = nil
+    ) -> some View {
         if let value, !value.isEmpty {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 20)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(value).font(.caption.weight(.heavy))
-                    if let caption, !caption.isEmpty {
-                        Text(caption).font(.caption2).foregroundStyle(MoyeoTheme.muted)
-                    }
+            if let destination {
+                Link(destination: destination) {
+                    detailRowLabel(icon, value, caption, isActionable: true)
                 }
-                Spacer()
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("placeDetail.action.\(icon)")
+            } else {
+                detailRowLabel(icon, value, caption, isActionable: false)
             }
         }
     }
 
+    private func detailRowLabel(
+        _ icon: String,
+        _ value: String,
+        _ caption: String?,
+        isActionable: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon).foregroundStyle(MoyeoTheme.muted).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(isActionable ? MoyeoTheme.forest : MoyeoTheme.ink)
+                if let caption, !caption.isEmpty {
+                    Text(caption).font(.caption2).foregroundStyle(MoyeoTheme.muted)
+                }
+            }
+            Spacer()
+            if isActionable {
+                Image(systemName: "arrow.up.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
+        }
+        // 누를 수 있는 줄은 44pt 를 채운다 — 글자 높이(약 16pt)로는 겨누기 어렵다.
+        .frame(minHeight: isActionable ? 44 : 0)
+        .contentShape(Rectangle())
+    }
+
+    /// 장소를 지도 앱에서 연다. 좌표가 둘 다 있을 때만 만든다 — 이름만으로는 엉뚱한 곳이 열린다.
+    private var placeMapURL: URL? {
+        guard let latitude = place.latitude, let longitude = place.longitude else { return nil }
+        var components = URLComponents(string: "https://maps.apple.com/")
+        components?.queryItems = [
+            URLQueryItem(name: "ll", value: "\(latitude),\(longitude)"),
+            URLQueryItem(name: "q", value: place.title)
+        ]
+        return components?.url
+    }
+
+    /// 서버 `homepage` 는 스킴이 빠진 값도 온다(`cs.go.kr/tour`) — 붙여서 연다.
+    private var placeHomepageURL: URL? {
+        guard let homepage = place.homepage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !homepage.isEmpty else { return nil }
+        let text = homepage.lowercased().hasPrefix("http") ? homepage : "https://\(homepage)"
+        guard let url = URL(string: text), url.host != nil else { return nil }
+        return url
+    }
+
+    /// 전화는 숫자만 남겨 `tel:` 로 건다. 숫자가 없으면 거는 시늉을 하지 않는다.
+    private var placePhoneURL: URL? {
+        guard let phone = place.phone else { return nil }
+        let digits = phone.filter { $0.isNumber || $0 == "+" }
+        guard digits.count >= 3 else { return nil }
+        return URL(string: "tel:\(digits)")
+    }
+
     private func tabButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
+            // ENV-009 — 글자·밑줄은 그대로 두고 누를 넓이만 44x44 로 (재던 값 47x26pt)
             Text(title)
                 .font(.subheadline.weight(.heavy))
                 .foregroundStyle(selected ? MoyeoTheme.forest : MoyeoTheme.muted)
@@ -620,6 +778,8 @@ struct PlaceDetailView: View {
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(selected ? MoyeoTheme.primary300 : .clear).frame(height: 2)
                 }
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -651,20 +811,40 @@ private struct PlaceTypePill: View {
     }
 }
 
+/// 설정·가입에서 여는 법적 문서의 **종류**. 본문은 들고 있지 않다 —
+/// 본문·제목·버전·필수 여부는 전부 서버 원장(`GET /api/v1/terms/latest/{code}`)에서 온다.
+///
+/// 예전에는 앱이 사본을 들고 있었는데, 사본이 서버와 **다른 말을 하고 있었다**:
+/// 사본 「탈퇴 시 30일간 보관 후 완전히 삭제」 / 서버 원장 「탈퇴 시 지체 없이 파기」.
+/// 실제 구현은 즉시 삭제라 사본이 사실과 달랐다. 법적 고지가 두 곳에 있으면 반드시 어긋난다.
+///
+/// `rawValue` 는 서버 `code` 그대로다. 제목 문자열로 문서를 찾던 방식은
+/// **처리방침 자리에 가입 동의서를 열었다** (QA BE-03).
+/// **위치정보 이용 동의는 없다** (BE-04 · 2026-09-14 결정 B안) — 「내 위치」는 좌표를
+/// 서버로 보내지도 저장하지도 않으므로 수집하는 위치정보가 없고, 서버도 그 약관을 주지 않는다.
 enum LegalDocumentKind: String, CaseIterable, Identifiable {
-    case service
-    case privacy
-    case location
-    case marketing
+    /// 서비스 이용약관 (가입 동의 대상)
+    case service = "SERVICE"
+    /// 개인정보 수집·이용 **동의서** (가입 동의 대상)
+    case privacyCollection = "PRIVACY_COLLECTION"
+    /// 개인정보 **처리방침** — 동의 대상이 아니라 고지 문서다. 설정에서만 연다.
+    case privacyPolicy = "PRIVACY_POLICY"
+    /// 마케팅 정보 수신 동의 (가입 동의 대상 · 선택)
+    case marketing = "MARKETING"
 
     var id: String { rawValue }
 
-    var content: LegalDocumentContent {
+    /// 서버 `code`. 같은 값이지만 부르는 쪽 의도가 드러나게 이름을 둔다.
+    var serverCode: String { rawValue }
+
+    /// 본문을 받기 전(로딩·실패)에 헤더에 적을 **화면 이름**이다. 약관 제목이 아니다 —
+    /// 본문을 받으면 서버 `title` 로 덮는다. 설정 목록의 행 이름과 같은 말이어야 한다.
+    var screenLabel: String {
         switch self {
-        case .service: .service
-        case .privacy: .privacy
-        case .location: .location
-        case .marketing: .marketing
+        case .service: "이용약관"
+        case .privacyCollection: "개인정보 수집·이용 동의"
+        case .privacyPolicy: "개인정보 처리방침"
+        case .marketing: "마케팅 정보 수신 동의"
         }
     }
 }
@@ -674,180 +854,52 @@ enum LegalDocumentEntry: Hashable {
     case settings
 }
 
-struct LegalDocumentContent: Hashable {
-    let title: String
-    let isRequired: Bool
-    let version: String
-    let effectiveDate: String
-    let summary: String
-    let sections: [LegalSection]
-    /// 서버가 준 원문 마크다운. 있으면 이걸로 그린다(표·목록을 살린다).
-    /// 번들 문서는 섹션으로만 갖고 있어 `nil` 이다.
-    var markdown: String?
-
-    struct LegalSection: Hashable {
-        let title: String
-        let body: String
-    }
-
-    /// 서버 본문이 아직 오지 않았고 번들 문서도 없는 자리. 헤더만 그리고 본문은 비운다 —
-    /// 없는 약관 내용을 지어내지 않는다.
-    static let empty = LegalDocumentContent(
-        title: "약관",
-        isRequired: true,
-        version: "",
-        effectiveDate: "",
-        summary: "",
-        sections: []
-    )
-
-    static let service = LegalDocumentContent(
-        title: "이용약관", isRequired: true, version: "v1.2", effectiveDate: "2026년 5월 1일 시행",
-        summary: "모여트립을 쓰면서 지켜야 할 것과, 우리가 약속하는 것을 적었어요.",
-        sections: [
-            .init(
-                title: "제1조 (목적)",
-                body:
-                    "이 약관은 모여트립 in 경북(이하 “서비스”)이 제공하는 경상북도 여행 코스 기반 동행 매칭 서비스의 이용 조건과 절차, " +
-                    "회사와 회원의 권리·의무를 정하는 것을 목적으로 합니다."
-            ),
-            .init(
-                title: "제2조 (용어의 정의)",
-                body:
-                    "“모집”이란 회원이 특정 코스로 함께 떠날 동행을 구하는 게시물을 말합니다. “캠프”란 최소 인원이 충족되어 자동으로 열리는 " +
-                    "채팅방을 말합니다. “호스트”란 모집을 개설한 회원을, “게스트”란 해당 모집에 참여한 회원을 말합니다."
-            ),
-            .init(
-                title: "제3조 (모집의 성립과 소멸)",
-                body:
-                    "모집은 마감일까지 최소 인원(3명)을 충족한 경우에만 확정됩니다. 마감일 기준 인원이 미달한 모집은 자동으로 소멸하며, 이 " +
-                    "경우 회원에게 별도의 책임이 발생하지 않습니다."
-            ),
-            .init(
-                title: "제4조 (여행 중 발생하는 사항)",
-                body:
-                    "회사는 회원 간의 만남을 매개할 뿐, 여행 중 발생하는 이동·숙박·식음 등의 계약 당사자가 아닙니다. 여행 비용은 회원 간에 " +
-                    "직접 정산하며, 서비스 내 정산 기능은 기록용 메모입니다."
-            ),
-            .init(
-                title: "제5조 (금지 행위)",
-                body:
-                    "타인을 사칭하거나, 금전 거래를 유도하거나, 성적·차별적 표현으로 다른 회원에게 불쾌감을 주는 행위를 금지합니다. 위반 시 " +
-                    "이용이 제한될 수 있습니다."
-            ),
-            .init(
-                title: "제6조 (계정과 닉네임)",
-                body:
-                    "가입 시 선택한 닉네임과 캐릭터는 도감 기록의 동일성을 위해 변경되지 않습니다. 다만 회사는 서비스 정착 이후 정책을 변경할 " +
-                    "수 있으며, 변경 시 사전에 공지합니다."
-            )
-        ]
-    )
-
-    static let privacy = LegalDocumentContent(
-        title: "개인정보 처리방침", isRequired: true, version: "v1.4", effectiveDate: "2026년 7월 10일 시행",
-        summary: "어떤 정보를 왜 받고, 얼마나 보관하는지 적었어요.",
-        sections: [
-            .init(
-                title: "수집하는 정보",
-                body:
-                    "가입 시 소셜 로그인 식별자, 생년(나이대), 성별을 받습니다. 실명·연락처는 받지 않습니다. 서비스 이용 과정에서 작성한 " +
-                    "모집·채팅·피드 내용과 접속 기록이 저장됩니다."
-            ),
-            .init(title: "이용 목적", body: "동행 매칭(나이대·성별 조건 확인), 안전한 이용 환경 유지(신고·차단 처리), 서비스 개선을 위한 통계 분석에 사용합니다."),
-            .init(title: "다른 회원에게 보이는 정보", body: "닉네임·캐릭터·나이대·성별·매너 점수·여행 횟수가 공개됩니다. 생년월일과 로그인 계정 정보는 공개되지 않습니다."),
-            .init(title: "보관 기간", body: "탈퇴 시 30일간 보관 후 완전히 삭제합니다. 다만 신고·분쟁 처리 이력은 관련 법령이 정한 기간 동안 별도 보관합니다."),
-            .init(
-                title: "위탁 및 제3자 제공",
-                body:
-                    "지도·관광정보 표시를 위해 한국관광공사 OpenAPI 등 외부 서비스를 이용하며, 이 과정에서 회원의 개인정보를 전달하지 " +
-                    "않습니다."
-            )
-        ]
-    )
-
-    static let location = LegalDocumentContent(
-        title: "위치정보 이용 동의", isRequired: false, version: "v1.0", effectiveDate: "2026년 5월 1일 시행",
-        summary: "켜지 않아도 서비스를 쓸 수 있어요. 켜면 근처 모집을 먼저 보여드려요.",
-        sections: [
-            .init(title: "이용 목적", body: "현재 위치 기준 30km 이내에서 오늘 출발하는 모집을 홈 상단에 보여주고, 집합 장소까지의 길 찾기를 제공합니다."),
-            .init(title: "동의를 거부할 경우", body: "근처 모집 추천과 길 찾기만 제한되고, 그 외 기능은 모두 동일하게 이용할 수 있습니다.")
-        ]
-    )
-
-    static let marketing = LegalDocumentContent(
-        title: "마케팅 정보 수신 동의", isRequired: false, version: "v1.0", effectiveDate: "2026년 5월 1일 시행",
-        summary: "새 코스나 이벤트 소식을 받아볼지 정하는 항목이에요.",
-        sections: [
-            .init(title: "보내는 내용", body: "계절별 신규 코스 소개, 지역 축제 일정, 이벤트 안내를 앱 푸시로 보냅니다."),
-            .init(title: "보내지 않는 것", body: "모집 승인·채팅·마감 임박처럼 이용에 꼭 필요한 알림은 이 동의와 무관하게 발송됩니다."),
-            .init(title: "철회 방법", body: "설정 › 알림에서 언제든 끌 수 있고, 끄더라도 서비스 이용에는 아무런 제한이 없습니다.")
-        ]
-    )
-}
-
 struct LegalDocumentDetailView: View {
-    /// 번들 문서. 서버 약관에서 열렸고 대응하는 번들 문서가 없으면 `nil` 이다.
+    /// 열려는 약관의 **종류**. 설정에서는 이 값으로 현재 판본을 받는다.
+    /// 서버가 종류를 알려주지 않은 약관에서 열렸으면 `nil` 이고, 그때는 `serverTermID` 로만 받는다.
     let kind: LegalDocumentKind?
     let entry: LegalDocumentEntry
-    /// 서버 약관에서 열렸을 때의 `termId`.
-    ///
-    /// 있으면 이 ID 로 본문을 받는다 — 제목 키워드로 찾지 않는다.
-    /// 서버가 약관을 새로 추가해도 키워드 표에 없다는 이유로 본문을 못 여는 일이 없어야 한다.
+    /// 가입 약관 목록에서 열렸을 때의 `termId`. 사용자가 **본 그 판본**에 동의해야 하므로
+    /// 있으면 종류가 아니라 이 ID 로 받는다.
     var serverTermID: Int64?
     var onAgree: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
-    /// 실서버 약관 — 로그인 세션이 있고 약관 API가 성공하면 서버 본문으로 대체한다
-    @State private var serverDocument: LegalDocumentContent?
 
-    private var document: LegalDocumentContent { serverDocument ?? kind?.content ?? .empty }
+    /// 「아직 못 받았다」·「받았다」·「받아 봤더니 본문이 없다」·「실패했다」를 구분한다.
+    /// 예전에는 실패를 삼키고 내장 사본을 현행 문서처럼 보여줬다 (IOS-F30).
+    enum LoadState: Equatable { case loading, ready, empty, failed }
+
+    @State private var document: ServerTermDetail?
+    @State private var state: LoadState = .loading
+
+    /// 본문을 받기 전에는 화면 이름을, 받은 뒤에는 **서버 제목**을 쓴다.
+    private var screenTitle: String { document?.title ?? kind?.screenLabel ?? "약관" }
+
+    /// 현행 본문을 확인하기 전에는 동의를 받지 않는다 — 무엇에 동의하는지가 확실하지 않기 때문이다.
+    private var isAgreeBlocked: Bool { state != .ready }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 7) {
-                    Text(document.isRequired ? "필수" : "선택")
-                        .font(.caption.weight(.heavy))
-                        .foregroundStyle(document.isRequired ? MoyeoTheme.forest : MoyeoTheme.muted)
-                        .padding(.horizontal, 9)
-                        .frame(height: 24)
-                        .background(document.isRequired ? MoyeoTheme.leaf : MoyeoTheme.subtleBackground)
-                        .clipShape(Capsule())
-                    // 서버 약관은 시행일을 내려주지 않는다 — 버전만 표기한다
-                    Text(
-                        document.effectiveDate.isEmpty
-                            ? document.version
-                            : "\(document.version) · \(document.effectiveDate)"
-                    )
-                    .font(.caption).foregroundStyle(MoyeoTheme.muted).monospacedDigit()
+                if let document, state == .ready {
+                    // 필수·선택과 판본은 서버가 준 값만 쓴다. 받기 전에 「필수」라고 적어 두면
+                    // 서버가 선택이라고 해도 사용자는 필수로 읽고 지나간다.
+                    header(for: document)
                 }
-
-                // 서버 약관은 요약을 내려주지 않는다 — 요약 박스는 있는 경우에만 그린다
-                if !document.summary.isEmpty {
-                Text(document.summary)
-                    .font(.subheadline)
-                    .foregroundStyle(MoyeoTheme.text700)
-                    .padding(13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(MoyeoTheme.subtleBackground)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.softLine))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-
-                if let markdown = document.markdown {
+                statusBanner
+                if let document, state == .ready {
                     // 서버 약관은 표를 포함한 마크다운이다 — 줄을 그대로 이으면
-                    // `| 구분 | 수집 항목 |` 과 구분선이 본문에 노출된다.
-                    MoyeoMarkdownView(markdown: markdown)
-                } else {
-                    ForEach(document.sections, id: \.title) { section in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(section.title).font(.subheadline.weight(.heavy))
-                            Text(section.body).font(.subheadline).foregroundStyle(MoyeoTheme.text700)
-                        }
-                    }
+                    // `| 구분 | 수집 항목 |` 과 구분선이 본문에 노출된다. 가입 약관 화면과 같은 렌더러다.
+                    MoyeoMarkdownView(markdown: document.content)
                 }
-
-                Text("이전 판본은 설정 › 이용약관 › 지난 버전에서 볼 수 있어요. 약관이 바뀌면 시행 7일 전에 공지와 푸시로 알려드려요.")
+                // 「설정 › 이용약관 › 지난 버전」은 **이제 있다.**
+                //
+                // 예전에는 API 가 없어 「없는 길을 안내하지 않는다」고 이 줄을 두지 않았다
+                // (IOS-F62). 지금은 `GET /api/v1/terms/history/{code}` 가 지난 판본까지
+                // 최신순으로 준다(2026-09-14 실서버 확인) — 서버가 주는 처리방침 본문이
+                // 약속하는 그 화면을 만들었다 (결정 ①). 그때의 판단을 뒤집는 것이라 주석도 고친다.
+                historyLink
+                Text("약관이 바뀌면 시행 7일 전에 공지와 푸시로 알려드려요.")
                     .font(.caption).foregroundStyle(MoyeoTheme.muted)
                     .padding(.top, 16)
                     .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
@@ -855,101 +907,157 @@ struct LegalDocumentDetailView: View {
             .padding(20)
             .padding(.bottom, entry == .signup ? 72 : 20)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if entry == .signup {
-                HStack(spacing: 8) {
-                    Button("닫기") { dismiss() }
-                        .buttonStyle(DesignSecondaryButtonStyle())
-                        .frame(width: 84)
-                    Button(document.isRequired ? "동의하고 돌아가기" : "이 항목에 동의하기") {
-                        onAgree()
-                        dismiss()
-                    }
-                    .buttonStyle(DesignPrimaryButtonStyle())
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(MoyeoTheme.card)
-            }
-        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { signupFooter }
         .background(MoyeoTheme.background.ignoresSafeArea())
-        .navigationTitle(document.title)
+        .navigationTitle(screenTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await loadServerTerm()
-        }
-        .toolbar {
-            // 화면기획·웹의 우측 상단 공유
-            ToolbarItem(placement: .topBarTrailing) {
-                // 이전에는 빈 클로저라 눌러도 아무 일도 없었다.
-                ShareLink(item: shareText, subject: Text(document.title)) {
-                    Image(systemName: "square.and.arrow.up")
-                        .foregroundStyle(MoyeoTheme.ink)
-                }
-                .accessibilityLabel("약관 공유")
-                .accessibilityIdentifier("terms.detail.share")
-            }
-        }
+        .task { await loadTerm() }
+        // 결정 ⑬ — 우측 상단 공유를 뺐다(공개 URL 규격 없음).
         .accessibilityIdentifier(
             "screen.terms.\(kind?.rawValue ?? "server\(serverTermID.map(String.init) ?? "")").\(entry == .signup ? "signup" : "settings")"
         )
     }
 
-    /// 공유할 본문. 서버 원문이 있으면 그대로, 없으면 번들 문서를 텍스트로 옮긴다.
-    private var shareText: String {
-        if let markdown = document.markdown, !markdown.isEmpty {
-            return "\(document.title)\n\n\(markdown)"
+    /// 「지난 버전」 줄. 판본 목록으로 간다 (결정 ①).
+    ///
+    /// **설정에서 연 약관에만 둔다.** 가입 동의(`.signup`)는 지금 동의할 그 판본을 읽는
+    /// 자리이고, 아래에 「동의하고 돌아가기」가 붙어 있다 — 거기서 다른 판본 목록으로
+    /// 빠져나가게 하면 무엇에 동의하는 중이었는지가 흐려진다.
+    /// 판본 목록에서 다시 열린 본문(`serverTermID` 가 있는 경우)에도 두지 않는다 —
+    /// 같은 목록으로 되돌아가는 줄이라 제자리를 도는 길이 된다.
+    @ViewBuilder private var historyLink: some View {
+        if entry == .settings, serverTermID == nil, let kind {
+            NavigationLink {
+                TermsHistoryView(kind: kind, currentTermID: document?.termId)
+            } label: {
+                HStack(spacing: 8) {
+                    Text("지난 버전")
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(MoyeoTheme.ink)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(MoyeoTheme.muted)
+                }
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(minHeight: 44)
+            .overlay(alignment: .top) { Rectangle().fill(MoyeoTheme.softLine).frame(height: 1) }
+            .accessibilityIdentifier("terms.detail.history")
         }
-        let body = document.sections
-            .map { "## \($0.title)\n\n\($0.body)" }
-            .joined(separator: "\n\n")
-        return "\(document.title)\n\n\(body)"
     }
 
-    /// 서버 약관 목록에서 이 화면의 약관을 찾아 본문(마크다운)을 받아온다
-    private func loadServerTerm() async {
+    private func header(for document: ServerTermDetail) -> some View {
+        HStack(spacing: 7) {
+            Text(document.required ? "필수" : "선택")
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(document.required ? MoyeoTheme.forest : MoyeoTheme.muted)
+                .padding(.horizontal, 9)
+                .frame(height: 24)
+                .background(document.required ? MoyeoTheme.leaf : MoyeoTheme.subtleBackground)
+                .clipShape(Capsule())
+            // 서버는 시행일을 내려주지 않는다 — 버전만 표기한다.
+            Text(document.version).font(.caption).foregroundStyle(MoyeoTheme.muted).monospacedDigit()
+        }
+    }
+
+    /// 로딩·실패·빈 상태. **어느 경우에도 빈 화면을 남기지 않는다.**
+    @ViewBuilder private var statusBanner: some View {
+        switch state {
+        case .loading:
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("약관을 불러오는 중이에요").font(.subheadline).foregroundStyle(MoyeoTheme.muted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("terms.detail.loading")
+        case .failed:
+            noticeCard(
+                message: "약관을 불러오지 못했어요. 약관 본문은 서버에만 있어 지금은 보여드릴 수 없어요.",
+                identifier: "terms.detail.loadFailed"
+            )
+        case .empty:
+            noticeCard(
+                message: "이 약관은 아직 등록되지 않았어요. 등록되면 바로 여기에서 보실 수 있어요.",
+                identifier: "terms.detail.empty"
+            )
+        case .ready:
+            EmptyView()
+        }
+    }
+
+    private func noticeCard(message: String, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(message)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(MoyeoTheme.dangerRed)
+                .fixedSize(horizontal: false, vertical: true)
+            if entry == .signup {
+                Text("현행 본문을 확인하기 전에는 동의를 받지 않아요.")
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.muted)
+            }
+            Button("다시 시도") { Task { await loadTerm(force: true) } }
+                .font(.caption.weight(.bold))
+                .foregroundStyle(MoyeoTheme.brandText)
+                .buttonStyle(.plain)
+                .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                .accessibilityIdentifier("terms.detail.retry")
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MoyeoTheme.subtleBackground)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.dangerRed.opacity(0.4)))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier(identifier)
+    }
+
+    @ViewBuilder private var signupFooter: some View {
+        if entry == .signup {
+            HStack(spacing: 8) {
+                Button("닫기") { dismiss() }
+                    .buttonStyle(DesignSecondaryButtonStyle())
+                    .frame(width: 84)
+                Button(document?.required == false ? "이 항목에 동의하기" : "동의하고 돌아가기") {
+                    onAgree()
+                    dismiss()
+                }
+                .buttonStyle(DesignPrimaryButtonStyle())
+                .disabled(isAgreeBlocked)
+                .accessibilityIdentifier("terms.detail.agree")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(MoyeoTheme.card)
+        }
+    }
+
+    /// 본문을 서버에서 받는다. 가입에서 열렸으면 그 판본(`termId`)을, 설정에서 열렸으면 종류(`code`)를 쓴다.
+    private func loadTerm(force: Bool = false) async {
         // 약관은 공개 엔드포인트다 — 가입 중(세션 없음)에도 본문을 받아야 한다.
-        guard MoyeoServerSync.allowsPublicEndpoints, serverDocument == nil else { return }
-        let termID: Int64
-        if let serverTermID {
-            termID = serverTermID
-        } else {
-            guard let kind,
-                  let summaries = try? await TermsAPIClient.shared.terms(),
-                  let match = summaries.first(where: { $0.title.contains(kind.serverTitleKeyword) })
-            else { return }
-            termID = match.termId
+        guard MoyeoServerSync.allowsPublicEndpoints else {
+            state = .failed
+            return
         }
-        guard let detail = try? await TermsAPIClient.shared.term(id: termID) else { return }
-        serverDocument = LegalDocumentContent(
-            title: detail.title,
-            isRequired: detail.required,
-            version: detail.version,
-            effectiveDate: "",
-            summary: "",
-            sections: ServerTermContentParser.sections(from: detail.content),
-            markdown: detail.content
-        )
-    }
-}
-
-extension LegalDocumentKind {
-    /// 서버 약관 제목 → 번들 문서. 서버가 본문을 못 줄 때만 쓰는 대비책이다.
-    /// 대응하는 번들 문서가 없으면 `nil` 이고, 그때는 서버 본문만으로 그린다.
-    init?(serverTitle: String) {
-        guard let match = LegalDocumentKind.allCases.first(where: {
-            serverTitle.contains($0.serverTitleKeyword)
-        }) else { return nil }
-        self = match
-    }
-
-    /// 서버 약관 제목에서 이 문서를 찾기 위한 키워드
-    var serverTitleKeyword: String {
-        switch self {
-        case .service: "이용약관"
-        case .privacy: "개인정보"
-        case .location: "위치"
-        case .marketing: "마케팅"
+        guard force || document == nil else { return }
+        state = .loading
+        do {
+            let detail: ServerTermDetail
+            if let serverTermID {
+                detail = try await TermsAPIClient.shared.term(id: serverTermID)
+            } else if let kind {
+                detail = try await TermsAPIClient.shared.latestTerm(code: kind.serverCode)
+            } else {
+                state = .failed
+                return
+            }
+            document = detail
+            state = detail.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .empty : .ready
+        } catch {
+            document = nil
+            state = .failed
         }
     }
 }

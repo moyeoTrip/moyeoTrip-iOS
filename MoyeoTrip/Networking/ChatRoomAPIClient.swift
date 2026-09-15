@@ -110,6 +110,12 @@ struct ServerChatRoomDetail: Decodable, Hashable {
     let courseTitle: String?
     let tags: [ServerCourseTag]?
     let canApply: Bool?
+    /// 내 참여·신청 상태(`HOST` · `JOINED` · `APPLIED` · `WAITING` · `NONE`).
+    ///
+    /// 이걸 읽지 않으면 **앱을 다시 켠 뒤** 내가 이미 신청한 방인지 알 수 없다. 그때는 `canApply == false`
+    /// 만 보고 「조건 미달」로 읽어, 조건을 만족하는 신청자에게 "이 모집은 만 30~39세만 참여할 수 있어요"
+    /// 같은 **틀린 까닭**을 적었다(2026-09-15 기기에서 확인 — 방 425).
+    let myParticipationStatus: String?
 }
 
 enum ServerJoinResult: String, Decodable {
@@ -159,6 +165,10 @@ struct ServerMyChatRoom: Decodable, Identifiable, Hashable {
     let recruitmentDDay: Int64?
     let ended: Bool
     let coursePublicationAvailable: Bool
+    /// 내가 이 여행의 코스에 준 별점(1~5). **아직 평가하지 않았으면 null** 이고,
+    /// 서버가 아직 이 필드를 주지 않는 배포에서도 키가 없어 nil 이 된다 — 그래도 깨지지 않는다.
+    /// 27-4 가 재진입했을 때 빈 별을 그려서 사용자가 다시 매기던 자리다(서버는 갱신이라 조용히 덮인다).
+    let myCourseRating: Int?
     let participantCount: Int?
     let maxParticipants: Int?
     let unreadMessageCount: Int64?
@@ -209,10 +219,26 @@ final class ChatRoomAPIClient: @unchecked Sendable {
         self.api = api
     }
 
-    func search(keyword: String? = nil, limit: Int = 20) async throws -> [ServerChatRoomSummary] {
+    /// 12 탐색 목록 — `GET /chat-rooms/search`.
+    ///
+    /// `cursor` 는 **직전 페이지 마지막 `roomId`** 다. 생략하면 첫 페이지이고,
+    /// 받은 개수가 `limit` 보다 적으면 마지막 페이지다(응답에 총 개수·`nextId` 가 없다).
+    ///
+    /// 실서버에 배포돼 있다 (2026-09-14 확인: `limit=3` 으로 405 → 401·385·364 → 361·352·341,
+    /// `limit=20` 한 번에 받은 순서와 한 건씩 일치하고 건너뜀도 중복도 없다).
+    /// 그래도 호출부는 **이미 가진 `roomId` 를 건너뛴다** — 서버가 겹친 묶음을 줘도
+    /// 같은 카드가 두 번 그려지면 안 된다.
+    func search(
+        keyword: String? = nil,
+        cursor: Int64? = nil,
+        limit: Int = 20
+    ) async throws -> [ServerChatRoomSummary] {
         var query = [URLQueryItem(name: "limit", value: "\(limit)")]
         if let keyword, !keyword.isEmpty {
             query.append(URLQueryItem(name: "keyword", value: keyword))
+        }
+        if let cursor {
+            query.append(URLQueryItem(name: "cursor", value: "\(cursor)"))
         }
         return try await api.get("/api/v1/chat-rooms/search", query: query)
     }

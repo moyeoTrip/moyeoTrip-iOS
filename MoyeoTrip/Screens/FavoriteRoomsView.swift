@@ -58,6 +58,8 @@ struct FavoriteRoomsSection: View {
     @State private var loadState: TripCompanionsState = .loading
     /// 찜 토글 결과. 서버 응답(`favorite`)이 기준이고, 토글한 방만 여기서 덮어쓴다.
     @State private var favoriteOverrides: [Int64: Bool] = [:]
+    /// 찜 변경 실패 안내. 예전에는 `try?` 로 삼켜 눌러도 아무 일이 없어 보였다.
+    @State private var errorMessage: String?
 
     var body: some View {
         content
@@ -87,7 +89,16 @@ struct FavoriteRoomsSection: View {
             ForEach(rooms ?? []) { room in
                 row(room)
             }
-            Text("찜한 모집이 마감되거나 여행이 끝나도 목록에는 남아요. 하트를 다시 누르면 빠져요.")
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.dangerRed)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                    .accessibilityIdentifier("favoriteRooms.error")
+            }
+            Text("찜한 모집이 마감되거나 여행이 끝나도 목록에는 남아요. 하트를 다시 누르면 목록에서 빠져요.")
                 .font(MoyeoTypography.tinyMeta)
                 .foregroundStyle(MoyeoTheme.text400)
                 .fixedSize(horizontal: false, vertical: true)
@@ -111,6 +122,7 @@ struct FavoriteRoomsSection: View {
                 ServerRoomSearchResultRow(
                     room: room,
                     isFavorite: favoriteOverrides[room.roomId] ?? room.favorite,
+                    isOpenButtonEnabled: false,
                     onOpen: {},
                     onToggleFavorite: { toggleFavorite(room) }
                 )
@@ -122,10 +134,21 @@ struct FavoriteRoomsSection: View {
 
     private func toggleFavorite(_ room: ServerChatRoomSummary) {
         Task {
-            guard let favorite = try? await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId) else {
-                return
+            do {
+                let favorite = try await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId)
+                favoriteOverrides[room.roomId] = favorite
+                // **찜을 풀면 이 목록에서 빠진다.** 이 화면은 「찜한 모집」이라 남아 있을 이유가
+                // 없고, 실제로 다시 들어오면 사라져 있었다 — 같은 화면에서만 남아 「해제가
+                // 안 된 것처럼」 보였다 (IOS-F13·F46).
+                if !favorite {
+                    rooms?.removeAll { $0.roomId == room.roomId }
+                    if rooms?.isEmpty == true { loadState = .empty }
+                }
+            } catch {
+                errorMessage = error.moyeoUserMessage(
+                    fallback: "찜을 바꾸지 못했어요. 잠시 후 다시 시도해주세요."
+                )
             }
-            favoriteOverrides[room.roomId] = favorite
         }
     }
 
@@ -154,6 +177,8 @@ struct FavoriteRoomsSection: View {
 struct FavoriteCoursesSection: View {
     @State private var courses: [ServerLikedCourse]?
     @State private var loadState: TripCompanionsState = .loading
+    /// 찜 해제 실패 안내. `try?` 로 삼키면 눌러도 아무 일이 없어 보인다 (26-1 과 같은 규칙).
+    @State private var errorMessage: String?
 
     var body: some View {
         content
@@ -181,11 +206,40 @@ struct FavoriteCoursesSection: View {
             )
         case .ready:
             ForEach(courses ?? []) { course in
+                // 카드 전체는 상세로 가고, 하트만 따로 누른다. 웹·안드는 이 목록에서 바로
+                // 찜을 풀 수 있는데 iOS 만 상세까지 들어가야 했다.
                 NavigationLink(value: ServerCourseMapper.stubCourse(serverCourseID: course.courseId)) {
-                    FavoriteCourseRow(course: course)
+                    FavoriteCourseRow(course: course) { toggleFavorite(course) }
                 }
                 .buttonStyle(.plain)
                 .moyeoCard()
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MoyeoTheme.dangerRed)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                    .accessibilityIdentifier("my.savedCourse.error")
+            }
+        }
+    }
+
+    /// 목록에서 바로 찜 해제. 서버 응답(`favorite`)이 기준이고, 풀리면 그 줄만 목록에서 뺀다
+    /// (26-1 찜한 모집과 같은 규칙 · MY-009).
+    private func toggleFavorite(_ course: ServerLikedCourse) {
+        Task {
+            do {
+                let result = try await TravelCourseAPIClient.shared.toggleFavorite(courseID: course.courseId)
+                errorMessage = nil
+                guard !result.favorite else { return }
+                courses?.removeAll { $0.courseId == course.courseId }
+                if courses?.isEmpty == true { loadState = .empty }
+            } catch {
+                errorMessage = error.moyeoUserMessage(
+                    fallback: "찜을 바꾸지 못했어요. 잠시 후 다시 시도해주세요."
+                )
             }
         }
     }
@@ -213,6 +267,8 @@ struct FavoriteCoursesSection: View {
 /// 찜한 코스 한 줄. 이 응답은 소요 시간·거리·평점을 주지 않는다 — 그 자리를 지어내지 않는다.
 private struct FavoriteCourseRow: View {
     let course: ServerLikedCourse
+    /// 하트. 이 목록에 있는 코스는 모두 찜한 것이라 항상 채워진 상태로 그린다.
+    let onToggleFavorite: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
@@ -238,6 +294,17 @@ private struct FavoriteCourseRow: View {
                 }
             }
             Spacer(minLength: 0)
+
+            Button(action: onToggleFavorite) {
+                // ENV-009 — 누를 넓이는 44x44 로 둔다.
+                Image(systemName: "heart.fill")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(MoyeoTheme.coral)
+            .accessibilityLabel("찜 해제")
+            .accessibilityIdentifier("my.savedCourse.favorite.\(course.courseId)")
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -40,10 +40,9 @@ enum SupportRoute: Hashable, Identifiable {
   case specialMessages(String)
   case friends
   case tripMessage
-  /// 30-2 피드 신고 시트. **피드 전용이다** (정본 `REPORT-CANON.md` §1) —
-  /// 값은 23 상세와 같은 게시물 id(`server-feed-{feedId}`)다.
-  /// 멤버·채팅방 신고는 접수 API 가 없어 이 라우트로 오지 않는다 — 누른 자리에서
-  /// `ReportUnsupportedDialog` 로 안내한다.
+  /// 30-2 피드 신고 시트. **피드 전용이다** — 값은 23 상세와 같은 게시물 id
+  /// (`server-feed-{feedId}`)다. 댓글·모집·멤버 신고는 라우트가 아니라 누른 자리에
+  /// `MoyeoReportSheet` 오버레이로 뜬다(화면을 옮기지 않는다).
   case report(String)
   case blockedUsers
   case coursePublish
@@ -338,7 +337,10 @@ struct SupportDestinationView: View {
       chatSideMenu(threadID, startsWithMemberRemoval: true)
     case .chatAttach(let threadID):
       // 서버 모임에서 열린 20-2는 그 방으로 실제 카드를 보낸다.
-      ChatAttachmentMenuView(serverRoomID: resolvedThread(threadID)?.serverRoomID)
+      ChatAttachmentMenuView(
+        serverRoomID: resolvedThread(threadID)?.serverRoomID,
+        isCurrentUserHost: resolvedThread(threadID)?.isCurrentUserHost ?? false
+      )
     // 20-2a~20-2f — 20-2 타일이 여는 것과 같은 작성 화면이다.
     // 방을 못 찾으면 보낼 곳이 없다 — 지어내지 않고 빈 상태를 그린다 (NO-MOCK-CANON R2).
     case .attachComposer(let threadID, let kind):
@@ -649,20 +651,37 @@ private struct TripConfirmedDestination: View {
   }
 }
 
-private struct NotificationCenterView: View {
+struct NotificationCenterView: View {
   var tripContext = TripInteractionContext()
   @Binding var feedPosts: [FeedPost]
   @State private var selectedTrip: TripRecruitment?
   @State private var selectedPost: FeedPost?
   @State private var showsUnreadOnly = false
-  @State private var readAll = false
+  @State var readAll = false
   @State private var showsRemovalReason = false
   @State private var showsFriends = false
+  /// 알림에서 바로 연 채팅방. 「메시지를 보냈어요」를 눌렀는데 모집 상세가 열리면 안 된다 (IOS-F77).
+  @State private var selectedThread: ChatThread?
   /// 실서버 알림 — 로그인 세션이 있고 목록 API가 성공했을 때만 채워진다 (nil = 목데이터)
-  @State private var serverNotifications: [ServerNotification]?
-  @State private var serverUnreadCount = 0
-  @State private var serverReadIDs = Set<Int64>()
+  @State var serverNotifications: [ServerNotification]?
+  @State var serverUnreadCount = 0
+  /// 알림 조회가 실패했는지. 빈 목록과 구분해 그린다 (TC NOTIF-009).
+  @State private var didFailServerNotifications = false
+  @State var serverReadIDs = Set<Int64>()
+  /// 다음 묶음을 부를 커서(`lastId`). 서버가 준 `nextLastId` 를 그대로 되돌려준다.
+  @State private var serverNextLastID: Int64?
+  /// **끝 판단은 서버의 `hasNext` 로만 한다** (2026-09-14 결정 ④).
+  /// 「받은 개수 < size」로 세면 서버가 필터로 덜 준 페이지에서 목록이 조용히 끊긴다.
+  @State private var serverHasNext = false
+  /// 다음 묶음을 받는 중인지. 같은 커서로 두 번 부르지 않게 막는다.
+  @State private var isLoadingMoreNotifications = false
   @State private var serverKickHistory: ServerKickHistory?
+  /// 알림을 눌렀는데 **갈 곳이 없거나 못 갔을 때** 적는 자리.
+  /// 예전에는 조용히 아무 일도 일어나지 않아 앱이 멈춘 것처럼 보였다 (웹 교차 발견).
+  @State var navigationMessage: String?
+  /// `navigationMessage` 알림창의 제목.
+  @State var navigationAlertTitle = NotificationCenterView.defaultAlertTitle
+  static let defaultAlertTitle = "열 수 없어요"
 
   private let items = supportNotificationMockItems
 
@@ -673,12 +692,18 @@ private struct NotificationCenterView: View {
     return items.filter { $0.isUnread && !readAll }.count
   }
 
+  /// 조회에 실패했으면 안읽음 수를 **0 으로 단정하지 않는다** — 「안읽음 0」은
+  /// 「읽지 않은 알림이 없다」는 사실 주장이고, 못 받았을 때는 그걸 알 수 없다 (TC NOTIF-009).
+  private var unreadChipTitle: String {
+    didFailServerNotifications && serverNotifications == nil ? "안읽음" : "안읽음 \(unreadCount)"
+  }
+
   private var visibleItems: [SupportNotification] {
     guard showsUnreadOnly else { return items }
     return items.filter { $0.isUnread && !readAll }
   }
 
-  private func isServerUnread(_ notification: ServerNotification) -> Bool {
+  func isServerUnread(_ notification: ServerNotification) -> Bool {
     !notification.read && !serverReadIDs.contains(notification.notificationId) && !readAll
   }
 
@@ -722,7 +747,7 @@ private struct NotificationCenterView: View {
       // 화면기획·웹과 같은 전체 / 안읽음 필터
       HStack(spacing: 8) {
         NotificationFilterChip(title: "전체", isSelected: !showsUnreadOnly) { showsUnreadOnly = false }
-        NotificationFilterChip(title: "안읽음 \(unreadCount)", isSelected: showsUnreadOnly) { showsUnreadOnly = true }
+        NotificationFilterChip(title: unreadChipTitle, isSelected: showsUnreadOnly) { showsUnreadOnly = true }
         Spacer(minLength: 0)
       }
 
@@ -745,8 +770,33 @@ private struct NotificationCenterView: View {
 
             ForEach(section.items) { item in
               serverNotificationRow(item)
+                // 무한 스크롤 — **마지막 알림**이 보이면 다음 묶음을 받는다 (결정 ④).
+                // 별도 표지에 `onAppear` 를 달면 그 표지가 한 번만 나타나 두 번째 묶음에서
+                // 멈춘다(피드 댓글에서 실제로 그렇게 멈췄다). 목록이 늘어나면 새 마지막
+                // 항목이 다시 이 자리를 맡으므로 묶음마다 다시 걸린다.
+                .onAppear {
+                  guard item.notificationId == visibleServerItems.last?.notificationId else { return }
+                  Task { await loadMoreServerNotifications() }
+                }
             }
           }
+          if serverHasNext {
+            // 다음 묶음이 남아 있다는 표시일 뿐이다 — 받아오는 건 마지막 알림의 `onAppear` 가 한다.
+            MoyeoEmptyStateView(
+              message: MoyeoEmptyText.loading,
+              accessibilityIdentifier: "notifications.server.loadingMore"
+            )
+          }
+        }
+      } else if didFailServerNotifications {
+        // **실패를 「새 알림이 없어요」로 말하지 않는다.** 예전에는 조회가 실패해도
+        // 빈 상태와 「안읽음 0」이 떠서, 읽지 않은 알림이 없어진 것처럼 보였다
+        // (TC NOTIF-009 · 정본 NO-MOCK-CANON R1).
+        MoyeoSectionRetryNotice(
+          message: "알림을 불러오지 못했어요.",
+          identifier: "notifications.list"
+        ) {
+          Task { await reloadServerNotifications() }
         }
       } else {
         // 서버 알림을 못 받았다 — 목 알림을 채우지 않고 §2 빈 상태를 그린다
@@ -772,6 +822,11 @@ private struct NotificationCenterView: View {
         onSendChatMessage: tripContext.onSendChatMessage
       )
     }
+    .navigationDestination(item: $selectedThread) { thread in
+      ChatRoomView(thread: thread) { message in
+        tripContext.onSendChatMessage(thread, message)
+      }
+    }
     .navigationDestination(item: $selectedPost) { post in
       FeedDetailView(post: post) {
         incrementCommentCount(for: post.id)
@@ -782,6 +837,25 @@ private struct NotificationCenterView: View {
     }
     .navigationDestination(isPresented: $showsFriends) {
       FriendsManagementView()
+    }
+    // 제목은 상황에 따라 다르다 — 알림을 못 여는 것과 읽음 표시가 실패한 것은 다른 일이다.
+    .alert(
+      navigationAlertTitle,
+      isPresented: Binding(
+        get: { navigationMessage != nil },
+        set: {
+          if !$0 {
+            navigationMessage = nil
+            navigationAlertTitle = Self.defaultAlertTitle
+          }
+        })
+    ) {
+      Button("확인", role: .cancel) {
+        navigationMessage = nil
+        navigationAlertTitle = Self.defaultAlertTitle
+      }
+    } message: {
+      Text(navigationMessage ?? "")
     }
   }
 
@@ -796,20 +870,59 @@ private struct NotificationCenterView: View {
 
   // MARK: - 실서버 알림
 
+  /// 한 묶음 크기. 서버 기본값이 20 이고 최대 100 이다 (결정 ④).
+  private static let notificationPageSize = 20
+
   private func loadServerNotifications() async {
     guard MoyeoServerSync.isEnabled, serverNotifications == nil else { return }
-    guard let page = try? await NotificationAPIClient.shared.notifications(size: 50) else { return }
+    guard let page = try? await NotificationAPIClient.shared.notifications(
+      size: Self.notificationPageSize
+    ) else {
+      didFailServerNotifications = true
+      return
+    }
     serverNotifications = page.notifications
     serverUnreadCount = Int(page.unreadCount)
+    serverNextLastID = page.nextLastId
+    serverHasNext = page.hasNext
+    didFailServerNotifications = false
   }
 
-  private func markAllRead() {
-    readAll = true
-    guard serverNotifications != nil else { return }
-    serverUnreadCount = 0
-    Task {
-      try? await NotificationAPIClient.shared.markAllRead()
+  /// 다음 묶음. 서버가 준 `nextLastId` 를 `lastId` 로 그대로 넘긴다.
+  ///
+  /// 예전에는 **첫 50건만** 받고 끝이라 그보다 오래된 알림은 볼 방법이 아예 없었다 (결정 ④).
+  private func loadMoreServerNotifications() async {
+    guard MoyeoServerSync.isEnabled, serverHasNext, !isLoadingMoreNotifications,
+          let cursor = serverNextLastID else { return }
+    isLoadingMoreNotifications = true
+    defer { isLoadingMoreNotifications = false }
+    guard let page = try? await NotificationAPIClient.shared.notifications(
+      lastID: cursor,
+      size: Self.notificationPageSize
+    ) else {
+      // 실패하면 같은 커서로 무한히 다시 부르지 않도록 멈춘다.
+      serverHasNext = false
+      return
     }
+    // 같은 커서 응답이 두 번 붙지 않게 **이미 가진 id 는 건너뛴다.**
+    let known = Set((serverNotifications ?? []).map(\.notificationId))
+    serverNotifications = (serverNotifications ?? []) + page.notifications.filter {
+      !known.contains($0.notificationId)
+    }
+    // 안읽음 수는 **덮지 않는다.** 「모두 읽음」이나 개별 읽음으로 화면이 이미 줄여 둔 값을
+    // 다음 묶음 응답(그 사이 서버가 아직 반영하지 못한 값)이 되돌려 놓을 수 있다.
+    serverNextLastID = page.nextLastId
+    // **끝 판단은 서버의 `hasNext`.** 커서가 없으면 더 부를 수 없으니 그때도 멈춘다.
+    serverHasNext = page.hasNext && page.nextLastId != nil
+  }
+
+  /// 「다시 시도」 — 실패 표시를 지우고 처음부터 다시 받는다.
+  private func reloadServerNotifications() async {
+    didFailServerNotifications = false
+    serverNotifications = nil
+    serverNextLastID = nil
+    serverHasNext = false
+    await loadServerNotifications()
   }
 
   private func serverNotificationRow(_ item: ServerNotification) -> some View {
@@ -819,29 +932,90 @@ private struct NotificationCenterView: View {
   }
 
   private func openServerNotification(_ item: ServerNotification) {
-    if isServerUnread(item) {
-      serverReadIDs.insert(item.notificationId)
-      serverUnreadCount = max(serverUnreadCount - 1, 0)
-      Task {
-        try? await NotificationAPIClient.shared.markRead(notificationID: item.notificationId)
-      }
-    }
+    markRead(item)
 
     switch item.type {
     case "CHAT_ROOM_KICKED":
       Task {
-        serverKickHistory = try? await NotificationAPIClient.shared.kickHistory(
+        guard let history = try? await NotificationAPIClient.shared.kickHistory(
           notificationID: item.notificationId
-        )
+        ) else {
+          navigationMessage = "내보내기 사유를 불러오지 못했어요. 잠시 후 다시 눌러주세요."
+          return
+        }
+        serverKickHistory = history
       }
     case "FRIEND_REQUEST", "FRIEND_ACCEPTED":
       showsFriends = true
-    default:
-      if let roomID = item.chatRoomId {
-        selectedTrip = ServerTripMapper.placeholderTrip(roomID: roomID)
+    case "FEED_LIKE":
+      // 피드 좋아요인데 **모집 상세**가 열렸다. `chatRoomId` 가 nil 이라 `default:` 에서
+      // 아무 일도 일어나지 않는 경우도 있었다 — 어느 쪽이든 누른 사람은 영문을 모른다.
+      // 좋아요가 달린 글은 `referenceId` 가 가리킨다 (웹 교차 발견, 2026-09-14).
+      openServerFeed(feedID: item.referenceId)
+    case "MARKETING":
+      // 갈 곳이 **없는** 유형이다. 없는 화면으로 보내느니 없다고 말한다.
+      navigationMessage = "이 알림은 따로 열어볼 화면이 없어요. 내용은 위에 적힌 그대로예요."
+    case let type where Self.chatRoomNotificationTypes.contains(type):
+      // **방 안에서 일어난 일**은 방으로 간다. 예전에는 이 셋이 전부 `default:` 로 떨어져
+      // 「메시지를 보냈어요」를 눌러도 모집 상세가 열렸다 — 실서버 알림 30건 중 24건이
+      // 이 부류였다(2026-09-13 `GET /notifications` 확인, IOS-F77).
+      guard let roomID = item.chatRoomId else {
+        navigationMessage = "이 알림이 가리키는 채팅방을 찾지 못했어요."
+        return
       }
+      selectedThread = ServerTripMapper.stubThread(serverRoomID: roomID)
+    default:
+      // BE-33 의 `CHAT_ROOM_APPLICATION_APPROVED`·`CHAT_ROOM_APPLICATION_REJECTED` 도 여기다 —
+      // 신청 결과는 **모집 상세**에서 확인한다(거절이면 방에 들어갈 수도 없다).
+      // 둘의 `referenceId` 는 **신청 행 id** 라 방을 찾는 데 쓰지 않는다 — `chatRoomId` 만 본다.
+      //
+      // BE-32 의 `CHAT_ROOM_CONFIRMED`·`CHAT_ROOM_CANCELLED` 도 여기로 온다 —
+      // 일정이 걸린 일이라 **모집 상세**가 맞고, 이 분기가 `chatRoomId` 로 이미 그리 보낸다.
+      // 따로 case 를 만들면 같은 동작이 두 벌이 되므로 기본 경로에 둔다 (둘 다 방 id 를 준다).
+      // 모집 자체에 대한 알림(마감 임박 등)과 아직 모르는 유형은 모집 상세로 둔다.
+      // **못 가면 조용히 멈추지 않고 말한다** — 예전에는 `chatRoomId` 가 nil 이면
+      // 눌러도 아무 일이 없어, 사용자는 앱이 멈춘 줄 알았다.
+      guard let roomID = item.chatRoomId else {
+        navigationMessage = "이 알림이 가리키는 화면을 찾지 못했어요."
+        return
+      }
+      selectedTrip = ServerTripMapper.placeholderTrip(roomID: roomID)
     }
   }
+
+  /// 피드 알림에서 글을 연다. 목록을 거치지 않고 들어오면 `feedPosts` 가 비어 있어
+  /// **서버에서 그 글 하나를 직접 읽는다**(`GET /feeds/{id}`).
+  private func openServerFeed(feedID: Int64) {
+    if let cached = feedPosts.first(where: { ServerFeedMapper.feedID(fromPostID: $0.id) == feedID }) {
+      selectedPost = cached
+      return
+    }
+    Task {
+      guard let feed = try? await FeedAPIClient.shared.feed(id: feedID) else {
+        navigationMessage = "글을 불러오지 못했어요. 지워졌거나 볼 수 없는 글일 수 있어요."
+        return
+      }
+      selectedPost = ServerFeedMapper.post(from: feed)
+    }
+  }
+
+  /// 방 안에서 일어난 일 — 실서버가 실제로 보내는 유형만 적는다(2026-09-13 기준).
+  /// 모르는 유형을 여기 넣어 두면 엉뚱한 화면이 열리므로 **확인한 것만** 넣는다.
+  private static let chatRoomNotificationTypes: Set<String> = [
+    "CHAT_MESSAGE_RECEIVED",
+    "CHAT_ROOM_CREATED",
+    "MEETING_INFO_UPDATED",
+    "NOTICE_CREATED",
+    "TRIP_CONFIRMED",
+    // BE-32 — 대기자 자동 합류. 「내가 그 방의 참가자가 됐다」는 뜻이라 **채팅방**으로 간다.
+    // `referenceId` 는 방 id 가 아니라 **참가자 행 id** 다(같은 방에 다시 대기·승격될 수
+    // 있어서다) — 방은 `chatRoomId` 로만 찾는다. 이 분기가 쓰는 값이 그것이다.
+    "CHAT_ROOM_WAITLIST_PROMOTED",
+    // BE-33 — 새 공지. **모집 상세로 보내면 정작 공지가 안 보인다.**
+    // `referenceId` 는 공지 id 지만 공지 하나만 여는 화면이 없어 방으로 보낸다
+    // (방 상단 고정 공지 바 → 20-3 공지 이력이 이어진 길이다).
+    "CHAT_ROOM_NOTICE_POSTED"
+  ]
 
   private func open(_ target: SupportNotificationTarget) {
     switch target {
@@ -942,6 +1116,9 @@ private struct ComponentStatesPreview: View {
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다. 탭 루트에서 한 번 살려 둔 것이
+        // **push 될 때마다 다시 꺼지므로** 이 화면들에서도 각각 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
         .accessibilityIdentifier("screen.componentStates")
     }
 }
@@ -1113,6 +1290,9 @@ struct LeaveConfirmationDialog: View {
       .overlay(RoundedRectangle(cornerRadius: 20).stroke(MoyeoTheme.line))
       .shadow(color: Color.black.opacity(0.28), radius: 24, y: 10)
     }
+    // `.sheet` 가 아니라 화면 위에 겹쳐 그리는 오버레이라 UIKit 이 모달로 쳐 주지 않는다 —
+    // 스크린리더가 시트 밖(뒤 화면)까지 계속 읽었다. 직접 모달이라고 알려 준다 (TC ENV-007).
+    .accessibilityAddTraits(.isModal)
     .accessibilityIdentifier(
       role == .host ? "screen.hostLeaveConfirmation" : "screen.memberLeaveConfirmation"
     )
@@ -1213,11 +1393,50 @@ private struct ServerNotificationRow: View {
 }
 
 /// 서버 친구 요청 알림의 거절/수락 (수락·거절 API 실호출)
+///
+/// 예전에는 `try?` 로 오류를 삼키고 **실패해도 무조건 「수락함」·「거절함」** 배지를 달았다 —
+/// 상대가 이미 신청을 취소한 뒤라 서버가 거절해도 사용자는 친구가 된 줄 알았다 (TC SOCIAL-010).
+/// 이제 성공한 뒤에만 배지를 바꾸고, 실패하면 **서버가 준 문구를 그대로** 보여준 뒤
+/// 버튼을 되살려 다시 시도할 수 있게 둔다.
 private struct ServerFriendActionButtons: View {
   let requestID: Int64
   @State private var resolution: String?
+  @State private var failureMessage: String?
+  @State private var isWorking = false
+
+  /// 수락·거절을 한 곳에서 처리한다 — 두 버튼이 같은 규칙을 쓰게 하려고 묶었다.
+  private func resolve(_ label: String, _ action: @escaping () async throws -> Void) {
+    guard !isWorking else { return }
+    isWorking = true
+    failureMessage = nil
+    Task {
+      defer { isWorking = false }
+      do {
+        try await action()
+        resolution = label
+      } catch {
+        failureMessage = error.moyeoUserMessage(
+          fallback: "이미 처리된 신청일 수 있어요. 친구 관리에서 최신 상태를 확인해주세요."
+        )
+      }
+    }
+  }
 
   var body: some View {
+    VStack(alignment: .trailing, spacing: 6) {
+      buttons
+      if let failureMessage {
+        Text(failureMessage)
+          .font(.caption2)
+          .foregroundStyle(MoyeoTheme.warningText)
+          .multilineTextAlignment(.trailing)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("notifications.friendAction.error")
+      }
+    }
+  }
+
+  private var buttons: some View {
     HStack(spacing: 8) {
       if let resolution {
         Text(resolution)
@@ -1229,9 +1448,8 @@ private struct ServerFriendActionButtons: View {
           .clipShape(Capsule())
       } else {
         Button {
-          Task {
-            try? await SocialAPIClient.shared.rejectFriendRequest(requestID: requestID)
-            resolution = "거절함"
+          resolve("거절함") {
+            try await SocialAPIClient.shared.rejectFriendRequest(requestID: requestID)
           }
         } label: {
           Text("거절")
@@ -1248,9 +1466,8 @@ private struct ServerFriendActionButtons: View {
         }
         .buttonStyle(.plain)
         Button {
-          Task {
-            try? await SocialAPIClient.shared.acceptFriendRequest(requestID: requestID)
-            resolution = "수락함"
+          resolve("수락함") {
+            try await SocialAPIClient.shared.acceptFriendRequest(requestID: requestID)
           }
         } label: {
           Text("수락")
@@ -1264,6 +1481,7 @@ private struct ServerFriendActionButtons: View {
         .buttonStyle(.plain)
       }
     }
+    .disabled(isWorking)
   }
 }
 
@@ -1275,42 +1493,59 @@ enum ServerNotificationPresentation {
     let bubble: Color
   }
 
+  /// 유형 → 아이콘·색. `switch` 로 늘려 가다 한 함수가 너무 커져(cyclomatic 13) 표로 옮겼다 —
+  /// 유형이 늘 때 고칠 자리가 한 곳이고, 아래 `default` 하나만 새 유형의 폴백이다.
+  private static let styles: [String: Style] = [
+    "CHAT_ROOM_CREATED": Style(icon: "person.2.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf),
+    "CHAT_ROOM_KICKED": warningStyle,
+    // BE-32 (2026-09-15) — 서버가 새로 보내는 세 유형. 배정은 웹과 맞췄다:
+    // 승격 `users`/기본색 · 확정 `check`/기본색 · 불발 `warning`/위험색.
+    // 없으면 셋 다 `default` 의 종 아이콘으로 떨어져 무슨 일인지 구분되지 않는다.
+    "CHAT_ROOM_WAITLIST_PROMOTED": Style(
+      icon: "person.2.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf),
+    "CHAT_ROOM_CONFIRMED": Style(
+      icon: "checkmark.circle.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf),
+    "CHAT_ROOM_CANCELLED": warningStyle,
+    // BE-33 (2026-09-15) — 「화면이 약속한 알림」과 「서버가 실제로 만드는 알림」을 대조해 찾은 세 건.
+    // 배정은 웹과 맞췄다: 공지 `pin`/기본색 · 승인 `check`/기본색 · 거절 `close`/위험색.
+    "CHAT_ROOM_NOTICE_POSTED": Style(
+      icon: "pin.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf),
+    "CHAT_ROOM_APPLICATION_APPROVED": Style(
+      icon: "checkmark.circle.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf),
+    // 거절은 불발·강퇴와 달리 `close` 다 — 「일이 틀어졌다」가 아니라 「받아들여지지 않았다」이다.
+    "CHAT_ROOM_APPLICATION_REJECTED": Style(
+      icon: "xmark.circle.fill",
+      tint: MoyeoTheme.coral,
+      bubble: MoyeoTheme.coral.opacity(0.14)
+    ),
+    "CHAT_MESSAGE_RECEIVED": Style(
+      icon: "bubble.left.fill", tint: MoyeoTheme.coral, bubble: MoyeoTheme.coral.opacity(0.14)),
+    "TRAVEL_COURSE_UPDATED": Style(
+      icon: "arrow.triangle.2.circlepath", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf),
+    "MEETING_INFO_UPDATED": Style(
+      icon: "mappin.and.ellipse", tint: MoyeoTheme.river, bubble: MoyeoTheme.river.opacity(0.13)),
+    "RECRUITMENT_DEADLINE": Style(
+      icon: "clock.fill", tint: MoyeoTheme.sunrise, bubble: MoyeoTheme.sunrise.opacity(0.16)),
+    "FRIEND_REQUEST": Style(
+      icon: "person.crop.circle.badge.plus",
+      tint: MoyeoTheme.river,
+      bubble: MoyeoTheme.river.opacity(0.13)
+    ),
+    "FRIEND_ACCEPTED": Style(
+      icon: "person.2.fill", tint: MoyeoTheme.river, bubble: MoyeoTheme.river.opacity(0.13)),
+    "FEED_LIKE": Style(
+      icon: "heart.fill", tint: MoyeoTheme.blossom, bubble: MoyeoTheme.blossom.opacity(0.16))
+  ]
+
+  /// 강퇴·불발이 함께 쓰는 경고 계열. 두 곳에 같은 값을 적어 두면 한쪽만 바뀐다.
+  private static let warningStyle = Style(
+    icon: "exclamationmark.triangle.fill",
+    tint: MoyeoTheme.coral,
+    bubble: MoyeoTheme.coral.opacity(0.14)
+  )
+
   static func style(for type: String) -> Style {
-    switch type {
-    case "CHAT_ROOM_CREATED":
-      return Style(icon: "person.2.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
-    case "CHAT_ROOM_KICKED":
-      return Style(
-        icon: "exclamationmark.triangle.fill",
-        tint: MoyeoTheme.coral,
-        bubble: MoyeoTheme.coral.opacity(0.14)
-      )
-    case "CHAT_MESSAGE_RECEIVED":
-      return Style(
-        icon: "bubble.left.fill", tint: MoyeoTheme.coral, bubble: MoyeoTheme.coral.opacity(0.14))
-    case "TRAVEL_COURSE_UPDATED":
-      return Style(icon: "arrow.triangle.2.circlepath", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
-    case "MEETING_INFO_UPDATED":
-      return Style(
-        icon: "mappin.and.ellipse", tint: MoyeoTheme.river, bubble: MoyeoTheme.river.opacity(0.13))
-    case "RECRUITMENT_DEADLINE":
-      return Style(
-        icon: "clock.fill", tint: MoyeoTheme.sunrise, bubble: MoyeoTheme.sunrise.opacity(0.16))
-    case "FRIEND_REQUEST":
-      return Style(
-        icon: "person.crop.circle.badge.plus",
-        tint: MoyeoTheme.river,
-        bubble: MoyeoTheme.river.opacity(0.13)
-      )
-    case "FRIEND_ACCEPTED":
-      return Style(
-        icon: "person.2.fill", tint: MoyeoTheme.river, bubble: MoyeoTheme.river.opacity(0.13))
-    case "FEED_LIKE":
-      return Style(
-        icon: "heart.fill", tint: MoyeoTheme.blossom, bubble: MoyeoTheme.blossom.opacity(0.16))
-    default:
-      return Style(icon: "bell.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
-    }
+    styles[type] ?? Style(icon: "bell.fill", tint: MoyeoTheme.forest, bubble: MoyeoTheme.leaf)
   }
 
   static func date(from createdAt: String) -> Date? {
@@ -1388,15 +1623,25 @@ private struct RemovalReasonView: View {
     return "\(history.roomTitle)에서\n내보내졌어요"
   }
 
+  /// 13-1 강퇴 **통지** 한 줄의 시각 — **상대 시각**이다 (`3일 전 · 호스트 결정`).
+  ///
+  /// 「얼마 전 일인가」가 알고 싶은 자리다. 웹(`screens-extra.jsx`)·안드로이드
+  /// (`SupportScreens.kt`)는 상대 시각인데 iOS 만 `2026.08.24 (월) 오전 8:06` 로 남아 있었다
+  /// (2026-09-14 안드로이드 담당 교차 확인). 규칙·경계값은 피드·댓글·알림과 **같은 부품**
+  /// (`ServerFeedMapper.createdAtText`)을 쓴다.
+  ///
+  /// **강퇴 이력 목록(`KickHistoryView`)은 여기가 아니다.** 여러 건을 훑으며 기록을 대조하는
+  /// 자리라 절대 날짜(`2026.08.24`)가 맞고, 세 플랫폼이 거기서는 이미 일치한다 —
+  /// 섞지 마라 (`RELATIVE-TIME-CANON.md` 「강퇴는 자리가 둘이다」).
   private var metaText: String {
     guard let history else { return "호스트 결정" }
-    guard let date = ServerNotificationPresentation.date(from: history.kickedAt) else {
+    // 못 읽는 값은 **지어내지 않고 원문 그대로** 둔다 (기존 처리 유지).
+    // 판정은 `createdAtText` 가 쓰는 파서로 한다 — 알림 쪽 파서는 나노초(`.SSSSSS`)를
+    // 못 읽어서, 실제 응답에서 읽을 수 있는 값을 원문으로 떨어뜨린다.
+    guard ServerFeedMapper.serverDate(history.kickedAt) != nil else {
       return history.kickedAt
     }
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "ko_KR")
-    formatter.dateFormat = "yyyy.MM.dd (E) a h:mm"
-    return "\(formatter.string(from: date)) · 호스트 결정"
+    return "\(ServerFeedMapper.createdAtText(history.kickedAt)) · 호스트 결정"
   }
 
   private var reasonText: String? {

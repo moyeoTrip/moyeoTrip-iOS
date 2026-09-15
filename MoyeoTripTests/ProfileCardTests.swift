@@ -374,13 +374,10 @@ struct ProfileCardCompanionTests {
         #expect(ProfileCardSubject.unavailable.isUnavailable)
     }
 
+    /// `.me` 분기는 **없앴다** — 내 카드도 `serverUser` 로 들어간다(`MyView.myProfileSubject`).
+    /// 두 경로가 있으면 내 카드에만 매너 점수·여행·피드가 빠지는 어긋남이 다시 생긴다.
     @Test func onlyServerBackedSubjectsAreQueried() {
         #expect(ProfileCardSubject.unavailable.userID == nil)
-        #expect(
-            ProfileCardSubject.me(
-                nickname: "우직한 곰 7821", profileImageURL: nil, introduction: nil, travelStyles: []
-            ).userID == nil
-        )
         #expect(
             ProfileCardSubject.serverUser(
                 ProfileCardUserReference(userID: 62, nickname: "따스한 기린 2334")
@@ -391,11 +388,6 @@ struct ProfileCardCompanionTests {
     @Test func routeKeysAreStableAcrossRuns() {
         // `hashValue` 는 실행마다 달라 라우트 식별에 쓸 수 없다
         #expect(ProfileCardSubject.unavailable.routeKey == "unavailable")
-        #expect(
-            ProfileCardSubject.me(
-                nickname: "곰", profileImageURL: nil, introduction: nil, travelStyles: []
-            ).routeKey == "me.곰"
-        )
         #expect(
             ProfileCardSubject.serverUser(
                 ProfileCardUserReference(userID: 62, nickname: "곰")

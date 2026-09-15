@@ -26,14 +26,40 @@ struct RecruitEditView: View {
     @State private var title = ""
     @State private var descriptionText = ""
     @State private var isDayTrip = true
+    /// 날짜·인원·참가비도 **서버가 받는 값**이다 (`PUT /chat-rooms/{roomId}`).
+    /// 예전에는 읽기 전용 줄로만 그려 놓고 필수(*) 표시와 규칙 안내까지 달아
+    /// **아무것도 고칠 수 없었다** (IOS-F114, 2026-09-12).
+    @State private var startDate = Date()
+    @State private var endDate = Date()
+    @State private var deadlineDate = Date()
+    @State private var dayTripStart = Date()
+    @State private var dayTripEnd = Date()
+    @State private var minimumParticipants = 3
+    @State private var maximumParticipants = 4
+    @State private var participationFeeText = "0"
+    @State private var validationMessage = ""
+    /// 18-7 코스 이름·소개 수정. 화면은 만들어져 있는데 **여는 곳이 앱에 없었다** (IOS-F119).
+    @State private var courseTitleEditRoomID: Int64?
+    /// 이 방에 연결된 코스가 직접 만든 코스(`CUSTOM`)인지. `GET /travel-courses/chat-rooms/{roomId}` 의
+    /// `course.type` 이 근거다 — 방 상세(`GET /chat-rooms/{roomId}`)에는 코스 종류가 없다.
+    ///
+    /// 18-7 은 **CUSTOM + 확정 전**일 때만 서버가 받는다(`CourseTitleEditView.load()` 가 보는 조건과 같다).
+    /// 등록 코스 방에서도 버튼이 눌려서, 누르면 문장 한 줄뿐인 빈 화면이 열렸다 (IOS-F131).
+    @State private var isCustomCourse = false
+    /// 18-4 여행 확정 / 불발. 「모집을 그만두려면」 카드에 설명만 있고 누를 곳이 없었다 (IOS-F129).
+    @State private var tripStatusRoomID: Int64?
     /// 새 대표 사진. 고르지 않으면 **파트를 보내지 않아** 서버가 지금 사진을 그대로 둔다
     /// (PATCH 규칙 · BE 회신 §4). 비우는 길은 없다.
     @State private var pickedThumbnail: PhotosPickerItem?
     @State private var thumbnailImage: UIImage?
     @StateObject private var sendState = AttachComposerSendState()
 
-    private static let titleLimit = 24
-    private static let descriptionLimit = 1000
+    /// 서버가 받는 값(`UpdateChatRoomRequest.title` · `@Size(max = 100)`)과 같은 100 이다.
+    /// 예전에는 24 였다 — 25자 이상으로 만든 모집은 **한 글자도 안 고쳤는데 저장이 거절됐다**
+    /// (2026-09-14 결정 ②). 모집 생성(17-x)의 `recruitmentNameLimit` 과 같은 값이어야 한다.
+    private static let titleLimit = 100
+    /// 서버가 500 자까지 받는다. 1,000 자까지라고 안내하면 그 사이 길이는 저장할 때 400 이 난다.
+    private static let descriptionLimit = 500
 
     var body: some View {
         Group {
@@ -59,7 +85,23 @@ struct RecruitEditView: View {
             }
         }
         .task { await load() }
+        // 숫자 키패드에는 Return 이 없어 참가비 칸을 누르면 키보드를 닫을 길이 없었다 (IOS-F136).
+        .moyeoKeyboardDismissable()
+        .onChange(of: startDate) { _, _ in clearValidation() }
+        .onChange(of: endDate) { _, _ in clearValidation() }
+        .onChange(of: deadlineDate) { _, _ in clearValidation() }
+        .onChange(of: dayTripStart) { _, _ in clearValidation() }
+        .onChange(of: dayTripEnd) { _, _ in clearValidation() }
+        .onChange(of: minimumParticipants) { _, _ in clearValidation() }
+        .onChange(of: maximumParticipants) { _, _ in clearValidation() }
+        .onChange(of: isDayTrip) { _, _ in clearValidation() }
         .attachComposerFailureAlert(sendState)
+        .navigationDestination(item: $courseTitleEditRoomID) { id in
+            CourseTitleEditView(roomID: id)
+        }
+        .navigationDestination(item: $tripStatusRoomID) { id in
+            TripStatusView(roomID: id)
+        }
     }
 
     private func form(_ room: ServerChatRoomDetail) -> some View {
@@ -67,6 +109,7 @@ struct RecruitEditView: View {
             title: "모집 내용 수정",
             cta: "수정 저장",
             isCTAEnabled: !title.trimmingCharacters(in: .whitespaces).isEmpty && !sendState.isSending,
+            warning: validationMessage,
             identifier: "recruitEdit",
             onSend: save
         ) {
@@ -77,7 +120,7 @@ struct RecruitEditView: View {
                     + "이미 신청한 분의 약속이 달라지니까요."
             ])
 
-            AttachFieldLabel(text: "모집 제목", isRequired: true)
+            AttachFieldLabel(text: "모집 제목", isRequired: true, isFirst: true)
             RecruitEditField(
                 text: $title,
                 limit: Self.titleLimit,
@@ -116,56 +159,45 @@ struct RecruitEditView: View {
     /// `form` 이 80줄 제한을 넘어 여기로 나눴다 — 화면 순서는 그대로다.
     @ViewBuilder
     private func readOnlySections(_ room: ServerChatRoomDetail) -> some View {
-            // 서버가 검증까지 하는 값들 — 지금 값을 읽기 전용으로 보여주고 이유를 적는다.
-            RecruitEditLockedRow(
-                label: "여행 날짜",
-                value: scheduleText(room),
-                hint: "모집 마감일보다 뒤여야 해요"
+            AttachFieldLabel(text: "여행 날짜", isRequired: true)
+            RecruitEditScheduleFields(
+                isDayTrip: isDayTrip,
+                startDate: $startDate,
+                endDate: $endDate,
+                dayTripStart: $dayTripStart,
+                dayTripEnd: $dayTripEnd
             )
-            RecruitEditLockedRow(
+
+            AttachFieldLabel(text: "모집 마감일", isRequired: true)
+            RecruitEditDateRow(
                 label: "모집 마감일",
-                value: ServerTripMapper.displayDate(room.recruitmentDeadlineDate),
-                hint: "여행 날짜보다 앞이어야 해요"
-            )
-            RecruitEditLockedRow(
-                label: "인원",
-                value: participantsText(room),
-                hint: "최대 인원을 지금 참여 중인 인원보다 적게 줄일 수 없어요"
-            )
-            RecruitEditLockedRow(
-                label: "참가비",
-                value: "1인 \((room.participationFee ?? 0).formatted(.number.grouping(.automatic)))원",
-                hint: "0원이면 “무료”로 보여요"
-            )
-            RecruitEditLockedRow(
-                label: "연결된 코스",
-                value: room.courseTitle ?? "연결된 코스 없음",
-                hint: "코스는 여기서 못 고쳐요. 경로는 18-1, 이름과 소개는 18-7 에서 고쳐요.",
-                isLocked: true
+                date: $deadlineDate,
+                hint: "여행 날짜보다 앞이어야 해요",
+                identifier: "recruitEdit.deadline"
             )
 
-            AttachNoteBox(lines: [
-                "저장하면 채팅방에 “호스트가 모집 정보를 수정했어요.”가 남고 참여자에게 알려요."
-            ])
+            AttachFieldLabel(text: "인원", isRequired: true)
+            RecruitEditParticipantsFields(
+                minimum: $minimumParticipants,
+                maximum: $maximumParticipants,
+                participantCount: room.participantCount
+            )
 
-            // 방 삭제는 없다 — 취소로 갈음한다 (BE 회신 §4). 있는 길만 안내한다.
-            VStack(alignment: .leading, spacing: 0) {
-                Text("모집을 그만두려면")
-                    .font(.system(size: 12.5, weight: .bold))
-                    .foregroundStyle(MoyeoTheme.ink)
-                Text(
-                    "모집을 취소하면 참여자에게 알림이 가고 채팅방은 읽기 전용으로 남아요. "
-                        + "방을 아예 지우는 건 없어요."
-                )
-                    .font(MoyeoTypography.tinyMeta)
-                    .foregroundStyle(MoyeoTheme.text400)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 5)
-            }
-            .padding(13)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
-            .padding(.top, 22)
+            AttachFieldLabel(text: "참가비")
+            RecruitEditNumberRow(
+                text: $participationFeeText,
+                suffix: "원",
+                maxDigits: 7,
+                hint: "0원이면 “무료”로 보여요",
+                identifier: "recruitEdit.fee"
+            )
+
+            RecruitEditCourseAndCancelSections(
+                courseTitle: room.courseTitle,
+                isCustomCourse: isCustomCourse,
+                onEditCourseTitle: { courseTitleEditRoomID = roomID },
+                onOpenTripStatus: { tripStatusRoomID = roomID }
+            )
     }
 
     private func tripTypeButton(_ label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -218,27 +250,72 @@ struct RecruitEditView: View {
             loadState = .empty
             return
         }
+        // 코스 종류는 별도 엔드포인트다. 실패하면 **고칠 수 있다고 말하지 않는다**(버튼을 그리지 않는다) —
+        // 열어 봤더니 빈 화면이더라, 가 IOS-F131 그 자체였다.
+        let roomCourse = try? await TravelCourseAPIClient.shared.roomCourse(roomID: roomID)
+        isCustomCourse = roomCourse?.course?.type == "CUSTOM"
         room = detail
         title = detail.title
-        descriptionText = detail.description ?? ""
+        descriptionText = String((detail.description ?? "").prefix(Self.descriptionLimit))
         isDayTrip = detail.tripType == "DAY_TRIP"
+        startDate = RecruitEditDates.date(detail.startDate) ?? Date()
+        endDate = detail.endDate.flatMap { RecruitEditDates.date($0) } ?? startDate.addingTimeInterval(86_400)
+        deadlineDate = RecruitEditDates.date(detail.recruitmentDeadlineDate) ?? startDate
+        dayTripStart = RecruitEditDates.time(detail.dayTripStartTime) ?? RecruitEditDates.time("09:00:00") ?? Date()
+        dayTripEnd = RecruitEditDates.time(detail.dayTripEndTime) ?? RecruitEditDates.time("18:00:00") ?? Date()
+        minimumParticipants = detail.minimumParticipants ?? 3
+        maximumParticipants = detail.maxParticipants
+        // 0 원이면 **빈 칸으로 둔다** — 「0」을 채워 두면 그 앞에 숫자가 끼어든다(IOS-F126).
+        participationFeeText = (detail.participationFee ?? 0) == 0 ? "" : String(detail.participationFee ?? 0)
         loadState = .ready
+    }
+
+    /// 서버와 같은 규칙으로 먼저 잡고, 어디가 틀렸는지 한국어로 말한다.
+    /// 400 을 받아 「요청이 올바르지 않습니다」로 넘기면 무엇을 고쳐야 할지 알 수 없다.
+    private func validationError(_ room: ServerChatRoomDetail) -> String? {
+        if title.trimmingCharacters(in: .whitespaces).isEmpty { return "모집 제목을 적어 주세요." }
+        if RecruitEditDates.isoDay(deadlineDate) > RecruitEditDates.isoDay(startDate) {
+            return "모집 마감일은 여행 날짜보다 앞이어야 해요."
+        }
+        if isDayTrip {
+            if RecruitEditDates.isoTime(dayTripStart) >= RecruitEditDates.isoTime(dayTripEnd) {
+                return "종료 시각은 시작 시각보다 뒤여야 해요."
+            }
+        } else if RecruitEditDates.isoDay(endDate) <= RecruitEditDates.isoDay(startDate) {
+            return "종료 날짜는 여행 시작 날짜보다 뒤여야 해요."
+        }
+        if minimumParticipants > maximumParticipants { return "최소 인원이 최대 인원보다 많아요." }
+        if maximumParticipants < room.participantCount {
+            return "이미 \(room.participantCount)명이 참여 중이라 최대 인원을 그보다 적게 줄일 수 없어요."
+        }
+        return nil
+    }
+
+    /// 값이 바뀌면 지난 경고를 지운다 — 고쳤는데도 문구가 남아 있으면 아직 막힌 줄 안다.
+    private func clearValidation() {
+        if !validationMessage.isEmpty { validationMessage = "" }
     }
 
     private func save() {
         guard let room else { return }
+        if let invalid = validationError(room) {
+            validationMessage = invalid
+            return
+        }
+        validationMessage = ""
         let request = ServerUpdateChatRoomRequest(
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             description: descriptionText.trimmingCharacters(in: .whitespacesAndNewlines),
             tripType: isDayTrip ? "DAY_TRIP" : "OVERNIGHT",
-            minimumParticipants: room.minimumParticipants,
-            maxParticipants: room.maxParticipants,
-            startDate: room.startDate,
-            endDate: isDayTrip ? nil : room.endDate,
-            recruitmentDeadlineDate: room.recruitmentDeadlineDate,
-            dayTripStartTime: isDayTrip ? room.dayTripStartTime : nil,
-            dayTripEndTime: isDayTrip ? room.dayTripEndTime : nil,
-            participationFee: room.participationFee
+            minimumParticipants: minimumParticipants,
+            maxParticipants: maximumParticipants,
+            startDate: RecruitEditDates.isoDay(startDate),
+            // 여행 유형에 따라 **반대쪽 값은 반드시 비워 보낸다** — 둘 다 차 있으면 서버가 거절한다.
+            endDate: isDayTrip ? nil : RecruitEditDates.isoDay(endDate),
+            recruitmentDeadlineDate: RecruitEditDates.isoDay(deadlineDate),
+            dayTripStartTime: isDayTrip ? RecruitEditDates.isoTime(dayTripStart) : nil,
+            dayTripEndTime: isDayTrip ? RecruitEditDates.isoTime(dayTripEnd) : nil,
+            participationFee: Int64(participationFeeText) ?? 0 // 빈 칸은 무료(0원)다
         )
         // JPEG 로 줄여 보낸다 — 서버가 최대 FHD WebP 로 다시 변환한다(BE 회신 §4).
         let thumbnail = thumbnailImage
@@ -259,6 +336,15 @@ struct RecruitEditField: View {
     let hint: String
     let isMultiline: Bool
     let identifier: String
+    /// 한도를 넘으면 **자르는 대신 알리기만** 한다.
+    ///
+    /// 서버에서 불러온 값이 화면 한도보다 길 수 있다. 그때 잘라 버리면
+    /// **사용자가 손대지도 않은 이름이 잘려 저장된다** (W-124 · AND-111).
+    /// 모집 제목은 화면·서버가 모두 100자라 이제 그 어긋남이 없다 (2026-09-14 결정 ②).
+    /// 넘친 것을 카운터가 빨갛게 말하고, 저장은 호출부가 막는다.
+    var truncatesOverflow = true
+
+    private var isOverflowing: Bool { !truncatesOverflow && text.count > limit }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -276,17 +362,17 @@ struct RecruitEditField: View {
                         .frame(height: 22)
                         .accessibilityIdentifier(identifier)
                 }
-                Text("\(text.count)/\(limit)")
+                Text(isOverflowing ? "\(text.count)/\(limit) · \(text.count - limit)자 넘었어요" : "\(text.count)/\(limit)")
                     .font(MoyeoTypography.tinyMeta)
                     .monospacedDigit()
-                    .foregroundStyle(MoyeoTheme.text400)
+                    .foregroundStyle(isOverflowing ? MoyeoTheme.dangerRed : MoyeoTheme.text400)
             }
             .padding(12)
             .background(MoyeoTheme.card)
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(MoyeoTheme.line))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .onChange(of: text) { _, value in
-                if value.count > limit { text = String(value.prefix(limit)) }
+                if truncatesOverflow, value.count > limit { text = String(value.prefix(limit)) }
             }
 
             Text(hint)
@@ -338,31 +424,42 @@ struct RecruitEditLockedRow: View {
 
 private extension RecruitEditView {
     /// 지금 사진(또는 새로 고른 사진) + 「사진 바꾸기」.
-    /// 기획·웹·안드로이드가 같은 배치를 쓴다 — 92×68 미리보기 왼쪽, 버튼 오른쪽.
+    /// 기획·웹·안드로이드가 같은 배치를 쓴다 — 미리보기 왼쪽, 알약 버튼 오른쪽.
+    /// 안내 문구는 두지 않는다 — 안 바꾸면 그대로라는 건 설명할 필요가 없고,
+    /// 새로 고른 건 미리보기 위 배지로 보인다.
     var thumbnailRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             thumbnailPreview
-                .frame(width: 92, height: 68)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                PhotosPicker(selection: $pickedThumbnail, matching: .images) {
-                    Text("사진 바꾸기")
-                        .font(MoyeoTypography.font(size: 13, weight: .bold, relativeTo: .subheadline))
-                        .foregroundStyle(MoyeoTheme.ink)
-                        .padding(.horizontal, 16)
-                        .frame(height: 44)
-                        .background(MoyeoTheme.subtleBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(width: 104, height: 78)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(MoyeoTheme.line)
+                )
+                .overlay(alignment: .bottomLeading) {
+                    if thumbnailImage != nil {
+                        Text("새 사진")
+                            .font(MoyeoTypography.font(size: 10, weight: .bold, relativeTo: .caption2))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(MoyeoTheme.leaf, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .padding(6)
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("recruitEdit.pickThumbnail")
 
-                Text(thumbnailImage == nil ? "바꾸지 않으면 지금 사진이 그대로 남아요" : "저장하면 이 사진으로 바뀌어요")
-                    .font(MoyeoTypography.font(size: 11, relativeTo: .caption2))
-                    .foregroundStyle(MoyeoTheme.text400)
-                    .fixedSize(horizontal: false, vertical: true)
+            PhotosPicker(selection: $pickedThumbnail, matching: .images) {
+                Label("사진 바꾸기", systemImage: "camera")
+                    .font(MoyeoTypography.font(size: 13, weight: .bold, relativeTo: .subheadline))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .padding(.horizontal, 18)
+                    .frame(height: 42)
+                    .background(MoyeoTheme.subtleBackground)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(MoyeoTheme.line))
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("recruitEdit.pickThumbnail")
+
             Spacer(minLength: 0)
         }
         .onChange(of: pickedThumbnail) { _, item in

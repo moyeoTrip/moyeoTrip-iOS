@@ -21,6 +21,8 @@ struct ApplyCancelView: View {
   @State private var didLoad = false
   @State private var loadFailed = false
   @State private var isCancelling = false
+  /// 취소가 실패한 이유. 있으면 확인 시트를 닫지 않고 그 자리에 적는다.
+  @State private var cancelFailure: String?
 
   /// 대기 순번은 서버가 준 값(`waitlistPosition`)일 때만 적는다 — 없으면 그 문장을 짓지 않는다.
   static func lines(for room: ServerWaitingRoom) -> [String] {
@@ -48,6 +50,7 @@ struct ApplyCancelView: View {
           confirmTitle: "신청 취소",
           isDanger: true,
           isBusy: isCancelling,
+          failureMessage: cancelFailure,
           identifier: "applyCancel",
           onCancel: { dismiss() },
           onConfirm: { cancel(target) }
@@ -105,13 +108,24 @@ struct ApplyCancelView: View {
     didLoad = true
   }
 
+  /// 19-1 신청 취소.
+  ///
+  /// 예전에는 `try?` 로 실패를 삼키고 **성공이든 실패든 그대로 닫았다** — 화면이 사라지니
+  /// 사용자는 취소된 줄 안다. 실패하면 닫지 않고 그 자리에서 말한다 (TC SOCIAL-010 계열).
   private func cancel(_ room: ServerWaitingRoom) {
     guard !isCancelling else { return }
     isCancelling = true
+    cancelFailure = nil
     Task {
-      try? await ChatRoomAPIClient.shared.cancelApplication(roomID: room.roomId)
-      isCancelling = false
-      dismiss()
+      do {
+        try await ChatRoomAPIClient.shared.cancelApplication(roomID: room.roomId)
+        isCancelling = false
+        dismiss()
+      } catch {
+        isCancelling = false
+        cancelFailure = error.moyeoUserMessage(
+          fallback: "신청을 취소하지 못했어요. 잠시 후 다시 시도해주세요.")
+      }
     }
   }
 }

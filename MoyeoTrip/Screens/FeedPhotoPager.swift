@@ -28,12 +28,12 @@ struct FeedPhotoPager: View {
         // 한 장뿐이면 페이저를 두지 않는다 — 넘길 것이 없는데 페이저를 두면
         // 좌우로 밀리는 여백이 생긴다.
         if photoURLs.count == 1 {
-          photoCell(photoURLs[0])
+          FeedPhotoCell(url: photoURLs[0], height: height)
             .onTapGesture { viewerIndex = FeedPhotoIndex(value: 0) }
         } else {
           TabView(selection: $index) {
             ForEach(Array(photoURLs.enumerated()), id: \.offset) { offset, url in
-              photoCell(url)
+              FeedPhotoCell(url: url, height: height)
                 .onTapGesture { viewerIndex = FeedPhotoIndex(value: offset) }
                 .tag(offset)
             }
@@ -64,11 +64,18 @@ struct FeedPhotoPager: View {
       }
     }
   }
+}
 
-  /// `Color.clear` 로 칸 크기를 정하고 이미지는 `overlay` 로 얹는다 —
-  /// `scaledToFill()` 한 이미지에 직접 `frame` 을 걸면 고유 폭이 부모로 새어나가
-  /// **카드 전체가 화면보다 넓어진다** (`FeedPhotoPreview` 주석과 같은 이유).
-  private func photoCell(_ url: URL) -> some View {
+/// 사진 한 칸 — 상세 페이저와 목록 카드 페이저가 **같은 칸**을 쓴다 (결정 ⑪).
+///
+/// `Color.clear` 로 칸 크기를 정하고 이미지는 `overlay` 로 얹는다 —
+/// `scaledToFill()` 한 이미지에 직접 `frame` 을 걸면 고유 폭이 부모로 새어나가
+/// **카드 전체가 화면보다 넓어진다** (`FeedPhotoPreview` 주석과 같은 이유).
+struct FeedPhotoCell: View {
+  let url: URL
+  let height: CGFloat
+
+  var body: some View {
     Color.clear
       .frame(maxWidth: .infinity)
       .frame(height: height)
@@ -83,6 +90,54 @@ struct FeedPhotoPager: View {
       }
       .clipped()
       .contentShape(Rectangle())
+  }
+}
+
+/// 목록 카드(22 피드 목록 · 26 내 피드 목록)의 사진 영역 — 결정 ⑪.
+///
+/// 예전에는 목록이 **첫 장 한 장**(또는 앞 2장)만 그려서, 서버가 여러 장을 줘도
+/// 상세로 들어가기 전에는 나머지를 볼 수 없었다. 상세(`FeedPhotoPager`)와 **같은 규칙**을
+/// 쓴다 — 좌우로 넘기고, 배지가 지금 몇 번째인지 가리킨다. 배지 모양도 상세와 같다.
+///
+/// 목록에서는 사진을 눌러도 **상세로 간다** — 전체화면 뷰어는 상세의 몫이다.
+/// 그래서 이 뷰는 카드의 `Button` **바깥**에 놓고 탭을 `onTap` 으로 직접 받는다
+/// (`Button` 안에 `TabView(.page)` 를 넣으면 탭이 먹히지 않는다).
+struct FeedCardPhotoPager: View {
+  let photoURLs: [URL]
+  var height: CGFloat = 166
+  /// 캡처·테스트 식별자 접두사 (`feed.post.<id>` · `my.feedPost.<id>`).
+  let identifierPrefix: String
+  /// 카드를 누른 것과 같은 동작.
+  var onTap: () -> Void = {}
+
+  @State private var index = 0
+
+  var body: some View {
+    ZStack(alignment: .bottomTrailing) {
+      TabView(selection: $index) {
+        ForEach(Array(photoURLs.enumerated()), id: \.offset) { offset, url in
+          FeedPhotoCell(url: url, height: height)
+            .onTapGesture(perform: onTap)
+            .tag(offset)
+        }
+      }
+      .tabViewStyle(.page(indexDisplayMode: .never))
+      .frame(height: height)
+
+      // 배지는 **오른쪽 아래**에 둔다 (정본 결정 ⑪). 모양은 상세 배지 그대로다.
+      Text("\(index + 1)/\(photoURLs.count)")
+        .font(.caption2.weight(.heavy))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.black.opacity(0.55))
+        .clipShape(Capsule())
+        .padding(8)
+        .allowsHitTesting(false)
+        .accessibilityIdentifier("\(identifierPrefix).photoCount")
+    }
+    .frame(height: height)
+    .accessibilityIdentifier("\(identifierPrefix).photos")
   }
 }
 

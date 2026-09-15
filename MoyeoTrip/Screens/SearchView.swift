@@ -17,10 +17,12 @@ struct SearchView: View {
     @State private var resultTab: SearchResultTab = .course
     /// 찜 토글 결과. 서버 응답(`favorite`)이 기준이고, 토글한 방만 여기서 덮어쓴다.
     @State private var serverFavoriteOverrides: [Int64: Bool] = [:]
+    /// 찜이 실패한 까닭 — 목록 위 한 줄 (TC DETAIL-004 · 탐색과 같은 모양).
+    @State private var favoriteErrorMessage: String?
     @State private var selectedServerTrip: TripRecruitment?
     @State private var selectedCourse: TravelCourse?
-    /// 12 인기 검색어 — `GET /search/popular-keywords`. 0건이면 섹션을 그리지 않는다.
-    @State private var popularKeywords: [ServerPopularKeyword] = []
+    /// 12 인기 검색어. 0건·실패를 가르는 규칙은 `SearchPopularKeywordModel` 이 갖는다.
+    @StateObject private var popularKeywordModel = SearchPopularKeywordModel()
 
     init(tripContext: TripInteractionContext = TripInteractionContext()) {
         self.tripContext = tripContext
@@ -108,7 +110,7 @@ struct SearchView: View {
         .task(id: submittedQuery) {
             await loadServerResults()
         }
-        .task { await loadPopularKeywords() }
+        .task { await popularKeywordModel.load() }
         .accessibilityIdentifier("screen.search")
     }
 
@@ -141,14 +143,14 @@ struct SearchView: View {
                     .moyeoCard()
                 }
             } else {
-                SearchNoResultsView(query: trimmedQuery) {
+                SearchNoResultsView(query: trimmedQuery, tab: .course) {
                     query = ""
                     submittedQuery = ""
                 }
             }
         case .room:
             if rooms.isEmpty {
-                SearchNoResultsView(query: trimmedQuery) {
+                SearchNoResultsView(query: trimmedQuery, tab: .room) {
                     query = ""
                     submittedQuery = ""
                 }
@@ -158,7 +160,11 @@ struct SearchView: View {
         }
     }
 
+    @ViewBuilder
     private func serverSearchResults(_ rooms: [ServerChatRoomSummary]) -> some View {
+        if let favoriteErrorMessage {
+            MoyeoInlineErrorText(message: favoriteErrorMessage, identifier: "search.favorite.error")
+        }
         ForEach(rooms) { room in
             ServerRoomSearchResultRow(
                 room: room,
@@ -179,12 +185,20 @@ struct SearchView: View {
         serverFavoriteOverrides[room.roomId] ?? room.favorite
     }
 
+    /// 찜 토글. 서버 응답이 와야 하트를 바꾼다 — 서버와 다른 상태를 확정하지 않는다.
+    /// 예전에는 `try?` 로 삼켜 **하트도 그대로, 안내도 없어** 탭이 안 먹은 것처럼 보였다.
+    /// 탐색(`ExploreView`)에서 고친 것과 같은 결함이 검색에 남아 있었다 (TC DETAIL-004).
     private func toggleServerFavorite(_ room: ServerChatRoomSummary) {
         guard MoyeoServerSync.isEnabled else { return }
         Task {
-            // 실패하면 화면 값을 바꾸지 않는다 — 서버 응답만 신뢰한다.
-            if let favorite = try? await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId) {
-                serverFavoriteOverrides[room.roomId] = favorite
+            do {
+                serverFavoriteOverrides[room.roomId] =
+                    try await ChatRoomAPIClient.shared.toggleFavorite(roomID: room.roomId)
+                favoriteErrorMessage = nil
+            } catch {
+                favoriteErrorMessage = error.moyeoUserMessage(
+                    fallback: "찜을 바꾸지 못했어요. 잠시 후 다시 시도해주세요."
+                )
             }
         }
     }
@@ -192,17 +206,24 @@ struct SearchView: View {
     private var searchHeader: some View {
         HStack(spacing: 10) {
             Button(action: dismiss.callAsFunction) {
+                // ENV-009 — 화살표 그림 크기는 그대로 두고 누를 넓이만 44x44 로 넓힌다
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(MoyeoTheme.ink)
-                    .frame(width: 34, height: 44)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("뒤로")
 
             // 안내 문구는 네 표면이 같아야 한다 — 11 탐색의 진입 칸과도 같은 말이다
             // (예전에는 iOS 「지역, 테마, 코스 검색」 · 안드 「지역, 테마, 모임 검색」 로 셋이 달랐다).
-            SearchField(text: $query, placeholder: "어디로 떠나고 싶나요?")
+            SearchField(
+                text: $query,
+                placeholder: "어디로 떠나고 싶나요?",
+                // 돋보기도 키보드 검색과 **같은 결과**를 낸다 (TC SEARCH-019).
+                onSubmit: submitSearch
+            )
                 .frame(height: 44)
                 .onChange(of: query) { _, newValue in
                     if newValue.isEmpty {
@@ -211,13 +232,17 @@ struct SearchView: View {
                 }
                 .onSubmit(submitSearch)
 
+            // 「취소」는 **검색을 그만두는** 버튼이다 — 입력만 비우고 같은 화면에 남으면
+            // 취소한 것처럼 보이지 않는다 (IOS-F10·F23).
             Button("취소") {
                 query = ""
                 submittedQuery = ""
+                dismiss()
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(MoyeoTheme.muted)
             .buttonStyle(.plain)
+            .frame(minWidth: 44, minHeight: 44)
         }
         .padding(.horizontal, 14)
         .frame(height: 64)
@@ -227,9 +252,17 @@ struct SearchView: View {
     @ViewBuilder
     private var discoveryContent: some View {
         recentSearchSection
-        // 인기 검색어. 0건이면 이 블록이 통째로 사라진다 — 빈 상태 문구를 두지 않는다.
-        if !popularKeywords.isEmpty {
-            SearchPopularKeywordSection(rows: popularKeywords, onSelect: runSearch)
+        // 인기 검색어. **0건이면** 이 블록이 통째로 사라진다 — 빈 상태 문구를 두지 않는다.
+        // 다만 **못 받은 것**은 숨기지 않고 다시 시도할 길을 준다.
+        if !popularKeywordModel.rows.isEmpty {
+            SearchPopularKeywordSection(rows: popularKeywordModel.rows, onSelect: runSearch)
+        } else if popularKeywordModel.didFail {
+            MoyeoSectionRetryNotice(
+                message: "인기 검색어를 불러오지 못했어요.",
+                identifier: "search.popular"
+            ) {
+                Task { await popularKeywordModel.load() }
+            }
         }
     }
 
@@ -265,13 +298,6 @@ struct SearchView: View {
             }
             .accessibilityIdentifier("search.recent.section")
         }
-    }
-
-    /// 인기 검색어를 받아둔다. 인증이 필요한 집계라 세션이 없으면 부르지 않는다.
-    /// 실패·0건 모두 빈 배열이고, 그러면 섹션 자체가 사라진다 — 오류로 다루지 않는다.
-    private func loadPopularKeywords() async {
-        guard MoyeoServerSync.isEnabled else { return }
-        popularKeywords = (try? await SearchAPIClient.shared.popularKeywords(limit: 10)) ?? []
     }
 
     private func recentSearchRow(_ searches: [String]) -> some View {
@@ -325,6 +351,8 @@ struct SearchView: View {
 struct ServerRoomSearchResultRow: View {
     let room: ServerChatRoomSummary
     let isFavorite: Bool
+    /// `NavigationLink` 안에 놓일 때는 거짓이다 — 안쪽 버튼이 링크의 탭을 먹지 않게 한다 (IOS-F45).
+    var isOpenButtonEnabled = true
     let onOpen: () -> Void
     let onToggleFavorite: () -> Void
 
@@ -343,50 +371,14 @@ struct ServerRoomSearchResultRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // `NavigationLink` 안에서는 이 버튼을 **잠근다.** 살려 두면 안쪽 버튼이 탭을
+            // 먼저 먹어 링크가 동작하지 않는다 — 찜한 모집 카드가 눌러도 아무 데도 안
+            // 가던 이유다 (IOS-F45).
             Button(action: onOpen) {
-                HStack(spacing: 12) {
-                    CachedRemoteImage(url: room.thumbnailURL, fallbackShape: .square) { image in
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } placeholder: {
-                        MoyeoTheme.leaf
-                    }
-                    .frame(width: 72, height: 60)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(alignment: .bottomLeading) {
-                        Text(room.statusBadgeText)
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(MoyeoTheme.forest)
-                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                            .padding(4)
-                    }
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(room.title)
-                            .font(.subheadline.weight(.heavy))
-                            .foregroundStyle(MoyeoTheme.ink)
-                            .lineLimit(1)
-                        Text(
-                            ([room.courseTitle].compactMap { $0 } + room.tagNames.prefix(2))
-                                .filter { !$0.isEmpty }
-                                .joined(separator: " · ")
-                        )
-                        .font(.caption)
-                        .foregroundStyle(MoyeoTheme.muted)
-                        .lineLimit(1)
-                        Text(scheduleLine)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(MoyeoTheme.text700)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }
+                summary
             }
             .buttonStyle(.plain)
+            .disabled(!isOpenButtonEnabled)
             .accessibilityLabel(room.title)
             .accessibilityIdentifier("search.serverRoom.\(room.roomId)")
 
@@ -394,7 +386,7 @@ struct ServerRoomSearchResultRow: View {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(isFavorite ? MoyeoTheme.coral : MoyeoTheme.text700)
-                    .frame(width: 32, height: 44)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -403,11 +395,65 @@ struct ServerRoomSearchResultRow: View {
             .accessibilityIdentifier("search.serverRoom.favorite.\(room.roomId)")
         }
     }
+
+    private var summary: some View {
+        HStack(spacing: 12) {
+            CachedRemoteImage(url: room.thumbnailURL, fallbackShape: .square) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                MoyeoTheme.leaf
+            }
+            .frame(width: 72, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(alignment: .bottomLeading) {
+                Text(room.statusBadgeText)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(MoyeoTheme.forest)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .padding(4)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(room.title)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(MoyeoTheme.ink)
+                    .lineLimit(1)
+                Text(
+                    ([room.courseTitle].compactMap { $0 } + room.tagNames.prefix(2))
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " · ")
+                )
+                .font(.caption)
+                .foregroundStyle(MoyeoTheme.muted)
+                .lineLimit(1)
+                Text(scheduleLine)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(MoyeoTheme.text700)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+    }
 }
 
 private struct SearchNoResultsView: View {
     let query: String
+    /// 지금 보고 있는 탭. 예전에는 모집 탭에서도 「지역이나 **코스**를 찾지 못했어요」라고
+    /// 적혀, 무엇을 못 찾았다는 건지 어긋났다 (IOS-F25).
+    let tab: SearchResultTab
     let onClear: () -> Void
+
+    private var subjectText: String {
+        switch tab {
+        case .course: "지역이나 코스"
+        case .room: "지역이나 모집"
+        }
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -422,7 +468,7 @@ private struct SearchNoResultsView: View {
                 Text("검색 결과가 없어요")
                     .font(.headline.weight(.heavy))
                     .foregroundStyle(MoyeoTheme.ink)
-                Text("'\(query)'에 맞는 지역이나 코스를 찾지 못했어요.")
+                Text("'\(query)'에 맞는 \(subjectText)를 찾지 못했어요.")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(MoyeoTheme.muted)
                     .multilineTextAlignment(.center)

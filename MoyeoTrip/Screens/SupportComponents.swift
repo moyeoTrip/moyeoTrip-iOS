@@ -34,10 +34,12 @@ struct SupportList<Content: View>: View {
                 Button {
                     dismiss()
                 } label: {
+                    // ENV-009 — 화살표 그림 크기는 그대로 두고 누를 넓이만 44x44 로 넓힌다
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(MoyeoTheme.ink)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("뒤로")
@@ -58,7 +60,8 @@ struct SupportList<Content: View>: View {
                         .padding(.trailing, 10)
                         .accessibilityIdentifier("support.list.trailingAction")
                 } else {
-                    Color.clear.frame(width: 40, height: 40)
+                    // ENV-009 — 뒤로 버튼과 같은 44 로 맞춰 제목 가운데 정렬을 유지한다
+                    Color.clear.frame(width: 44, height: 44)
                 }
             }
             .frame(height: 56)
@@ -81,6 +84,9 @@ struct SupportList<Content: View>: View {
         }
         .background(MoyeoTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        // 바를 감추면 UIKit 이 엣지 스와이프를 스스로 끈다. 탭 루트에서 한 번 살려 둔 것이
+        // **push 될 때마다 다시 꺼지므로** 이 화면들에서도 각각 되살린다 (TC NAV-017).
+        .moyeoBackSwipeEnabled()
     }
 }
 

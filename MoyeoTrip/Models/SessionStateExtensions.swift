@@ -155,7 +155,9 @@ extension TripRecruitment {
             minimumAge: minimumAge,
             maximumAge: maximumAge,
             genderRestriction: genderRestriction,
-            routeEditState: status == .confirmed ? .tripConfirmed : routeEditState,
+            // 불발된 방도 경로가 잠긴다. 예전에는 `cancelled` 를 안 봐서 취소된 방의 모집 관리가
+            // 「확정 전(D-11 · 9/24)까지 수정할 수 있어요」를 그대로 달고 있었다 (IOS-F147).
+            routeEditState: Self.lockedRouteEditState(status: status, current: routeEditState),
             notices: notices,
             applicationState: applicationState
         )
@@ -177,6 +179,16 @@ extension TripRecruitment {
         }
         return "최소 \(minimumParticipants)명까지 \(needsMoreParticipants)명 남았어요."
     }
+
+    /// 모집이 끝난 방(확정·불발)은 경로를 못 고친다. **둘 다 잠그되 이유를 가른다.**
+    /// `ServerTripMapper.routeEditState` 와 같은 규칙이다.
+    static func lockedRouteEditState(status: RecruitmentStatus, current: RouteEditState) -> RouteEditState {
+        switch status {
+        case .cancelled: return .tripCancelled
+        case .confirmed: return .tripConfirmed
+        default: return current
+        }
+    }
 }
 
 extension RecruitmentStatus {
@@ -195,6 +207,21 @@ extension RecruitmentStatus {
 }
 
 extension ChatThread {
+    /// 18-1 경로 편집 상태. 서버가 코스 수정을 받아 주는 조건
+    /// (`ChatRoomService.updateRoomCourse` — 모집 중 · CUSTOM 코스 · 호스트)을 화면이 아는 값으로 따라간다.
+    ///
+    /// **한 곳에서만 판단한다.** 예전에는 채팅방(20)과 모임 정보(20-1)가 각자 계산했고,
+    /// 모임 정보는 아예 `.tripConfirmed` 를 **박아 넣어** 모집중인 내 커스텀 코스 방인데도
+    /// 「여행이 확정돼 경로가 잠겼어요」로 열렸다 — 확정된 적이 없는데 확정됐다고 말하고,
+    /// 호스트가 경로를 고칠 길도 막았다.
+    var routeEditState: RouteEditState {
+        if statusSummary.contains("모집 취소") || statusSummary.contains("모집취소") {
+            return .tripCancelled
+        }
+        if isReadOnly || statusSummary.contains("확정") { return .tripConfirmed }
+        return isCurrentUserHost && courseSource == .custom ? .editable : .linkedLocked
+    }
+
     func withTripStatus(_ trip: TripRecruitment) -> ChatThread {
         ChatThread(
             id: id,

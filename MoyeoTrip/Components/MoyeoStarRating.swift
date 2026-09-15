@@ -25,9 +25,12 @@ struct MoyeoStarRatingInput: View {
                 Button {
                     score = value
                 } label: {
+                    // ENV-009 — 별 그림 크기(`size`)는 그대로 두고 **누를 넓이만** 44x44 로 넓힌다.
+                    // 27-1 매너 점수는 `size: 19` 라 별 하나가 24x23pt 밖에 안 됐다.
                     Image(systemName: value <= score ? "star.fill" : "star")
                         .font(.system(size: size, weight: .medium))
                         .foregroundStyle(value <= score ? MoyeoTheme.sunrise : MoyeoTheme.line)
+                        .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

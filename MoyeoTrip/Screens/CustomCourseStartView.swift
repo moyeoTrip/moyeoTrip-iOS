@@ -19,15 +19,30 @@ struct CustomCourseStartView: View {
     let startingCourseID: Int64?
 
     @State private var stops: [ItineraryStop] = []
+    @State private var courseTitle = ""
+    @State private var selectedTagIDs: [Int64] = []
+    /// 코스 태그는 서버 필수 값이라 **이 진입에서도 받아 와야 한다.** 예전에는 넘기지 않아
+    /// `tags` 가 늘 빈 배열이었고, 그래서 통신이 멀쩡해도 태그 줄이 「불러오지 못했어요」로
+    /// 굳고 「이 코스로 계속하기」가 영영 잠겨 있었다 — 실패가 아니라 **조회 자체가 없었다**.
+    @State private var tags: [ServerCourseTag] = []
 
     var body: some View {
-        CustomCourseEditorView(stops: $stops)
-            .task {
-                guard let courseID = startingCourseID, stops.isEmpty else { return }
-                guard let detail = try? await TravelCourseAPIClient.shared.courseDetail(courseID: courseID) else { return }
-                let itinerary = ServerCourseMapper.course(from: detail).itinerary
-                guard !itinerary.isEmpty else { return }
-                stops = itinerary
-            }
+        CustomCourseEditorView(
+            stops: $stops,
+            courseTitle: $courseTitle,
+            selectedTagIDs: $selectedTagIDs,
+            tags: tags
+        )
+        .task {
+            guard MoyeoServerSync.isEnabled, tags.isEmpty else { return }
+            tags = (try? await TravelCourseAPIClient.shared.tags()) ?? []
+        }
+        .task {
+            guard let courseID = startingCourseID, stops.isEmpty else { return }
+            guard let detail = try? await TravelCourseAPIClient.shared.courseDetail(courseID: courseID) else { return }
+            let itinerary = ServerCourseMapper.course(from: detail).itinerary
+            guard !itinerary.isEmpty else { return }
+            stops = itinerary
+        }
     }
 }

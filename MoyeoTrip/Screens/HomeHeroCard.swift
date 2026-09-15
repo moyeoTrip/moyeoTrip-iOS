@@ -49,10 +49,18 @@ struct HomeHeroCard: View {
 
 private struct WeatherHeroImage: View {
     let content: WeatherHeroContent
-    /// 서버가 준 예보 지점. nil 이면 시안의 랜드마크를 쓴다.
+    /// 서버가 준 예보 지점(`GET /weather` 의 `locationName`).
+    ///
+    /// 예전에는 nil 이면 시안의 랜드마크(`경주 첨성대` 등)로 채웠다 — 서버가 말한 적 없는
+    /// 지점을 사실처럼 적는 목데이터였다 (NO-MOCK-CANON R1). 이제 지점을 모르면
+    /// **날씨만** 적는다. 지어내지 않는다.
     var place: String?
 
-    private var placeText: String { place ?? content.place }
+    /// 서버 지점이 있으면 `맑음 · 경상북도 포항시`, 없으면 `맑음`.
+    private var conditionText: String {
+      guard let place, !place.isEmpty else { return content.label }
+      return "\(content.label) · \(place)"
+    }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -63,8 +71,8 @@ private struct WeatherHeroImage: View {
                 .frame(height: 144, alignment: .bottom)
                 .clipped()
                 .accessibilityIdentifier("home.weatherHero.image.\(content.imageAssetName)")
-                .accessibilityLabel("\(content.label) 날씨 \(placeText) 이미지")
-            Text("\(content.label) · \(placeText)")
+                .accessibilityLabel("\(conditionText) 날씨 이미지")
+            Text(conditionText)
                 .font(MoyeoTypography.cardMeta)
                 .foregroundStyle(content.state.selectedPillForeground)
                 .lineLimit(1)

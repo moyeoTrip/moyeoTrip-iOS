@@ -61,6 +61,9 @@ struct FriendManageSheet: View {
         } message: {
             Text(failureMessage ?? "")
         }
+        // `.sheet` 가 아니라 화면 위에 겹쳐 그리는 오버레이라 UIKit 이 모달로 쳐 주지 않는다 —
+        // 스크린리더가 시트 밖(뒤 화면)까지 계속 읽었다. 직접 모달이라고 알려 준다 (TC ENV-007).
+        .accessibilityAddTraits(.isModal)
         .accessibilityIdentifier("screen.friendManage")
     }
 
@@ -171,7 +174,7 @@ struct FriendManageSheet: View {
                 onRemoved()
             } catch {
                 isRemoving = false
-                failureMessage = (error as? LocalizedError)?.errorDescription ?? "친구를 끊지 못했어요."
+                failureMessage = error.moyeoUserMessage(fallback: "친구를 끊지 못했어요.")
             }
         }
     }
