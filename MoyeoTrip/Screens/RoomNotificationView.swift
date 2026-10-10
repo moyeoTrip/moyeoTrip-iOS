@@ -35,6 +35,8 @@ struct RoomNotificationView: View {
     /// 서버 값만 보여 주면 「켜 뒀는데 왜 안 와요」가 된다 (TC NOTIF-016,
     /// `OS-NOTIFICATION-BLOCK-CANON.md`). 문구·자리는 29-2 와 같은 것을 쓴다.
     @State private var isSystemNotificationDenied = false
+    /// 저장이 거절됐을 때 그 자리에 적는 말. 토글만 되돌리면 사용자는 **자기가 잘못 눌렀다고 여긴다**.
+    @State private var saveFailure: String?
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
@@ -164,6 +166,15 @@ struct RoomNotificationView: View {
             )
             .padding(.top, 8)
             .onChange(of: isEnabled) { _, enabled in push(enabled) }
+
+            if let saveFailure {
+                Text(saveFailure)
+                    .font(.caption)
+                    .foregroundStyle(MoyeoTheme.coral)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("roomNotification.saveFailure")
+            }
         }
     }
 
@@ -200,7 +211,11 @@ struct RoomNotificationView: View {
         loadedSubtitle = ServerTripMapper.scheduleSummaryText(detail)
     }
 
-    /// 서버가 거절하면 토글을 서버 값으로 되돌린다. 화면만 바뀐 채로 두지 않는다.
+    /// 서버가 거절하면 토글을 서버 값으로 되돌리고 **왜 되돌렸는지 말한다**.
+    ///
+    /// 예전에는 `try?` 로 삼키고 `isEnabled = current` 만 했다 — 눌렀는데 스위치가 혼자 되돌아오고
+    /// 아무 말이 없어서, 사용자는 자기가 잘못 눌렀거나 앱이 고장 난 줄 알았다 (TC NOTIF-015).
+    /// 문구는 클라가 갖는다 — 서버 문장을 그대로 띄우지 않는다 (결정 ⑩).
     private func push(_ enabled: Bool) {
         guard
             MoyeoServerSync.isEnabled,
@@ -209,13 +224,16 @@ struct RoomNotificationView: View {
         else {
             return
         }
+        saveFailure = nil
         Task {
-            guard
-                let setting = try? await ChatRoomWriteAPIClient.shared.updateNotificationSetting(
+            let setting: ServerChatRoomNotificationSetting
+            do {
+                setting = try await ChatRoomWriteAPIClient.shared.updateNotificationSetting(
                     roomID: roomID, enabled: enabled
                 )
-            else {
+            } catch {
                 isEnabled = current
+                saveFailure = "알림 설정을 바꾸지 못했어요. 잠시 후 다시 시도해주세요."
                 return
             }
             serverEnabled = setting.enabled

@@ -495,8 +495,10 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MoyeoTrip/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "모여트립";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "탐색 지도에서 내 위치를 보여주기 위해 사용해요. 위치는 지도를 보는 동안에만 쓰고 저장하거나 서버로 보내지 않아요.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
@@ -547,8 +549,10 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MoyeoTrip/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "모여트립";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "탐색 지도에서 내 위치를 보여주기 위해 사용해요. 위치는 지도를 보는 동안에만 쓰고 저장하거나 서버로 보내지 않아요.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;

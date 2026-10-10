@@ -26,13 +26,23 @@ extension ServerTripMapper {
     /// 대상이 됐다. 되돌릴 수 없다는 경고와 최종 확인 **두 단계를 모두 지난 뒤에야**
     /// 서버가 403(`해당 여행 코스를 공개할 호스트가 아닙니다.`)으로 거절했다 (TC AFTER-020).
     nonisolated static func latestPublishableRoom(in rooms: [ServerMyChatRoom]) -> ServerMyChatRoom? {
-        let publishable = rooms.filter { $0.ended && $0.coursePublicationAvailable }
+        let publishable = rooms.filter(isPublishable)
         return publishable.first { $0.status == "CONFIRMED" } ?? publishable.first
     }
 
+    /// 공개할 자격이 있는 방인지. 위아래 두 함수가 **같은 조건**을 봐야 해서 한 곳에 둔다.
+    nonisolated private static func isPublishable(_ room: ServerMyChatRoom) -> Bool {
+        room.ended && room.coursePublicationAvailable
+    }
+
     /// 끝난 방은 있는데 공개할 자격이 있는 방이 하나도 없는지 — 안내 문구를 가르는 데 쓴다.
+    ///
+    /// 예전에는 `latestPublishableRoom(in:) == nil` 로 적었다. 이 프로젝트는
+    /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` 라 순수 데이터 구조체인 `ServerMyChatRoom` 의
+    /// `Equatable` 적합성까지 메인 액터에 묶이고, 그것을 `nonisolated` 함수에서 쓰면
+    /// **Swift 6 언어 모드에서 오류**가 된다. 값을 견주지 않고 조건을 직접 보면 그 의존이 사라진다.
     nonisolated static func hasCompletedButNotPublishableRoom(in rooms: [ServerMyChatRoom]) -> Bool {
-        rooms.contains(where: \.ended) && latestPublishableRoom(in: rooms) == nil
+        rooms.contains(where: \.ended) && !rooms.contains(where: isPublishable)
     }
 
     /// 18 모집 관리 승인 대기 카드. 서버가 주지 않는 값(성별·나이·매너)은 표기를 뺀다.

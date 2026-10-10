@@ -2177,6 +2177,8 @@ struct NoticeHistoryView: View {
     @State private var pinFailureMessage: String?
     /// 20-3a 공지 수정 · 삭제. 서버 공지 원본이 있어야 열 수 있다 (내용·고정을 그대로 실어 보낸다).
     @State private var serverNotices: [ServerChatRoomNotice] = []
+    /// 공지 목록을 못 받았는지. 실패를 빈 목록으로 그리면 「공지가 없다」는 거짓말이 된다 (TC NOTICE-022).
+    @State private var noticeLoadFailed = false
     @State private var editingNotice: ServerChatRoomNotice?
 
     init(thread: ChatThread, onCreate: @escaping (ChatThread, TripNotice) -> Void = { _, _ in }) {
@@ -2197,14 +2199,30 @@ struct NoticeHistoryView: View {
                             .font(.caption.weight(.heavy))
                             .foregroundStyle(MoyeoTheme.ink)
                         // 상단 고정은 최대 1개다 (정본 R5-1, 기획 결정 2026-08-30)
-                        Text("공지 \(notices.count)개 · 고정 \(notices.filter(\.isPinned).count) / 최대 1")
-                            .font(.caption2)
-                            .foregroundStyle(MoyeoTheme.muted)
-                            .monospacedDigit()
+                        // 못 받았으면 개수를 말하지 않는다 — 「0개」는 아는 척이다.
+                        if !noticeLoadFailed {
+                            Text("공지 \(notices.count)개 · 고정 \(notices.filter(\.isPinned).count) / 최대 1")
+                                .font(.caption2)
+                                .foregroundStyle(MoyeoTheme.muted)
+                                .monospacedDigit()
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if notices.isEmpty {
+                    if noticeLoadFailed {
+                        // 예전에는 조회가 실패해도 「아직 등록된 공지가 없어요.」를 그렸다 —
+                        // 공지가 있는데 없다고 말하고, 다시 볼 방법도 없었다 (TC NOTICE-022).
+                        // 안드로이드는 이미 실패와 빈 목록을 갈라 두었다.
+                        MoyeoEmptyStateView(
+                            message: MoyeoEmptyText.loadFailed,
+                            onRetry: {
+                                if let roomID = thread.serverRoomID {
+                                    Task { await reloadNotices(roomID: roomID) }
+                                }
+                            },
+                            accessibilityIdentifier: "noticeHistory.failed"
+                        )
+                    } else if notices.isEmpty {
                         MoyeoEmptyStateView(
                             message: MoyeoEmptyText.noNotices,
                             accessibilityIdentifier: "noticeHistory.empty"
@@ -2299,7 +2317,11 @@ struct NoticeHistoryView: View {
             guard MoyeoServerSync.isEnabled, let roomID = thread.serverRoomID, !usesServerNotices else { return }
             // 상세는 공지와 별개로 받는다 — 하나가 실패해도 나머지는 실제 값으로 그린다.
             serverRoom = try? await ChatRoomAPIClient.shared.detail(roomID: roomID)
-            guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else { return }
+            guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else {
+                noticeLoadFailed = true
+                return
+            }
+            noticeLoadFailed = false
             serverNotices = history.allNotices
             notices = history.allNotices.map(ServerTripMapper.notice(from:))
             usesServerNotices = true
@@ -2409,7 +2431,12 @@ struct NoticeHistoryView: View {
 
     /// 공지를 올린 뒤에는 서버 이력을 다시 읽는다 — 화면에서 만든 공지를 끼워 넣지 않는다.
     private func reloadNotices(roomID: Int64) async {
-        guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else { return }
+        guard let history = try? await ChatRoomContentAPIClient.shared.notices(roomID: roomID) else {
+            // 「다시 시도」도 여기로 온다 — 또 실패하면 실패 상태를 그대로 둔다(조용히 빈 목록으로 바꾸지 않는다).
+            noticeLoadFailed = true
+            return
+        }
+        noticeLoadFailed = false
         serverNotices = history.allNotices
         notices = history.allNotices.map(ServerTripMapper.notice(from:))
         usesServerNotices = true

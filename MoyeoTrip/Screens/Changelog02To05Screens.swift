@@ -344,6 +344,8 @@ struct ChatMenuBody: View {
   /// 「모집 신고」 — 20-1 위에 신고 시트를 얹는다. 실제로 접수된다.
   var onReportRoom: () -> Void = {}
   @State private var notificationsEnabled = true
+  /// 저장이 거절됐을 때 토글 아래에 적는 말. 되돌리기만 하면 **사용자는 자기가 잘못 눌렀다고 여긴다**.
+  @State private var notificationSaveFailure: String?
   /// 서버가 마지막으로 확인해 준 방별 알림 설정. nil 이면 아직 서버 값을 모르는 상태다
   /// (캡처·미로그인·목데이터 스레드는 계속 nil 이라 토글이 서버를 부르지 않는다).
   @State private var serverNotificationEnabled: Bool?
@@ -508,6 +510,15 @@ struct ChatMenuBody: View {
         }
         .frame(minHeight: 56)
         .padding(.horizontal, 18)
+        if let notificationSaveFailure {
+          Text(notificationSaveFailure)
+            .font(.caption)
+            .foregroundStyle(MoyeoTheme.coral)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 8)
+            .accessibilityIdentifier("chatMenu.notificationSaveFailure")
+        }
         // 모집 신고는 **실제로 접수된다** — `POST /chat-rooms/{roomId}/reports`.
         // 사유 목록은 모집 전용(`GET /chat-rooms/report-reasons`)이라 멤버·피드와 다르다.
         // 멤버 한 사람을 신고하려면 20-1a 멤버 액션의 「신고하기」를 쓴다.
@@ -557,8 +568,11 @@ struct ChatMenuBody: View {
     }
   }
 
-  /// 토글 조작을 서버에 반영한다. 서버가 거절하면 토글을 서버 값으로 되돌린다.
+  /// 토글 조작을 서버에 반영한다. 서버가 거절하면 토글을 되돌리고 **왜 되돌렸는지 말한다**.
   /// 서버 값을 화면에 반영하느라 일어난 변화에는 다시 PUT 하지 않는다.
+  ///
+  /// 20-3 방 알림 화면(`RoomNotificationView`)과 **같은 결함이 같은 모양으로** 있었다 —
+  /// `try?` 로 삼키고 조용히 되돌렸다 (TC NOTIF-015). 한 곳만 고치면 다른 곳이 남는다.
   private func updateNotificationSetting(_ enabled: Bool) {
     guard
       MoyeoServerSync.isEnabled,
@@ -568,13 +582,16 @@ struct ChatMenuBody: View {
     else {
       return
     }
+    notificationSaveFailure = nil
     Task {
-      guard
-        let setting = try? await ChatRoomWriteAPIClient.shared.updateNotificationSetting(
+      let setting: ServerChatRoomNotificationSetting
+      do {
+        setting = try await ChatRoomWriteAPIClient.shared.updateNotificationSetting(
           roomID: roomID, enabled: enabled
         )
-      else {
+      } catch {
         notificationsEnabled = current
+        notificationSaveFailure = "알림 설정을 바꾸지 못했어요. 잠시 후 다시 시도해주세요."
         return
       }
       serverNotificationEnabled = setting.enabled
@@ -1799,10 +1816,13 @@ struct TripMessageView: View {
             oneLineReview: review.review
           )
         } catch {
+          // 문구는 클라가 갖는다 (결정 ⑩) — `moyeoUserMessage` 는 서버 한국어를 그대로 통과시킨다.
+          // 안드로이드와 **글자 그대로 같은 문장**을 쓴다. 한 사람만 실패해도 같은 말이 맞다 —
+          // 사용자가 알아야 할 것은 「누군가는 저장되지 않았다」이고, 그 자리에 머물러 다시 누를 수 있다.
           failed = true
-          failureMessage = error.moyeoUserMessage(fallback: "평가를 남기지 못했어요.")
         }
       }
+      if failed { failureMessage = "평가를 저장하지 못한 동행자가 있어요." }
       isSaving = false
       if !failed { dismiss() }
     }

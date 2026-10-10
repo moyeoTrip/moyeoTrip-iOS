@@ -18,12 +18,18 @@ struct AttachSettlementComposerView: View {
     @StateObject private var sendState = AttachComposerSendState()
     @State private var subject = ""
     @State private var totalText = ""
-    @State private var people = 2
+    /// 나눌 인원. **첫 값을 지어내지 않는다** — 방의 실제 참여 인원에서 온다.
+    /// 예전에는 `2` 로 박아 두고 서버를 아예 부르지 않아, 참가자가 3명인 방에서도 2명으로 나눴다
+    /// (TC EXTRA-008). 웹은 처음부터 방 인원을 읽고 있었다.
+    @State private var people: Int?
+    /// 방 인원을 못 받았을 때 그 자리에 적는 말. 조용히 어떤 숫자를 채워 넣지 않는다.
+    @State private var peopleNotice: String?
     @State private var note = ""
 
     /// 서버 `CreateSettlementMemoRequest` 와 같은 한도.
     private static let memoLimit = 1000
-    private static let peopleRange = 1...50
+    /// 하한은 **2** 다 — 혼자 나눌 정산은 없다. 예전에는 iOS 만 1 이라 안드·웹과 어긋났다.
+    private static let peopleRange = 2...50
 
     /// 총 금액은 **9자리까지만** 센다. 더 길면 `Int` 변환이 nil 이 되어 조용히 0원이 됐다.
     private static let totalDigitLimit = 9
@@ -51,16 +57,32 @@ struct AttachSettlementComposerView: View {
         return "숫자만 세서 \(Self.won(total))원으로 봤어요. 쉼표·소수점·단위는 빼고 계산해요."
     }
 
-    /// 1인당 금액 — 10원 단위 올림 (R4).
-    private var eachAmount: Int {
-        guard total > 0, people > 0 else { return 0 }
+    /// 1인당 금액 — 10원 단위 올림 (R4). 인원을 아직 모르면 계산하지 않는다.
+    private var eachAmount: Int? {
+        guard total > 0, let people, people > 0 else { return nil }
         return Int((Double(total) / Double(people) / 10).rounded(.up)) * 10
     }
 
     private var canSend: Bool {
         !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && total > 0
+            && eachAmount != nil
             && !sendState.isSending
+    }
+
+    /// 방의 실제 참여 인원을 읽어 첫 값으로 쓴다. 사용자가 이미 고쳤으면 덮어쓰지 않는다.
+    private func loadRoomPeople() async {
+        guard people == nil else { return }
+        guard let list = try? await ChatRoomContentAPIClient.shared.members(roomID: roomID) else {
+            peopleNotice = "방 인원을 확인하지 못했어요. 나눌 인원을 직접 정해 주세요."
+            return
+        }
+        peopleNotice = nil
+        let count = list.participantCount > 0 ? list.participantCount : list.members.count
+        guard count > 0 else {
+            peopleNotice = "방 인원을 확인하지 못했어요. 나눌 인원을 직접 정해 주세요."
+            return
+        }
+        people = max(Self.peopleRange.lowerBound, min(Self.peopleRange.upperBound, count))
     }
 
     var body: some View {
@@ -94,6 +116,7 @@ struct AttachSettlementComposerView: View {
                 "계좌번호는 아무나 볼 수 있으니 꼭 필요할 때만 남겨주세요."
             ])
         }
+        .task { await loadRoomPeople() }
         .attachComposerFailureAlert(sendState, dismissesOnSuccess: true)
     }
 
@@ -122,6 +145,15 @@ struct AttachSettlementComposerView: View {
                 }
                 .frame(width: 116)
             }
+            if let peopleNotice {
+                Text(peopleNotice)
+                    .font(MoyeoTypography.tinyMeta)
+                    .foregroundStyle(MoyeoTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("attachSettlement.peopleNotice")
+            }
             if let notice = totalAdjustmentNotice {
                 Text(notice)
                     .font(MoyeoTypography.tinyMeta)
@@ -138,19 +170,21 @@ struct AttachSettlementComposerView: View {
     private var stepper: some View {
         HStack(spacing: 0) {
             Button {
-                people = max(Self.peopleRange.lowerBound, people - 1)
+                if let people { self.people = max(Self.peopleRange.lowerBound, people - 1) }
             } label: {
                 Image(systemName: "minus").font(.system(size: 13, weight: .bold))
                     .foregroundStyle(MoyeoTheme.muted).frame(width: 32, height: 44)
             }
             .buttonStyle(.plain)
+            .disabled(people == nil)
             .accessibilityLabel("인원 줄이기")
-            Text("\(people)")
+            // 아직 방 인원을 못 받았으면 **숫자를 지어내지 않는다.**
+            Text(people.map(String.init) ?? "-")
                 .font(.subheadline.weight(.heavy))
                 .monospacedDigit()
                 .frame(maxWidth: .infinity)
             Button {
-                people = min(Self.peopleRange.upperBound, people + 1)
+                people = min(Self.peopleRange.upperBound, (people ?? Self.peopleRange.lowerBound - 1) + 1)
             } label: {
                 Image(systemName: "plus").font(.system(size: 13, weight: .bold))
                     .foregroundStyle(MoyeoTheme.forest).frame(width: 32, height: 44)
@@ -175,7 +209,8 @@ struct AttachSettlementComposerView: View {
                 Text("1인당")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(MoyeoTheme.brandText)
-                Text("\(Self.won(eachAmount))원")
+                // 인원을 아직 모르면 금액도 아는 척하지 않는다.
+                Text(eachAmount.map { "\(Self.won($0))원" } ?? "-")
                     .font(MoyeoTypography.font(size: 21, weight: .bold, relativeTo: .title3))
                     .monospacedDigit()
                     .foregroundStyle(MoyeoTheme.brandText)
@@ -230,7 +265,7 @@ struct AttachSettlementComposerView: View {
     private var memoText: String {
         var lines = [
             "\(subject.trimmingCharacters(in: .whitespacesAndNewlines))",
-            "\(Self.won(total))원 / \(people)명 = 1인 \(Self.won(eachAmount))원 (10원 단위 올림)"
+            "\(Self.won(total))원 / \(people ?? 0)명 = 1인 \(Self.won(eachAmount ?? 0))원 (10원 단위 올림)"
         ]
         let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         if !note.isEmpty { lines.append(note) }
